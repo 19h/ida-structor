@@ -110,15 +110,18 @@ static void unregister_idc_funcs() {
 }
 
 /// Plugin descriptor
-class StructorPlugin : public plugmod_t {
+class StructorPlugin : public plugmod_t, public event_listener_t {
 public:
     StructorPlugin();
     ~StructorPlugin() override;
 
     bool idaapi run(size_t arg) override;
+    ssize_t idaapi on_event(ssize_t code, va_list va) override;
 
 private:
+    void cleanup();
     bool initialized_ = false;
+    bool cleaned_up_ = false;
 };
 
 StructorPlugin::StructorPlugin() {
@@ -127,6 +130,9 @@ StructorPlugin::StructorPlugin() {
 
     // Register IDC functions
     register_idc_funcs();
+
+    // Hook UI notifications to cleanup before widget destruction
+    hook_event_listener(HT_UI, this);
 
     // Initialize UI
     if (UIIntegration::instance().initialize()) {
@@ -139,6 +145,14 @@ StructorPlugin::StructorPlugin() {
 }
 
 StructorPlugin::~StructorPlugin() {
+    unhook_event_listener(HT_UI, this);
+    cleanup();
+}
+
+void StructorPlugin::cleanup() {
+    if (cleaned_up_) return;
+    cleaned_up_ = true;
+
     // Unregister IDC functions
     unregister_idc_funcs();
 
@@ -149,7 +163,20 @@ StructorPlugin::~StructorPlugin() {
         if (Config::instance().is_dirty()) {
             Config::instance().save();
         }
+        initialized_ = false;
     }
+}
+
+ssize_t StructorPlugin::on_event(ssize_t code, va_list /*va*/) {
+    switch (code) {
+        case ui_database_closed:
+            // Database closed - cleanup before Qt widgets are destroyed
+            cleanup();
+            break;
+        default:
+            break;
+    }
+    return 0;
 }
 
 bool StructorPlugin::run(size_t arg) {
