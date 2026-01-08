@@ -168,17 +168,35 @@ public:
     [[nodiscard]] bool propagate_to_callers() const noexcept { return options_.propagate_to_callers; }
     [[nodiscard]] bool propagate_to_callees() const noexcept { return options_.propagate_to_callees; }
 
+    /// Get config file path
+    [[nodiscard]] static std::filesystem::path config_path() {
+        const char* home = getenv("HOME");
+        if (!home) home = getenv("USERPROFILE");  // Windows fallback
+        if (!home) return {};
+        return std::filesystem::path(home) / ".idapro" / "structor.cfg";
+    }
+
 private:
     Config() = default;
     ~Config() = default;
     Config(const Config&) = delete;
     Config& operator=(const Config&) = delete;
 
+    static std::string trim(const std::string& s) {
+        size_t start = s.find_first_not_of(" \t\r\n");
+        if (start == std::string::npos) return "";
+        size_t end = s.find_last_not_of(" \t\r\n");
+        return s.substr(start, end - start + 1);
+    }
+
+    static bool parse_bool(const std::string& s) {
+        std::string lower = s;
+        for (auto& c : lower) c = static_cast<char>(std::tolower(c));
+        return lower == "true" || lower == "1" || lower == "yes";
+    }
+
     SynthOptions options_;
     bool dirty_ = false;
-
-    static constexpr const char* NETNODE_NAME = "$ structor_config";
-    static constexpr nodeidx_t BLOB_TAG = 'S';
 };
 
 // ============================================================================
@@ -186,116 +204,113 @@ private:
 // ============================================================================
 
 inline bool Config::load() {
-    netnode node(NETNODE_NAME, 0, false);
-    if (node == BADNODE) {
-        // No saved config, use defaults
+    auto path = config_path();
+    if (path.empty()) return true;
+
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        // No config file, use defaults
         return true;
     }
 
-    // Load blob data
-    size_t blob_size = 0;
-    void* blob = node.getblob(nullptr, &blob_size, 0, BLOB_TAG);
-    if (!blob || blob_size == 0) {
-        return true;
-    }
-
-    // Parse configuration from blob
-    const char* data = static_cast<const char*>(blob);
-    const char* end = data + blob_size;
-
-    auto read_bool = [&]() -> bool {
-        if (data >= end) return false;
-        return *data++ != 0;
-    };
-
-    auto read_int = [&]() -> int {
-        if (data + 4 > end) return 0;
-        int val;
-        std::memcpy(&val, data, 4);
-        data += 4;
-        return val;
-    };
-
-    auto read_string = [&]() -> qstring {
-        qstring result;
-        while (data < end && *data != '\0') {
-            result.append(*data++);
+    std::string line;
+    while (std::getline(file, line)) {
+        line = trim(line);
+        
+        // Skip empty lines and comments
+        if (line.empty() || line[0] == '#' || line[0] == ';' || line[0] == '[') {
+            continue;
         }
-        if (data < end) ++data; // skip null terminator
-        return result;
-    };
 
-    // Read version marker
-    int version = read_int();
-    if (version < 1) {
-        qfree(blob);
-        return true;
+        // Parse key=value
+        auto eq_pos = line.find('=');
+        if (eq_pos == std::string::npos) continue;
+
+        std::string key = trim(line.substr(0, eq_pos));
+        std::string value = trim(line.substr(eq_pos + 1));
+
+        // Remove inline comments
+        auto comment_pos = value.find('#');
+        if (comment_pos != std::string::npos) {
+            value = trim(value.substr(0, comment_pos));
+        }
+
+        // Map keys to options
+        if (key == "hotkey") {
+            options_.hotkey = value.c_str();
+        } else if (key == "auto_propagate") {
+            options_.auto_propagate = parse_bool(value);
+        } else if (key == "vtable_detection") {
+            options_.vtable_detection = parse_bool(value);
+        } else if (key == "min_accesses") {
+            options_.min_accesses = std::stoi(value);
+        } else if (key == "alignment") {
+            options_.alignment = std::stoi(value);
+        } else if (key == "interactive_mode") {
+            options_.interactive_mode = parse_bool(value);
+        } else if (key == "highlight_changes") {
+            options_.highlight_changes = parse_bool(value);
+        } else if (key == "highlight_duration_ms") {
+            options_.highlight_duration_ms = std::stoi(value);
+        } else if (key == "auto_open_struct") {
+            options_.auto_open_struct = parse_bool(value);
+        } else if (key == "generate_comments") {
+            options_.generate_comments = parse_bool(value);
+        } else if (key == "max_propagation_depth") {
+            options_.max_propagation_depth = std::stoi(value);
+        } else if (key == "propagate_to_callers") {
+            options_.propagate_to_callers = parse_bool(value);
+        } else if (key == "propagate_to_callees") {
+            options_.propagate_to_callees = parse_bool(value);
+        } else if (key == "debug_mode") {
+            options_.debug_mode = parse_bool(value);
+        }
     }
 
-    options_.hotkey = read_string();
-    options_.auto_propagate = read_bool();
-    options_.vtable_detection = read_bool();
-    options_.min_accesses = read_int();
-    options_.alignment = read_int();
-    options_.interactive_mode = read_bool();
-    options_.highlight_changes = read_bool();
-    options_.highlight_duration_ms = read_int();
-    options_.auto_open_struct = read_bool();
-    options_.generate_comments = read_bool();
-    options_.max_propagation_depth = read_int();
-    options_.propagate_to_callers = read_bool();
-    options_.propagate_to_callees = read_bool();
-
-    qfree(blob);
     dirty_ = false;
     return true;
 }
 
 inline bool Config::save() {
-    netnode node(NETNODE_NAME, 0, true);
-    if (node == BADNODE) {
+    auto path = config_path();
+    if (path.empty()) return false;
+
+    // Ensure directory exists
+    std::filesystem::create_directories(path.parent_path());
+
+    std::ofstream file(path);
+    if (!file.is_open()) {
         return false;
     }
 
-    // Build blob data
-    qvector<char> blob;
+    file << "# Structor Configuration\n";
+    file << "# See https://github.com/AnomalyCo/structor for documentation\n\n";
 
-    auto write_bool = [&](bool val) {
-        blob.push_back(val ? 1 : 0);
-    };
+    file << "[General]\n";
+    file << "hotkey=" << options_.hotkey.c_str() << "\n";
+    file << "interactive_mode=" << (options_.interactive_mode ? "true" : "false") << "\n";
+    file << "auto_open_struct=" << (options_.auto_open_struct ? "true" : "false") << "\n";
+    file << "debug_mode=" << (options_.debug_mode ? "true" : "false") << "\n";
+    file << "\n";
 
-    auto write_int = [&](int val) {
-        const char* p = reinterpret_cast<const char*>(&val);
-        for (int i = 0; i < 4; ++i) {
-            blob.push_back(p[i]);
-        }
-    };
+    file << "[Synthesis]\n";
+    file << "min_accesses=" << options_.min_accesses << "\n";
+    file << "alignment=" << options_.alignment << "\n";
+    file << "vtable_detection=" << (options_.vtable_detection ? "true" : "false") << "\n";
+    file << "\n";
 
-    auto write_string = [&](const qstring& str) {
-        for (size_t i = 0; i < str.length(); ++i) {
-            blob.push_back(str[i]);
-        }
-        blob.push_back('\0');
-    };
+    file << "[Propagation]\n";
+    file << "auto_propagate=" << (options_.auto_propagate ? "true" : "false") << "\n";
+    file << "propagate_to_callers=" << (options_.propagate_to_callers ? "true" : "false") << "\n";
+    file << "propagate_to_callees=" << (options_.propagate_to_callees ? "true" : "false") << "\n";
+    file << "max_propagation_depth=" << options_.max_propagation_depth << "\n";
+    file << "\n";
 
-    // Version marker
-    write_int(1);
+    file << "[UI]\n";
+    file << "highlight_changes=" << (options_.highlight_changes ? "true" : "false") << "\n";
+    file << "highlight_duration_ms=" << options_.highlight_duration_ms << "\n";
+    file << "generate_comments=" << (options_.generate_comments ? "true" : "false") << "\n";
 
-    write_string(options_.hotkey);
-    write_bool(options_.auto_propagate);
-    write_bool(options_.vtable_detection);
-    write_int(options_.min_accesses);
-    write_int(options_.alignment);
-    write_bool(options_.interactive_mode);
-    write_bool(options_.highlight_changes);
-    write_int(options_.highlight_duration_ms);
-    write_bool(options_.auto_open_struct);
-    write_bool(options_.generate_comments);
-    write_int(options_.max_propagation_depth);
-    write_bool(options_.propagate_to_callers);
-    write_bool(options_.propagate_to_callees);
-
-    node.setblob(blob.begin(), blob.size(), 0, BLOB_TAG);
     dirty_ = false;
     return true;
 }

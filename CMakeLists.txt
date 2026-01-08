@@ -6,6 +6,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# macOS deployment target (12.0 = Monterey, matches IDA SDK requirement)
+if(APPLE)
+    if(NOT CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version" FORCE)
+    endif()
+endif()
+
 # Build type
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
@@ -55,8 +62,16 @@ set(IDA_INCLUDE_DIR "${IDA_SDK_DIR}/include")
 
 # Detect architecture for library path
 # On macOS, check CMAKE_OSX_ARCHITECTURES for cross-compilation
-if(APPLE AND CMAKE_OSX_ARCHITECTURES)
-    if(CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
+message(STATUS "CMAKE_OSX_ARCHITECTURES: ${CMAKE_OSX_ARCHITECTURES}")
+message(STATUS "CMAKE_SYSTEM_PROCESSOR: ${CMAKE_SYSTEM_PROCESSOR}")
+
+if(APPLE)
+    # Check target architecture - CMAKE_OSX_ARCHITECTURES takes precedence
+    if(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+        set(IDA_ARCH "arm64")
+    elseif(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+        set(IDA_ARCH "x64")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
         set(IDA_ARCH "arm64")
     else()
         set(IDA_ARCH "x64")
@@ -66,6 +81,8 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
 else()
     set(IDA_ARCH "x64")
 endif()
+
+message(STATUS "IDA_ARCH: ${IDA_ARCH}")
 
 if(WIN32)
     set(IDA_LIB_DIR "${IDA_SDK_DIR}/lib/x64_win_vc_64")

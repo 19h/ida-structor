@@ -331,14 +331,16 @@ The `PseudocodeRewriter` updates the decompiler view to reflect the new types, t
 Structor saves its configuration to `~/.idapro/structor.cfg`:
 
 ```ini
+# Structor Configuration
+
 [General]
 hotkey=Shift+S              # Keyboard shortcut
-interactive_mode=true       # Prompt before applying changes
+interactive_mode=false      # Prompt before applying changes
 auto_open_struct=true       # Open structure editor after synthesis
+debug_mode=false            # Enable debug logging
 
 [Synthesis]
 min_accesses=2              # Minimum access count to trigger synthesis
-max_field_gap=4096          # Maximum gap between fields (bytes)
 alignment=8                 # Default structure alignment
 vtable_detection=true       # Enable vtable pattern detection
 
@@ -350,9 +352,11 @@ max_propagation_depth=3     # Maximum recursion depth
 
 [UI]
 highlight_changes=true      # Highlight transformed expressions
-highlight_duration_ms=2000  # Duration of highlight
+highlight_duration_ms=2000  # Duration of highlight in milliseconds
 generate_comments=true      # Add comments to synthesized fields
 ```
+
+The config file is created automatically with defaults on first run if it doesn't exist.
 
 ### Predicate-Based Filtering
 
