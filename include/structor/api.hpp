@@ -155,7 +155,7 @@ inline SynthStruct StructorAPI::synthesize_layout(
 {
     const SynthOptions& options = opts ? *opts : Config::instance().options();
     LayoutSynthesizer synthesizer(options);
-    return synthesizer.synthesize(pattern);
+    return synthesizer.synthesize(pattern).structure;
 }
 
 inline std::optional<SynthVTable> StructorAPI::detect_vtable(
@@ -206,9 +206,10 @@ inline SynthResult StructorAPI::do_synthesis(ea_t func_ea, int var_idx, const Sy
 
     // Synthesize structure layout
     LayoutSynthesizer synthesizer(opts);
-    SynthStruct synth_struct = synthesizer.synthesize(pattern);
+    SynthesisResult synth_result = synthesizer.synthesize(pattern);
+    SynthStruct synth_struct = std::move(synth_result.structure);
 
-    result.conflicts = synthesizer.conflicts();
+    result.conflicts = synth_result.conflicts;
 
     if (synth_struct.fields.empty()) {
         return SynthResult::make_error(SynthError::TypeCreationFailed,

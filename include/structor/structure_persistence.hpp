@@ -19,6 +19,26 @@ public:
     /// Create a vtable structure in the IDB
     [[nodiscard]] tid_t create_vtable(SynthVTable& vtable);
 
+    /// Create a union type in the IDB
+    /// Returns the tid_t of the created union, or BADADDR on failure
+    [[nodiscard]] tid_t create_union(
+        const qstring& name,
+        const qvector<SynthField>& members
+    );
+
+    /// Create a struct field that is itself an embedded union
+    /// Union members are added at offset 0 within the union
+    /// Returns the tid of the embedded union, or BADADDR on failure
+    [[nodiscard]] tid_t add_union_field(
+        udt_type_data_t& parent_udt,
+        sval_t outer_offset,          // Offset of union within parent struct
+        const qstring& union_name,
+        const qvector<SynthField>& union_members
+    );
+
+    /// Compute union size (max of member sizes)
+    [[nodiscard]] static uint32_t compute_union_size(const qvector<SynthField>& members);
+
     /// Update an existing structure with new fields
     [[nodiscard]] bool update_struct(tid_t tid, const SynthStruct& synth_struct);
 
@@ -40,12 +60,18 @@ public:
     /// Generate a unique structure name
     [[nodiscard]] qstring make_unique_name(const char* base_name);
 
+    /// Generate a unique union name
+    [[nodiscard]] qstring make_unique_union_name(const char* base_name);
+
 private:
     bool add_struct_fields(tinfo_t& tif, const qvector<SynthField>& fields);
     bool add_vtable_slots(tinfo_t& tif, const qvector<VTableSlot>& slots);
 
     void store_provenance(tid_t tid, const qvector<ea_t>& provenance);
     qvector<ea_t> load_provenance(tid_t tid);
+
+    /// Create raw bytes field type for irreconcilable regions
+    [[nodiscard]] static tinfo_t create_raw_bytes_type(uint32_t size);
 
     const SynthOptions& options_;
 
@@ -384,6 +410,157 @@ inline qvector<ea_t> StructurePersistence::load_provenance(tid_t tid) {
 
     qfree(blob);
     return result;
+}
+
+inline tid_t StructurePersistence::create_union(
+    const qstring& name,
+    const qvector<SynthField>& members)
+{
+    if (members.empty()) {
+        return BADADDR;
+    }
+
+    // Generate unique name if needed
+    qstring union_name = name;
+    if (struct_exists(union_name.c_str())) {
+        union_name = make_unique_union_name(union_name.c_str());
+    }
+
+    // Create the union type
+    tinfo_t union_type;
+    udt_type_data_t udt;
+    udt.is_union = true;
+    udt.total_size = compute_union_size(members);
+
+    // Add all members at offset 0 (union semantics)
+    for (const auto& member : members) {
+        udm_t udm;
+        udm.name = member.name;
+        udm.offset = 0;  // All union members start at offset 0
+
+        if (!member.type.empty()) {
+            udm.type = member.type;
+            udm.size = member.type.get_size() * 8;  // Convert to bits
+        } else {
+            // Default to bytes array for unknown types
+            tinfo_t byte_type;
+            byte_type.create_simple_type(BT_INT8 | BTMT_CHAR);
+            if (member.size > 1) {
+                udm.type.create_array(byte_type, member.size);
+            } else {
+                udm.type = byte_type;
+            }
+            udm.size = member.size * 8;
+        }
+
+        if (!member.comment.empty()) {
+            udm.cmt = member.comment;
+        }
+
+        udt.push_back(udm);
+    }
+
+    // Create the union type
+    if (!union_type.create_udt(udt, BTF_UNION)) {
+        msg("Structor: Failed to create union type\n");
+        return BADADDR;
+    }
+
+    // Save to local type library
+    tinfo_code_t err = union_type.set_named_type(nullptr, union_name.c_str(), NTF_TYPE | NTF_REPLACE);
+    if (err != TERR_OK) {
+        msg("Structor: Failed to save union type: %d\n", err);
+        return BADADDR;
+    }
+
+    // Get the tid
+    return get_named_type_tid(union_name.c_str());
+}
+
+inline tid_t StructurePersistence::add_union_field(
+    udt_type_data_t& parent_udt,
+    sval_t outer_offset,
+    const qstring& union_name,
+    const qvector<SynthField>& union_members)
+{
+    if (union_members.empty()) {
+        return BADADDR;
+    }
+
+    // First, create the union type as a separate named type
+    tid_t union_tid = create_union(union_name, union_members);
+    if (union_tid == BADADDR) {
+        return BADADDR;
+    }
+
+    // Get the union type info
+    tinfo_t union_type;
+    if (!union_type.get_type_by_tid(union_tid)) {
+        return BADADDR;
+    }
+
+    // Add a field referencing the union type to the parent struct
+    udm_t udm;
+    udm.name = union_name;
+    udm.offset = static_cast<uint64>(outer_offset) * 8;  // Convert to bits
+    udm.type = union_type;
+    udm.size = compute_union_size(union_members) * 8;
+
+    parent_udt.push_back(udm);
+
+    return union_tid;
+}
+
+inline uint32_t StructurePersistence::compute_union_size(const qvector<SynthField>& members) {
+    uint32_t max_size = 0;
+
+    for (const auto& member : members) {
+        uint32_t member_size = member.size;
+
+        // If type is available, use its size instead
+        if (!member.type.empty()) {
+            size_t type_size = member.type.get_size();
+            if (type_size != BADSIZE) {
+                member_size = static_cast<uint32_t>(type_size);
+            }
+        }
+
+        max_size = std::max(max_size, member_size);
+    }
+
+    return max_size;
+}
+
+inline qstring StructurePersistence::make_unique_union_name(const char* base_name) {
+    qstring name = base_name;
+
+    if (!struct_exists(name.c_str())) {
+        return name;
+    }
+
+    for (int i = 1; i < 10000; ++i) {
+        qstring candidate;
+        candidate.sprnt("%s_%d", base_name, i);
+        if (!struct_exists(candidate.c_str())) {
+            return candidate;
+        }
+    }
+
+    // Fallback with timestamp
+    qstring candidate;
+    candidate.sprnt("%s_%llX", base_name, static_cast<unsigned long long>(time(nullptr)));
+    return candidate;
+}
+
+inline tinfo_t StructurePersistence::create_raw_bytes_type(uint32_t size) {
+    // Create uint8_t[size] type for irreconcilable regions
+    tinfo_t element_type;
+    element_type.create_simple_type(BT_INT8 | BTMT_USIGNED);
+
+    tinfo_t array_type;
+    array_type.create_array(element_type, size);
+
+    return array_type;
 }
 
 } // namespace structor

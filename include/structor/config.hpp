@@ -79,6 +79,45 @@ namespace predicates {
     }
 }
 
+/// Z3 synthesis mode
+enum class Z3SynthesisMode : std::uint8_t {
+    Disabled = 0,       // Use heuristic-only synthesis (original behavior)
+    Preferred = 1,      // Try Z3 first, fall back to heuristics on failure
+    Required = 2        // Z3 only, fail if Z3 fails
+};
+
+/// Z3-specific configuration options
+struct Z3Options {
+    Z3SynthesisMode mode;               // Z3 synthesis mode
+    std::uint32_t   timeout_ms;         // Z3 solver timeout in milliseconds
+    std::uint32_t   memory_limit_mb;    // Z3 memory limit in megabytes (0 = unlimited)
+    bool            enable_maxsmt;      // Use Max-SMT optimization for soft constraints
+    bool            enable_unsat_core;  // Extract UNSAT core for debugging
+    bool            detect_arrays;      // Enable array detection via Z3
+    std::uint32_t   min_array_elements; // Minimum elements to consider as array
+    bool            cross_function;     // Enable cross-function analysis
+    std::uint32_t   max_candidates;     // Maximum field candidates to consider
+    bool            allow_unions;       // Allow union type creation for conflicts
+    std::uint8_t    min_confidence;     // Minimum confidence threshold (0-100)
+    bool            relax_on_unsat;     // Relax constraints if UNSAT
+    std::uint32_t   max_relax_iterations;  // Maximum relaxation iterations
+
+    Z3Options()
+        : mode(Z3SynthesisMode::Preferred)
+        , timeout_ms(5000)
+        , memory_limit_mb(256)
+        , enable_maxsmt(true)
+        , enable_unsat_core(true)
+        , detect_arrays(true)
+        , min_array_elements(3)
+        , cross_function(true)
+        , max_candidates(1000)
+        , allow_unions(true)
+        , min_confidence(20)
+        , relax_on_unsat(true)
+        , max_relax_iterations(5) {}
+};
+
 /// Configuration options for structure synthesis
 struct SynthOptions {
     qstring         hotkey;             // Activation hotkey
@@ -97,6 +136,9 @@ struct SynthOptions {
     bool            debug_mode;         // Enable debug logging (adopted from Suture)
     AccessPredicate access_filter;      // Filter predicate for accesses (adopted from Suture)
 
+    // Z3-specific options
+    Z3Options       z3;                 // Z3 synthesis configuration
+
     SynthOptions()
         : hotkey(DEFAULT_HOTKEY)
         , auto_propagate(true)
@@ -112,7 +154,8 @@ struct SynthOptions {
         , propagate_to_callers(true)
         , propagate_to_callees(true)
         , debug_mode(false)
-        , access_filter(predicates::accept_all) {}
+        , access_filter(predicates::accept_all)
+        , z3() {}
 };
 
 /// Configuration manager for the plugin
@@ -265,6 +308,36 @@ inline bool Config::load() {
         } else if (key == "debug_mode") {
             options_.debug_mode = parse_bool(value);
         }
+        // Z3 options
+        else if (key == "z3_mode") {
+            if (value == "disabled") options_.z3.mode = Z3SynthesisMode::Disabled;
+            else if (value == "required") options_.z3.mode = Z3SynthesisMode::Required;
+            else options_.z3.mode = Z3SynthesisMode::Preferred;
+        } else if (key == "z3_timeout_ms") {
+            options_.z3.timeout_ms = static_cast<std::uint32_t>(std::stoul(value));
+        } else if (key == "z3_memory_limit_mb") {
+            options_.z3.memory_limit_mb = static_cast<std::uint32_t>(std::stoul(value));
+        } else if (key == "z3_enable_maxsmt") {
+            options_.z3.enable_maxsmt = parse_bool(value);
+        } else if (key == "z3_enable_unsat_core") {
+            options_.z3.enable_unsat_core = parse_bool(value);
+        } else if (key == "z3_detect_arrays") {
+            options_.z3.detect_arrays = parse_bool(value);
+        } else if (key == "z3_min_array_elements") {
+            options_.z3.min_array_elements = static_cast<std::uint32_t>(std::stoul(value));
+        } else if (key == "z3_cross_function") {
+            options_.z3.cross_function = parse_bool(value);
+        } else if (key == "z3_max_candidates") {
+            options_.z3.max_candidates = static_cast<std::uint32_t>(std::stoul(value));
+        } else if (key == "z3_allow_unions") {
+            options_.z3.allow_unions = parse_bool(value);
+        } else if (key == "z3_min_confidence") {
+            options_.z3.min_confidence = static_cast<std::uint8_t>(std::stoul(value));
+        } else if (key == "z3_relax_on_unsat") {
+            options_.z3.relax_on_unsat = parse_bool(value);
+        } else if (key == "z3_max_relax_iterations") {
+            options_.z3.max_relax_iterations = static_cast<std::uint32_t>(std::stoul(value));
+        }
     }
 
     dirty_ = false;
@@ -310,6 +383,28 @@ inline bool Config::save() {
     file << "highlight_changes=" << (options_.highlight_changes ? "true" : "false") << "\n";
     file << "highlight_duration_ms=" << options_.highlight_duration_ms << "\n";
     file << "generate_comments=" << (options_.generate_comments ? "true" : "false") << "\n";
+    file << "\n";
+
+    file << "[Z3]\n";
+    file << "z3_mode=";
+    switch (options_.z3.mode) {
+        case Z3SynthesisMode::Disabled: file << "disabled"; break;
+        case Z3SynthesisMode::Required: file << "required"; break;
+        default: file << "preferred"; break;
+    }
+    file << "\n";
+    file << "z3_timeout_ms=" << options_.z3.timeout_ms << "\n";
+    file << "z3_memory_limit_mb=" << options_.z3.memory_limit_mb << "\n";
+    file << "z3_enable_maxsmt=" << (options_.z3.enable_maxsmt ? "true" : "false") << "\n";
+    file << "z3_enable_unsat_core=" << (options_.z3.enable_unsat_core ? "true" : "false") << "\n";
+    file << "z3_detect_arrays=" << (options_.z3.detect_arrays ? "true" : "false") << "\n";
+    file << "z3_min_array_elements=" << options_.z3.min_array_elements << "\n";
+    file << "z3_cross_function=" << (options_.z3.cross_function ? "true" : "false") << "\n";
+    file << "z3_max_candidates=" << options_.z3.max_candidates << "\n";
+    file << "z3_allow_unions=" << (options_.z3.allow_unions ? "true" : "false") << "\n";
+    file << "z3_min_confidence=" << static_cast<int>(options_.z3.min_confidence) << "\n";
+    file << "z3_relax_on_unsat=" << (options_.z3.relax_on_unsat ? "true" : "false") << "\n";
+    file << "z3_max_relax_iterations=" << options_.z3.max_relax_iterations << "\n";
 
     dirty_ = false;
     return true;

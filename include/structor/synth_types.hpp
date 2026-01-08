@@ -241,6 +241,25 @@ struct AccessPattern {
 // Synthesized Structure Components
 // ============================================================================
 
+/// Confidence level for inferred types (used by Z3 synthesis)
+enum class TypeConfidence : std::uint8_t {
+    Low = 0,        // Single observation, could be coincidence
+    Medium = 1,     // Multiple observations or strong heuristic
+    High = 2,       // Very strong evidence (pattern match, explicit type)
+    Certain = 3     // Type is definitively known (debug info, user override)
+};
+
+/// Get string representation of TypeConfidence
+[[nodiscard]] inline const char* type_confidence_str(TypeConfidence conf) noexcept {
+    switch (conf) {
+        case TypeConfidence::Low:       return "low";
+        case TypeConfidence::Medium:    return "medium";
+        case TypeConfidence::High:      return "high";
+        case TypeConfidence::Certain:   return "certain";
+        default:                        return "unknown";
+    }
+}
+
 /// A single field in a synthesized structure
 struct SynthField {
     qstring         name;           // Field name (e.g., "field_10")
@@ -251,6 +270,9 @@ struct SynthField {
     qstring         comment;        // Auto-generated comment
     bool            is_padding;     // True if this is alignment padding
     bool            is_union_candidate;  // True if overlapping accesses detected
+    bool            is_array;       // True if this is an array field
+    std::uint32_t   array_count;    // Number of array elements (1 if not array)
+    TypeConfidence  confidence;     // How confident we are in the type
     qvector<FieldAccess> source_accesses;  // Accesses that contributed to this field
 
     SynthField()
@@ -258,7 +280,10 @@ struct SynthField {
         , size(0)
         , semantic(SemanticType::Unknown)
         , is_padding(false)
-        , is_union_candidate(false) {}
+        , is_union_candidate(false)
+        , is_array(false)
+        , array_count(1)
+        , confidence(TypeConfidence::Medium) {}
 
     static SynthField create_padding(sval_t off, std::uint32_t sz) {
         SynthField f;
@@ -272,6 +297,49 @@ struct SynthField {
         tinfo_t byte_type;
         byte_type.create_simple_type(BT_INT8 | BTMT_CHAR);
         f.type.create_array(byte_type, sz);
+
+        return f;
+    }
+
+    /// Create a raw bytes field for irreconcilable regions
+    static SynthField create_raw_bytes(sval_t off, std::uint32_t sz) {
+        SynthField f;
+        f.name.sprnt("__raw_%X", static_cast<unsigned>(off));
+        f.offset = off;
+        f.size = sz;
+        f.semantic = SemanticType::Unknown;
+        f.is_padding = false;
+        f.confidence = TypeConfidence::Low;
+
+        // Create uint8_t array type
+        tinfo_t byte_type;
+        byte_type.create_simple_type(BT_INT8 | BTMT_USIGNED);
+        f.type.create_array(byte_type, sz);
+
+        return f;
+    }
+
+    /// Create an array field
+    static SynthField create_array(sval_t off, const tinfo_t& elem_type, std::uint32_t count) {
+        SynthField f;
+        f.offset = off;
+        f.is_array = true;
+        f.array_count = count;
+
+        // Calculate size
+        size_t elem_size = elem_type.get_size();
+        if (elem_size != BADSIZE) {
+            f.size = static_cast<std::uint32_t>(elem_size * count);
+        } else {
+            f.size = count;  // Fallback
+        }
+
+        // Create array type
+        f.type.create_array(elem_type, count);
+
+        f.name.sprnt("arr_%X", static_cast<unsigned>(off));
+        f.confidence = TypeConfidence::Medium;
+        f.semantic = SemanticType::Array;
 
         return f;
     }
@@ -357,7 +425,67 @@ enum class SynthError : std::uint8_t {
     TypeCreationFailed,
     PropagationFailed,
     RewriteFailed,
-    InternalError
+    InternalError,
+    // Z3-specific errors
+    Z3Timeout,              // Z3 solver timed out
+    Z3OutOfMemory,          // Z3 ran out of memory
+    Z3Unsat,                // Z3 constraints are unsatisfiable
+    Z3Disabled              // Z3 is disabled in configuration
+};
+
+/// Status of Z3 synthesis phase
+enum class Z3SynthesisStatus : std::uint8_t {
+    NotUsed = 0,            // Z3 was not used (disabled or skipped)
+    Success,                // Z3 found a valid solution
+    SuccessRelaxed,         // Solution found after relaxing constraints
+    FallbackRawBytes,       // Fell back to raw bytes for some fields
+    FallbackHeuristic,      // Fell back to heuristic synthesis
+    Timeout,                // Z3 timed out
+    OutOfMemory,            // Z3 ran out of memory
+    Unsat,                  // Constraints unsatisfiable
+    Error                   // Internal error
+};
+
+/// Z3-specific synthesis result information
+struct Z3SynthesisInfo {
+    Z3SynthesisStatus       status;                 // Z3 synthesis status
+    std::uint32_t           solve_time_ms;          // Time spent in Z3 solver
+    std::uint32_t           candidates_generated;   // Number of field candidates
+    std::uint32_t           candidates_selected;    // Candidates in final solution
+    std::uint32_t           constraints_hard;       // Hard constraints count
+    std::uint32_t           constraints_soft;       // Soft constraints count
+    std::uint32_t           constraints_relaxed;    // Constraints relaxed for solution
+    std::uint32_t           arrays_detected;        // Arrays detected
+    std::uint32_t           unions_created;         // Union types created
+    std::uint32_t           cross_func_merged;      // Cross-function constraints merged
+    qvector<qstring>        relaxed_reasons;        // Reasons for relaxed constraints
+    qvector<qstring>        unsat_core;             // UNSAT core if applicable
+
+    Z3SynthesisInfo()
+        : status(Z3SynthesisStatus::NotUsed)
+        , solve_time_ms(0)
+        , candidates_generated(0)
+        , candidates_selected(0)
+        , constraints_hard(0)
+        , constraints_soft(0)
+        , constraints_relaxed(0)
+        , arrays_detected(0)
+        , unions_created(0)
+        , cross_func_merged(0) {}
+
+    [[nodiscard]] bool used_z3() const noexcept {
+        return status != Z3SynthesisStatus::NotUsed;
+    }
+
+    [[nodiscard]] bool z3_succeeded() const noexcept {
+        return status == Z3SynthesisStatus::Success ||
+               status == Z3SynthesisStatus::SuccessRelaxed;
+    }
+
+    [[nodiscard]] bool used_fallback() const noexcept {
+        return status == Z3SynthesisStatus::FallbackRawBytes ||
+               status == Z3SynthesisStatus::FallbackHeuristic;
+    }
 };
 
 /// Conflict information for user resolution
@@ -382,6 +510,9 @@ struct SynthResult {
     qvector<AccessConflict> conflicts;          // Conflicts for user review
     std::unique_ptr<SynthStruct> synthesized_struct;
 
+    // Z3-specific result information
+    Z3SynthesisInfo         z3_info;            // Z3 synthesis details
+
     SynthResult()
         : error(SynthError::Success)
         , struct_tid(BADADDR)
@@ -395,6 +526,14 @@ struct SynthResult {
 
     [[nodiscard]] bool has_conflicts() const noexcept {
         return !conflicts.empty();
+    }
+
+    [[nodiscard]] bool used_z3() const noexcept {
+        return z3_info.used_z3();
+    }
+
+    [[nodiscard]] bool z3_succeeded() const noexcept {
+        return z3_info.z3_succeeded();
     }
 
     static SynthResult make_error(SynthError err, const char* msg) {
@@ -511,7 +650,27 @@ struct RewriteResult {
         case SynthError::PropagationFailed:     return "Type propagation failed";
         case SynthError::RewriteFailed:         return "Pseudocode rewrite failed";
         case SynthError::InternalError:         return "Internal error";
+        case SynthError::Z3Timeout:             return "Z3 solver timed out";
+        case SynthError::Z3OutOfMemory:         return "Z3 ran out of memory";
+        case SynthError::Z3Unsat:               return "Z3 constraints unsatisfiable";
+        case SynthError::Z3Disabled:            return "Z3 synthesis is disabled";
         default:                                return "Unknown error";
+    }
+}
+
+/// Get string representation of Z3SynthesisStatus
+[[nodiscard]] inline const char* z3_status_str(Z3SynthesisStatus status) noexcept {
+    switch (status) {
+        case Z3SynthesisStatus::NotUsed:            return "not_used";
+        case Z3SynthesisStatus::Success:            return "success";
+        case Z3SynthesisStatus::SuccessRelaxed:     return "success_relaxed";
+        case Z3SynthesisStatus::FallbackRawBytes:   return "fallback_raw_bytes";
+        case Z3SynthesisStatus::FallbackHeuristic:  return "fallback_heuristic";
+        case Z3SynthesisStatus::Timeout:            return "timeout";
+        case Z3SynthesisStatus::OutOfMemory:        return "out_of_memory";
+        case Z3SynthesisStatus::Unsat:              return "unsat";
+        case Z3SynthesisStatus::Error:              return "error";
+        default:                                    return "unknown";
     }
 }
 

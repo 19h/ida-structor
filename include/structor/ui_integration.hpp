@@ -50,9 +50,10 @@ inline SynthResult do_synthesis(cfunc_t* cfunc, int var_idx, const SynthOptions&
 
     // Step 2: Synthesize structure layout
     LayoutSynthesizer synthesizer(opts);
-    SynthStruct synth_struct = synthesizer.synthesize(pattern);
+    SynthesisResult synth_result = synthesizer.synthesize(pattern);
+    SynthStruct synth_struct = std::move(synth_result.structure);
 
-    result.conflicts = synthesizer.conflicts();
+    result.conflicts = synth_result.conflicts;
 
     if (synth_struct.fields.empty()) {
         return SynthResult::make_error(SynthError::TypeCreationFailed,

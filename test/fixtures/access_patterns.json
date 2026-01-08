@@ -1,0 +1,483 @@
+{
+  "version": "1.0",
+  "description": "Test fixtures for Z3-based struct synthesis",
+  "test_cases": [
+    {
+      "name": "simple_struct",
+      "description": "Basic struct with int, float, pointer",
+      "struct_size": 16,
+      "accesses": [
+        {"offset": 0, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 4, "size": 4, "type": "Float32", "is_write": false},
+        {"offset": 8, "size": 8, "type": "Pointer", "is_write": false}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 4, "type": "Int32", "name": "field_0"},
+        {"offset": 4, "size": 4, "type": "Float32", "name": "field_4"},
+        {"offset": 8, "size": 8, "type": "Pointer", "name": "field_8"}
+      ]
+    },
+    {
+      "name": "int_array",
+      "description": "Array of 8 integers",
+      "struct_size": 32,
+      "accesses": [
+        {"offset": 0, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 4, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 8, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 12, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 16, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 20, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 24, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 28, "size": 4, "type": "Int32", "is_write": false}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 32, "type": "Int32", "is_array": true, "array_count": 8, "name": "arr"}
+      ]
+    },
+    {
+      "name": "pointer_array",
+      "description": "Array of pointers",
+      "struct_size": 64,
+      "accesses": [
+        {"offset": 0, "size": 8, "type": "Pointer", "is_write": false},
+        {"offset": 8, "size": 8, "type": "Pointer", "is_write": false},
+        {"offset": 16, "size": 8, "type": "Pointer", "is_write": false},
+        {"offset": 24, "size": 8, "type": "Pointer", "is_write": false},
+        {"offset": 32, "size": 8, "type": "Pointer", "is_write": false},
+        {"offset": 40, "size": 8, "type": "Pointer", "is_write": false},
+        {"offset": 48, "size": 8, "type": "Pointer", "is_write": false},
+        {"offset": 56, "size": 8, "type": "Pointer", "is_write": false}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 64, "type": "Pointer", "is_array": true, "array_count": 8, "name": "ptrs"}
+      ]
+    },
+    {
+      "name": "nested_struct",
+      "description": "Struct with embedded struct",
+      "struct_size": 24,
+      "accesses": [
+        {"offset": 0, "size": 4, "type": "Int32", "is_write": false, "comment": "outer.id"},
+        {"offset": 8, "size": 4, "type": "Int32", "is_write": false, "comment": "outer.inner.x"},
+        {"offset": 12, "size": 4, "type": "Int32", "is_write": false, "comment": "outer.inner.y"},
+        {"offset": 16, "size": 8, "type": "Pointer", "is_write": false, "comment": "outer.data"}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 4, "type": "Int32", "name": "id"},
+        {"offset": 4, "size": 4, "type": "RawBytes", "name": "padding"},
+        {"offset": 8, "size": 4, "type": "Int32", "name": "inner_x"},
+        {"offset": 12, "size": 4, "type": "Int32", "name": "inner_y"},
+        {"offset": 16, "size": 8, "type": "Pointer", "name": "data"}
+      ]
+    },
+    {
+      "name": "linked_list_node",
+      "description": "Linked list node with data and next pointer",
+      "struct_size": 24,
+      "accesses": [
+        {"offset": 0, "size": 8, "type": "Int64", "is_write": false, "comment": "data"},
+        {"offset": 8, "size": 8, "type": "Pointer", "is_write": false, "comment": "next"},
+        {"offset": 16, "size": 8, "type": "Pointer", "is_write": false, "comment": "prev"}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 8, "type": "Int64", "name": "data"},
+        {"offset": 8, "size": 8, "type": "Pointer", "name": "next"},
+        {"offset": 16, "size": 8, "type": "Pointer", "name": "prev"}
+      ]
+    },
+    {
+      "name": "vtable_struct",
+      "description": "C++ object with vtable pointer",
+      "struct_size": 32,
+      "accesses": [
+        {"offset": 0, "size": 8, "type": "Pointer", "is_write": false, "comment": "vtable_ptr"},
+        {"offset": 8, "size": 4, "type": "Int32", "is_write": false, "comment": "member1"},
+        {"offset": 12, "size": 4, "type": "Int32", "is_write": false, "comment": "member2"},
+        {"offset": 16, "size": 8, "type": "Pointer", "is_write": false, "comment": "member3"},
+        {"offset": 24, "size": 8, "type": "Pointer", "is_write": false, "comment": "member4"}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 8, "type": "Pointer", "name": "vtable"},
+        {"offset": 8, "size": 4, "type": "Int32", "name": "field_8"},
+        {"offset": 12, "size": 4, "type": "Int32", "name": "field_c"},
+        {"offset": 16, "size": 8, "type": "Pointer", "name": "field_10"},
+        {"offset": 24, "size": 8, "type": "Pointer", "name": "field_18"}
+      ]
+    },
+    {
+      "name": "packed_struct",
+      "description": "Struct with no padding (packed)",
+      "struct_size": 13,
+      "accesses": [
+        {"offset": 0, "size": 1, "type": "Int8", "is_write": false},
+        {"offset": 1, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 5, "size": 8, "type": "Int64", "is_write": false}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 1, "type": "Int8", "name": "byte"},
+        {"offset": 1, "size": 4, "type": "Int32", "name": "int_field"},
+        {"offset": 5, "size": 8, "type": "Int64", "name": "long_field"}
+      ]
+    },
+    {
+      "name": "string_buffer",
+      "description": "Struct with embedded char array",
+      "struct_size": 40,
+      "accesses": [
+        {"offset": 0, "size": 4, "type": "Int32", "is_write": false, "comment": "length"},
+        {"offset": 4, "size": 4, "type": "Int32", "is_write": false, "comment": "capacity"},
+        {"offset": 8, "size": 1, "type": "Int8", "is_write": false, "comment": "buffer[0]"},
+        {"offset": 9, "size": 1, "type": "Int8", "is_write": false, "comment": "buffer[1]"},
+        {"offset": 10, "size": 1, "type": "Int8", "is_write": false, "comment": "buffer[2]"},
+        {"offset": 11, "size": 1, "type": "Int8", "is_write": false, "comment": "buffer[3]"}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 4, "type": "Int32", "name": "length"},
+        {"offset": 4, "size": 4, "type": "Int32", "name": "capacity"},
+        {"offset": 8, "size": 32, "type": "Int8", "is_array": true, "array_count": 32, "name": "buffer"}
+      ]
+    },
+    {
+      "name": "union_like",
+      "description": "Fields at same offset suggesting union",
+      "struct_size": 16,
+      "union_fields": true,
+      "accesses": [
+        {"offset": 0, "size": 4, "type": "Int32", "is_write": false, "func_addr": "0x1000"},
+        {"offset": 0, "size": 4, "type": "Float32", "is_write": false, "func_addr": "0x2000"},
+        {"offset": 8, "size": 8, "type": "Pointer", "is_write": false}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 4, "type": "Union", "name": "u", "union_members": [
+          {"offset": 0, "size": 4, "type": "Int32"},
+          {"offset": 0, "size": 4, "type": "Float32"}
+        ]},
+        {"offset": 4, "size": 4, "type": "RawBytes", "name": "padding"},
+        {"offset": 8, "size": 8, "type": "Pointer", "name": "ptr"}
+      ]
+    },
+    {
+      "name": "bitmap_struct",
+      "description": "Bitmap header with dimensions",
+      "struct_size": 40,
+      "accesses": [
+        {"offset": 0, "size": 4, "type": "Int32", "is_write": false, "comment": "magic"},
+        {"offset": 4, "size": 4, "type": "Int32", "is_write": false, "comment": "width"},
+        {"offset": 8, "size": 4, "type": "Int32", "is_write": false, "comment": "height"},
+        {"offset": 12, "size": 4, "type": "Int32", "is_write": false, "comment": "bpp"},
+        {"offset": 16, "size": 8, "type": "Pointer", "is_write": false, "comment": "data"},
+        {"offset": 24, "size": 8, "type": "Pointer", "is_write": false, "comment": "palette"},
+        {"offset": 32, "size": 4, "type": "Int32", "is_write": false, "comment": "stride"},
+        {"offset": 36, "size": 4, "type": "Int32", "is_write": false, "comment": "flags"}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 4, "type": "Int32", "name": "magic"},
+        {"offset": 4, "size": 4, "type": "Int32", "name": "width"},
+        {"offset": 8, "size": 4, "type": "Int32", "name": "height"},
+        {"offset": 12, "size": 4, "type": "Int32", "name": "bpp"},
+        {"offset": 16, "size": 8, "type": "Pointer", "name": "data"},
+        {"offset": 24, "size": 8, "type": "Pointer", "name": "palette"},
+        {"offset": 32, "size": 4, "type": "Int32", "name": "stride"},
+        {"offset": 36, "size": 4, "type": "Int32", "name": "flags"}
+      ]
+    },
+    {
+      "name": "tree_node",
+      "description": "Binary tree node",
+      "struct_size": 32,
+      "accesses": [
+        {"offset": 0, "size": 8, "type": "Int64", "is_write": false, "comment": "key"},
+        {"offset": 8, "size": 8, "type": "Pointer", "is_write": false, "comment": "left"},
+        {"offset": 16, "size": 8, "type": "Pointer", "is_write": false, "comment": "right"},
+        {"offset": 24, "size": 8, "type": "Pointer", "is_write": false, "comment": "parent"}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 8, "type": "Int64", "name": "key"},
+        {"offset": 8, "size": 8, "type": "Pointer", "name": "left"},
+        {"offset": 16, "size": 8, "type": "Pointer", "name": "right"},
+        {"offset": 24, "size": 8, "type": "Pointer", "name": "parent"}
+      ]
+    },
+    {
+      "name": "hash_entry",
+      "description": "Hash table entry with key-value pair",
+      "struct_size": 32,
+      "accesses": [
+        {"offset": 0, "size": 8, "type": "Int64", "is_write": false, "comment": "hash"},
+        {"offset": 8, "size": 8, "type": "Pointer", "is_write": false, "comment": "key"},
+        {"offset": 16, "size": 8, "type": "Pointer", "is_write": false, "comment": "value"},
+        {"offset": 24, "size": 8, "type": "Pointer", "is_write": false, "comment": "next"}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 8, "type": "Int64", "name": "hash"},
+        {"offset": 8, "size": 8, "type": "Pointer", "name": "key"},
+        {"offset": 16, "size": 8, "type": "Pointer", "name": "value"},
+        {"offset": 24, "size": 8, "type": "Pointer", "name": "next"}
+      ]
+    },
+    {
+      "name": "vector_struct",
+      "description": "Dynamic array/vector structure",
+      "struct_size": 24,
+      "accesses": [
+        {"offset": 0, "size": 8, "type": "Pointer", "is_write": false, "comment": "data"},
+        {"offset": 8, "size": 8, "type": "Int64", "is_write": false, "comment": "size"},
+        {"offset": 16, "size": 8, "type": "Int64", "is_write": false, "comment": "capacity"}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 8, "type": "Pointer", "name": "data"},
+        {"offset": 8, "size": 8, "type": "Int64", "name": "size"},
+        {"offset": 16, "size": 8, "type": "Int64", "name": "capacity"}
+      ]
+    },
+    {
+      "name": "large_struct",
+      "description": "Large struct with 50 fields",
+      "struct_size": 400,
+      "accesses": [
+        {"offset": 0, "size": 8, "type": "Pointer", "is_write": false},
+        {"offset": 8, "size": 8, "type": "Int64", "is_write": false},
+        {"offset": 16, "size": 8, "type": "Int64", "is_write": false},
+        {"offset": 24, "size": 8, "type": "Int64", "is_write": false},
+        {"offset": 32, "size": 8, "type": "Pointer", "is_write": false},
+        {"offset": 40, "size": 8, "type": "Int64", "is_write": false},
+        {"offset": 48, "size": 8, "type": "Pointer", "is_write": false},
+        {"offset": 56, "size": 8, "type": "Int64", "is_write": false},
+        {"offset": 64, "size": 8, "type": "Int64", "is_write": false},
+        {"offset": 72, "size": 8, "type": "Pointer", "is_write": false}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 8, "type": "Pointer"},
+        {"offset": 8, "size": 8, "type": "Int64"},
+        {"offset": 16, "size": 8, "type": "Int64"},
+        {"offset": 24, "size": 8, "type": "Int64"},
+        {"offset": 32, "size": 8, "type": "Pointer"},
+        {"offset": 40, "size": 8, "type": "Int64"},
+        {"offset": 48, "size": 8, "type": "Pointer"},
+        {"offset": 56, "size": 8, "type": "Int64"},
+        {"offset": 64, "size": 8, "type": "Int64"},
+        {"offset": 72, "size": 8, "type": "Pointer"}
+      ]
+    }
+  ],
+  "cross_function_cases": [
+    {
+      "name": "two_function_struct",
+      "description": "Struct accessed from two functions with different fields",
+      "struct_size": 24,
+      "functions": [
+        {
+          "addr": "0x1000",
+          "accesses": [
+            {"offset": 0, "size": 4, "type": "Int32", "is_write": false},
+            {"offset": 8, "size": 8, "type": "Pointer", "is_write": false}
+          ]
+        },
+        {
+          "addr": "0x2000",
+          "accesses": [
+            {"offset": 4, "size": 4, "type": "Float32", "is_write": false},
+            {"offset": 16, "size": 8, "type": "Int64", "is_write": false}
+          ]
+        }
+      ],
+      "call_sites": [
+        {"caller": "0x3000", "callee": "0x1000", "param_offset": 0},
+        {"caller": "0x3000", "callee": "0x2000", "param_offset": 0}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 4, "type": "Int32"},
+        {"offset": 4, "size": 4, "type": "Float32"},
+        {"offset": 8, "size": 8, "type": "Pointer"},
+        {"offset": 16, "size": 8, "type": "Int64"}
+      ]
+    },
+    {
+      "name": "pointer_delta_unification",
+      "description": "Same struct passed with different base offsets",
+      "struct_size": 32,
+      "functions": [
+        {
+          "addr": "0x1000",
+          "accesses": [
+            {"offset": 0, "size": 4, "type": "Int32", "is_write": false, "comment": "sees full struct"},
+            {"offset": 4, "size": 4, "type": "Int32", "is_write": false}
+          ]
+        },
+        {
+          "addr": "0x2000",
+          "accesses": [
+            {"offset": 0, "size": 8, "type": "Pointer", "is_write": false, "comment": "sees from +8"},
+            {"offset": 8, "size": 4, "type": "Int32", "is_write": false}
+          ]
+        }
+      ],
+      "call_sites": [
+        {"caller": "0x3000", "callee": "0x1000", "param_offset": 0},
+        {"caller": "0x3000", "callee": "0x2000", "param_offset": 8}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 4, "type": "Int32"},
+        {"offset": 4, "size": 4, "type": "Int32"},
+        {"offset": 8, "size": 8, "type": "Pointer"},
+        {"offset": 16, "size": 4, "type": "Int32"}
+      ]
+    },
+    {
+      "name": "recursive_struct_call",
+      "description": "Recursive function accessing linked list",
+      "struct_size": 16,
+      "functions": [
+        {
+          "addr": "0x1000",
+          "accesses": [
+            {"offset": 0, "size": 8, "type": "Int64", "is_write": false, "comment": "data"},
+            {"offset": 8, "size": 8, "type": "Pointer", "is_write": false, "comment": "next"}
+          ]
+        }
+      ],
+      "call_sites": [
+        {"caller": "0x1000", "callee": "0x1000", "param_offset": 0, "comment": "recursive call with next ptr"}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 8, "type": "Int64", "name": "data"},
+        {"offset": 8, "size": 8, "type": "Pointer", "name": "next"}
+      ]
+    }
+  ],
+  "array_detection_cases": [
+    {
+      "name": "stride_4_array",
+      "description": "Array with 4-byte stride",
+      "struct_size": 40,
+      "accesses": [
+        {"offset": 0, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 4, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 8, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 12, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 16, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 20, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 24, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 28, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 32, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 36, "size": 4, "type": "Int32", "is_write": false}
+      ],
+      "expected_array": {
+        "offset": 0,
+        "element_size": 4,
+        "count": 10
+      }
+    },
+    {
+      "name": "array_with_gap",
+      "description": "Array with some elements not accessed",
+      "struct_size": 32,
+      "accesses": [
+        {"offset": 0, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 4, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 12, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 16, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 24, "size": 4, "type": "Int32", "is_write": false},
+        {"offset": 28, "size": 4, "type": "Int32", "is_write": false}
+      ],
+      "expected_array": {
+        "offset": 0,
+        "element_size": 4,
+        "count": 8,
+        "note": "May not detect as array due to gaps"
+      }
+    },
+    {
+      "name": "array_of_structs",
+      "description": "Array where elements are structs",
+      "struct_size": 48,
+      "accesses": [
+        {"offset": 0, "size": 4, "type": "Int32", "is_write": false, "comment": "arr[0].x"},
+        {"offset": 4, "size": 4, "type": "Int32", "is_write": false, "comment": "arr[0].y"},
+        {"offset": 8, "size": 8, "type": "Pointer", "is_write": false, "comment": "arr[0].ptr"},
+        {"offset": 16, "size": 4, "type": "Int32", "is_write": false, "comment": "arr[1].x"},
+        {"offset": 20, "size": 4, "type": "Int32", "is_write": false, "comment": "arr[1].y"},
+        {"offset": 24, "size": 8, "type": "Pointer", "is_write": false, "comment": "arr[1].ptr"},
+        {"offset": 32, "size": 4, "type": "Int32", "is_write": false, "comment": "arr[2].x"},
+        {"offset": 36, "size": 4, "type": "Int32", "is_write": false, "comment": "arr[2].y"},
+        {"offset": 40, "size": 8, "type": "Pointer", "is_write": false, "comment": "arr[2].ptr"}
+      ],
+      "expected_array": {
+        "offset": 0,
+        "element_size": 16,
+        "count": 3
+      }
+    },
+    {
+      "name": "symbolic_index_access",
+      "description": "Array accessed with variable index",
+      "struct_size": 40,
+      "symbolic_accesses": [
+        {"base_offset": 0, "index_expr": "i", "element_size": 4, "type": "Int32"},
+        {"base_offset": 0, "index_expr": "i+1", "element_size": 4, "type": "Int32"}
+      ],
+      "expected_array": {
+        "offset": 0,
+        "element_size": 4,
+        "count": "unknown"
+      }
+    }
+  ],
+  "edge_cases": [
+    {
+      "name": "empty_struct",
+      "description": "No observed accesses",
+      "struct_size": 8,
+      "accesses": [],
+      "expected_behavior": "fill_with_raw_bytes"
+    },
+    {
+      "name": "single_byte",
+      "description": "Single byte access",
+      "struct_size": 1,
+      "accesses": [
+        {"offset": 0, "size": 1, "type": "Int8", "is_write": false}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 1, "type": "Int8"}
+      ]
+    },
+    {
+      "name": "overlapping_writes",
+      "description": "Same offset written with different sizes",
+      "struct_size": 8,
+      "accesses": [
+        {"offset": 0, "size": 1, "type": "Int8", "is_write": true},
+        {"offset": 0, "size": 4, "type": "Int32", "is_write": true}
+      ],
+      "expected_behavior": "prefer_larger_or_union"
+    },
+    {
+      "name": "boundary_access",
+      "description": "Access at exact struct boundary",
+      "struct_size": 16,
+      "accesses": [
+        {"offset": 0, "size": 8, "type": "Int64", "is_write": false},
+        {"offset": 8, "size": 8, "type": "Int64", "is_write": false}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 8, "type": "Int64"},
+        {"offset": 8, "size": 8, "type": "Int64"}
+      ]
+    },
+    {
+      "name": "unaligned_large",
+      "description": "Unaligned 8-byte access",
+      "struct_size": 16,
+      "accesses": [
+        {"offset": 4, "size": 8, "type": "Int64", "is_write": false}
+      ],
+      "expected_fields": [
+        {"offset": 0, "size": 4, "type": "RawBytes", "name": "padding"},
+        {"offset": 4, "size": 8, "type": "Int64"},
+        {"offset": 12, "size": 4, "type": "RawBytes", "name": "padding2"}
+      ]
+    }
+  ]
+}

@@ -6,6 +6,47 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# ============================================================================
+# Z3 Theorem Prover Integration
+# ============================================================================
+
+# Try to find system Z3 first (much faster than building from source)
+find_package(Z3 CONFIG QUIET)
+
+if(Z3_FOUND)
+    message(STATUS "Found system Z3: ${Z3_VERSION}")
+    set(Z3_USE_SYSTEM TRUE)
+else()
+    message(STATUS "System Z3 not found, building from source (this takes 15+ minutes)...")
+    include(FetchContent)
+
+    # Z3 Theorem Prover - use release tag for reproducibility
+    FetchContent_Declare(
+        z3
+        GIT_REPOSITORY https://github.com/Z3Prover/z3.git
+        GIT_TAG        z3-4.13.0
+        GIT_SHALLOW    TRUE
+    )
+
+    # Z3 build options - disable unnecessary components for faster builds
+    set(Z3_BUILD_LIBZ3_SHARED OFF CACHE BOOL "" FORCE)
+    set(Z3_BUILD_EXECUTABLE OFF CACHE BOOL "" FORCE)
+    set(Z3_BUILD_TEST_EXECUTABLES OFF CACHE BOOL "" FORCE)
+    set(Z3_ENABLE_EXAMPLE_TARGETS OFF CACHE BOOL "" FORCE)
+    set(Z3_BUILD_DOCUMENTATION OFF CACHE BOOL "" FORCE)
+    set(Z3_BUILD_JAVA_BINDINGS OFF CACHE BOOL "" FORCE)
+    set(Z3_BUILD_PYTHON_BINDINGS OFF CACHE BOOL "" FORCE)
+    set(Z3_BUILD_DOTNET_BINDINGS OFF CACHE BOOL "" FORCE)
+
+    FetchContent_MakeAvailable(z3)
+    set(Z3_USE_SYSTEM FALSE)
+endif()
+
+# Verify exceptions are enabled (required for Z3 C++ API)
+if(CMAKE_CXX_FLAGS MATCHES "-fno-exceptions")
+    message(FATAL_ERROR "Z3 C++ API requires exceptions. Remove -fno-exceptions.")
+endif()
+
 # macOS deployment target (12.0 = Monterey, matches IDA SDK requirement)
 if(APPLE)
     if(NOT CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "")
@@ -135,10 +176,9 @@ else()
     endif()
 endif()
 
-# Include directories
+# Include directories (structor include only - IDA includes added per-target)
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
-    ${IDA_INCLUDE_DIR}
 )
 
 # Source files
@@ -152,6 +192,13 @@ set(STRUCTOR_SOURCES
     src/pseudocode_rewriter.cpp
     src/structure_persistence.cpp
     src/ui_integration.cpp
+    src/z3/context.cpp
+    src/z3/type_encoding.cpp
+    src/z3/constraint_tracker.cpp
+    src/z3/field_candidates.cpp
+    src/z3/array_constraints.cpp
+    src/z3/layout_constraints.cpp
+    src/cross_function_analyzer.cpp
 )
 
 set(STRUCTOR_HEADERS
@@ -166,10 +213,23 @@ set(STRUCTOR_HEADERS
     include/structor/ui_integration.hpp
     include/structor/api.hpp
     include/structor/utils.hpp
+    include/structor/cross_function_analyzer.hpp
+    include/structor/call_graph.hpp
+    include/structor/z3/context.hpp
+    include/structor/z3/type_encoding.hpp
+    include/structor/z3/constraint_tracker.hpp
+    include/structor/z3/result.hpp
+    include/structor/z3/field_candidates.hpp
+    include/structor/z3/array_constraints.hpp
+    include/structor/z3/layout_constraints.hpp
+    include/structor/z3/test_ir.hpp
 )
 
 # Plugin shared library
 add_library(structor${IDA_SUFFIX} SHARED ${STRUCTOR_SOURCES} ${STRUCTOR_HEADERS})
+
+# Add IDA SDK includes to structor target (not globally, to avoid contaminating tests)
+target_include_directories(structor${IDA_SUFFIX} PRIVATE ${IDA_INCLUDE_DIR})
 
 if(IDA_LIB)
     target_link_libraries(structor${IDA_SUFFIX} PRIVATE ${IDA_LIB})
@@ -177,6 +237,19 @@ endif()
 
 if(HEXRAYS_LIB)
     target_link_libraries(structor${IDA_SUFFIX} PRIVATE ${HEXRAYS_LIB})
+endif()
+
+# Link Z3 to structor
+if(Z3_USE_SYSTEM)
+    target_link_libraries(structor${IDA_SUFFIX} PRIVATE z3::libz3)
+    # System Z3 includes are handled by the imported target
+else()
+    target_link_libraries(structor${IDA_SUFFIX} PRIVATE libz3)
+    target_include_directories(structor${IDA_SUFFIX} PRIVATE
+        ${z3_SOURCE_DIR}/src/api      # C API headers (z3.h)
+        ${z3_SOURCE_DIR}/src/api/c++  # C++ API headers (z3++.h)
+        ${z3_BINARY_DIR}/src/api      # Generated headers
+    )
 endif()
 
 # Set plugin output name and properties
