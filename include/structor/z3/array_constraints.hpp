@@ -123,7 +123,6 @@ public:
 private:
     Z3Context& ctx_;
     ArrayDetectionConfig config_;
-    TypeEncoder type_encoder_;
     DetectionStats stats_;
 
     /// Pre-filter: group accesses by size (potential array elements)

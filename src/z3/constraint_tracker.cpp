@@ -31,10 +31,14 @@ std::string ConstraintTracker::make_tracking_name(unsigned id) const {
 
     ::z3::expr tracking_lit = make_tracking_literal(id);
 
-    // Add constraint with tracking: tracking_lit => constraint
-    // When tracking_lit is true, constraint must hold
-    // Using assert_and_track for UNSAT core extraction
-    solver.add(constraint, tracking_lit);
+    // Create implication: tracking_lit => constraint
+    // When tracking_lit is true (assumed), constraint must hold
+    // When tracking_lit is false (not assumed), constraint is vacuously satisfied
+    ::z3::expr guarded_constraint = ::z3::implies(tracking_lit, constraint);
+    
+    // Add the guarded constraint as a regular assertion
+    // The constraint is activated by assuming tracking_lit during check()
+    solver.add(guarded_constraint);
 
     if (provenance.is_soft) {
         soft_constraint_ids_.push_back(id);
@@ -143,6 +147,17 @@ qvector<ConstraintProvenance> ConstraintTracker::analyze_unsat_core(
         if (id < tracking_exprs_.size()) {
             result.push_back(tracking_exprs_[id]);
         }
+    }
+
+    return result;
+}
+
+::z3::expr_vector ConstraintTracker::get_all_literals() const {
+    ::z3::expr_vector result(ctx_);
+
+    // Add all tracking literals (both hard and soft)
+    for (const auto& expr : tracking_exprs_) {
+        result.push_back(expr);
     }
 
     return result;

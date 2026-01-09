@@ -1,8 +1,26 @@
 #include "structor/z3/layout_constraints.hpp"
 #include <algorithm>
 #include <chrono>
+#include <unordered_set>
+
+#ifndef STRUCTOR_TESTING
+#include <pro.h>
+#include <kernwin.hpp>
+#endif
 
 namespace structor::z3 {
+
+namespace {
+    // Helper for conditional logging
+    inline void z3_log(const char* fmt, ...) {
+#ifndef STRUCTOR_TESTING
+        va_list va;
+        va_start(va, fmt);
+        vmsg(fmt, va);
+        va_end(va);
+#endif
+    }
+}
 
 // ============================================================================
 // Helper Functions
@@ -78,16 +96,18 @@ LayoutConstraintBuilder::LayoutConstraintBuilder(
     const LayoutConstraintConfig& config)
     : ctx_(ctx)
     , config_(config)
-    , type_encoder_(ctx)
     , array_builder_(ctx)
     , constraint_tracker_(ctx.ctx())
-    , solver_(ctx.ctx()) {}
+    , solver_(ctx.make_solver()) {}
 
 void LayoutConstraintBuilder::build_constraints(
     const UnifiedAccessPattern& pattern,
     const qvector<FieldCandidate>& candidates)
 {
     auto start_time = std::chrono::steady_clock::now();
+
+    z3_log("[Structor/Z3] Building constraints for %zu accesses, %zu field candidates\n",
+           pattern.all_accesses.size(), candidates.size());
 
     pattern_ = &pattern;
     candidates_ = candidates;
@@ -101,6 +121,9 @@ void LayoutConstraintBuilder::build_constraints(
 
     // Detect arrays first
     arrays_ = array_builder_.detect_arrays(pattern.all_accesses);
+    if (!arrays_.empty()) {
+        z3_log("[Structor/Z3] Detected %zu potential arrays\n", arrays_.size());
+    }
 
     // Create field variables
     create_field_variables();
@@ -112,6 +135,7 @@ void LayoutConstraintBuilder::build_constraints(
     add_non_overlap_constraints();   // SOFT (union option)
     add_alignment_constraints();     // SOFT
     add_type_constraints();          // SOFT
+    add_type_preference_constraints(); // SOFT (prefer typed over raw_bytes)
     add_array_constraints();         // SOFT
 
     // Add optimization objectives
@@ -123,21 +147,35 @@ void LayoutConstraintBuilder::build_constraints(
     statistics_.total_constraints = static_cast<unsigned>(constraint_tracker_.total_constraints());
     statistics_.hard_constraints = static_cast<unsigned>(constraint_tracker_.hard_constraint_count());
     statistics_.soft_constraints = static_cast<unsigned>(constraint_tracker_.soft_constraint_count());
+
+    z3_log("[Structor/Z3] Built %u constraints (%u hard, %u soft) in %lldms\n",
+           statistics_.total_constraints,
+           statistics_.hard_constraints,
+           statistics_.soft_constraints,
+           static_cast<long long>(statistics_.constraint_build_time.count()));
 }
 
 void LayoutConstraintBuilder::create_field_variables() {
     auto& ctx = ctx_.ctx();
 
+    z3_log("[Structor/Z3] Creating field variables for %zu candidates\n", candidates_.size());
+
     // Create packing variable if needed
     if (config_.model_packing && !config_.packing_options.empty()) {
         packing_var_ = ctx.int_const("__packing");
 
-        // Constrain packing to valid options
+        // Constrain packing to valid options (hard constraint, not tracked)
         ::z3::expr_vector options(ctx);
         for (uint32_t p : config_.packing_options) {
             options.push_back(*packing_var_ == static_cast<int>(p));
         }
-        solver_.add(::z3::mk_or(options));
+
+        ConstraintProvenance prov;
+        prov.description = "Packing value constraint";
+        prov.is_soft = false;
+        prov.kind = ConstraintProvenance::Kind::Other;
+        constraint_tracker_.add_hard(solver_, ::z3::mk_or(options), prov);
+        z3_log("[Structor/Z3]   Added packing constraint with %zu options\n", config_.packing_options.size());
     }
 
     // Create variables for each candidate
@@ -160,12 +198,37 @@ void LayoutConstraintBuilder::create_field_variables() {
         fv.is_union_member = ctx.bool_const((prefix + "union").c_str());
         fv.union_group = ctx.int_const((prefix + "ugrp").c_str());
 
-        // Constraint: if not union member, union_group is -1
-        solver_.add(::z3::implies(!fv.is_union_member, fv.union_group == -1));
+        // Constraint: if not union member, union_group is -1 (hard, tracked)
+        {
+            ConstraintProvenance prov;
+            prov.description.sprnt("Union group default for field %zu", i);
+            prov.is_soft = false;
+            prov.kind = ConstraintProvenance::Kind::Other;
+            constraint_tracker_.add_hard(solver_, 
+                ::z3::implies(!fv.is_union_member, fv.union_group == -1), prov);
+        }
 
-        // Constraint: union group in valid range
-        solver_.add(fv.union_group >= -1);
-        solver_.add(fv.union_group < config_.max_union_alternatives);
+        // Constraint: union group in valid range (hard, tracked)
+        {
+            ConstraintProvenance prov;
+            prov.description.sprnt("Union group bounds for field %zu", i);
+            prov.is_soft = false;
+            prov.kind = ConstraintProvenance::Kind::Other;
+            constraint_tracker_.add_hard(solver_, fv.union_group >= -1, prov);
+            constraint_tracker_.add_hard(solver_, 
+                fv.union_group < config_.max_union_alternatives, prov);
+        }
+
+        // Soft constraint: prefer NOT being a union member
+        // This prevents Z3 from arbitrarily marking fields as unions
+        {
+            ConstraintProvenance prov;
+            prov.description.sprnt("Prefer non-union for field %zu", i);
+            prov.is_soft = true;
+            prov.kind = ConstraintProvenance::Kind::Other;
+            prov.weight = 1;  // Low weight - easily overridden when union is needed
+            constraint_tracker_.add_soft(solver_, !fv.is_union_member, prov, 1);
+        }
 
         field_vars_.push_back(fv);
     }
@@ -173,6 +236,9 @@ void LayoutConstraintBuilder::create_field_variables() {
 
 void LayoutConstraintBuilder::add_coverage_constraints() {
     auto& ctx = ctx_.ctx();
+
+    z3_log("[Structor/Z3] Adding coverage constraints for %zu accesses\n", pattern_->all_accesses.size());
+    int uncovered_count = 0;
 
     for (size_t i = 0; i < pattern_->all_accesses.size(); ++i) {
         const auto& access = pattern_->all_accesses[i];
@@ -202,7 +268,10 @@ void LayoutConstraintBuilder::add_coverage_constraints() {
             prov.kind = ConstraintProvenance::Kind::Coverage;
             prov.weight = config_.weight_coverage;
 
+            z3_log("[Structor/Z3]   WARNING: Access %zu at offset 0x%llX size %u has NO covering candidates!\n",
+                   i, static_cast<unsigned long long>(access.offset), access.size);
             constraint_tracker_.add_hard(solver_, ctx.bool_val(false), prov);
+            ++uncovered_count;
             continue;
         }
 
@@ -221,10 +290,18 @@ void LayoutConstraintBuilder::add_coverage_constraints() {
         constraint_tracker_.add_hard(solver_, coverage, prov);
         ++statistics_.coverage_constraints;
     }
+    
+    z3_log("[Structor/Z3]   Added %u coverage constraints (%d uncovered accesses)\n", 
+           statistics_.coverage_constraints, uncovered_count);
 }
 
 void LayoutConstraintBuilder::add_non_overlap_constraints() {
     auto& ctx = ctx_.ctx();
+
+    z3_log("[Structor/Z3] Adding non-overlap constraints (allow_unions=%s)\n", 
+           config_.allow_unions ? "true" : "false");
+    int overlap_count = 0;
+    int non_overlap_union_constraints = 0;
 
     for (size_t i = 0; i < field_vars_.size(); ++i) {
         for (size_t j = i + 1; j < field_vars_.size(); ++j) {
@@ -236,7 +313,21 @@ void LayoutConstraintBuilder::add_non_overlap_constraints() {
             // Check if candidates could overlap
             bool could_overlap = c1.overlaps(c2);
 
-            if (!could_overlap) continue;
+            if (!could_overlap) {
+                // Non-overlapping fields cannot be in the same union group
+                // This prevents Z3 from putting all fields in one union
+                if (config_.allow_unions) {
+                    ::z3::expr different_groups = 
+                        !fv1.is_union_member || !fv2.is_union_member ||
+                        (fv1.union_group != fv2.union_group);
+                    
+                    // Add as hard constraint (not tracked, always true)
+                    solver_.add(::z3::implies(fv1.selected && fv2.selected, different_groups));
+                    ++non_overlap_union_constraints;
+                }
+                continue;
+            }
+            ++overlap_count;
 
             if (config_.allow_unions) {
                 // Either non-overlapping OR both are union members in same group
@@ -283,14 +374,23 @@ void LayoutConstraintBuilder::add_non_overlap_constraints() {
             }
         }
     }
+    
+    z3_log("[Structor/Z3]   Added %d non-overlap constraints for overlapping candidate pairs\n", overlap_count);
+    if (non_overlap_union_constraints > 0) {
+        z3_log("[Structor/Z3]   Added %d constraints preventing non-overlapping fields from sharing union groups\n", 
+               non_overlap_union_constraints);
+    }
 }
 
 void LayoutConstraintBuilder::add_alignment_constraints() {
     auto& ctx = ctx_.ctx();
 
+    z3_log("[Structor/Z3] Adding alignment constraints\n");
+    int misaligned_count = 0;
+
     for (const auto& fv : field_vars_) {
         const auto& cand = candidates_[fv.candidate_id];
-        uint32_t natural_align = type_encoder_.natural_alignment(cand.type_category);
+        uint32_t natural_align = ctx_.type_encoder().natural_alignment(cand.type_category);
 
         // Effective alignment = min(natural_align, packing)
         ::z3::expr effective_align = config_.model_packing && packing_var_
@@ -308,21 +408,27 @@ void LayoutConstraintBuilder::add_alignment_constraints() {
             ::z3::expr constraint = ::z3::implies(fv.selected, ctx.bool_val(is_aligned));
 
             ConstraintProvenance prov;
-            prov.description.sprnt("Alignment of field at 0x%llX (need %u)",
-                static_cast<unsigned long long>(cand.offset), natural_align);
+            prov.description.sprnt("Alignment of field at 0x%llX (need %u, candidate %d)",
+                static_cast<unsigned long long>(cand.offset), natural_align, fv.candidate_id);
             prov.is_soft = true;
             prov.kind = ConstraintProvenance::Kind::Alignment;
             prov.weight = config_.weight_alignment;
 
             constraint_tracker_.add_soft(solver_, constraint, prov, config_.weight_alignment);
             ++statistics_.alignment_constraints;
+            ++misaligned_count;
         }
     }
+    
+    z3_log("[Structor/Z3]   Added %d alignment constraints for misaligned candidates\n", misaligned_count);
 }
 
 void LayoutConstraintBuilder::add_type_constraints() {
     // Add soft constraints for type consistency between overlapping candidates
     // that might end up in the same union
+
+    z3_log("[Structor/Z3] Adding type consistency constraints\n");
+    int type_constraint_count = 0;
 
     for (size_t i = 0; i < field_vars_.size(); ++i) {
         for (size_t j = i + 1; j < field_vars_.size(); ++j) {
@@ -334,6 +440,7 @@ void LayoutConstraintBuilder::add_type_constraints() {
 
             // Check type compatibility
             bool compatible = types_compatible(c1.type_category, c2.type_category);
+            ++type_constraint_count;
 
             if (!compatible) {
                 ConstraintProvenance prov;
@@ -346,7 +453,6 @@ void LayoutConstraintBuilder::add_type_constraints() {
                 prov.weight = config_.weight_type_consistency;
 
                 // Prefer not selecting both incompatible types
-                auto& ctx = ctx_.ctx();
                 ::z3::expr constraint = !(field_vars_[i].selected && field_vars_[j].selected);
 
                 constraint_tracker_.add_soft(solver_, constraint, prov,
@@ -354,6 +460,69 @@ void LayoutConstraintBuilder::add_type_constraints() {
                 ++statistics_.type_constraints;
             }
         }
+    }
+    
+    z3_log("[Structor/Z3]   Added %u type consistency constraints (checked %d pairs)\n", 
+           statistics_.type_constraints, type_constraint_count);
+}
+
+void LayoutConstraintBuilder::add_type_preference_constraints() {
+    // Add soft constraints preferring typed fields over raw_bytes/unknown
+    // When two overlapping candidates exist, prefer the one with a more specific type
+    
+    int preference_count = 0;
+    
+    for (size_t i = 0; i < field_vars_.size(); ++i) {
+        for (size_t j = i + 1; j < field_vars_.size(); ++j) {
+            const auto& c1 = candidates_[field_vars_[i].candidate_id];
+            const auto& c2 = candidates_[field_vars_[j].candidate_id];
+            
+            // Only for overlapping candidates
+            if (!c1.overlaps(c2)) continue;
+            
+            // Determine which one is more specifically typed
+            bool c1_is_raw = (c1.type_category == TypeCategory::RawBytes || 
+                              c1.type_category == TypeCategory::Unknown);
+            bool c2_is_raw = (c2.type_category == TypeCategory::RawBytes || 
+                              c2.type_category == TypeCategory::Unknown);
+            
+            if (c1_is_raw && !c2_is_raw) {
+                // Prefer c2 (typed) over c1 (raw)
+                ConstraintProvenance prov;
+                prov.description.sprnt("Prefer typed field at 0x%llX over raw at 0x%llX",
+                    static_cast<unsigned long long>(c2.offset),
+                    static_cast<unsigned long long>(c1.offset));
+                prov.is_soft = true;
+                prov.kind = ConstraintProvenance::Kind::TypeMatch;
+                prov.weight = 1;
+                
+                // If both could be selected, prefer the typed one
+                // !c1.selected || c2.selected  (if c1 is selected, c2 should also be selected)
+                // But actually we want: prefer selecting c2 over c1 when they overlap
+                // So: if c1 is selected, c2 should be selected instead: implies(!c1, c2)
+                // Simpler: just penalize selecting raw when typed exists: !c1.selected
+                constraint_tracker_.add_soft(solver_, !field_vars_[i].selected, prov, 1);
+                ++preference_count;
+            }
+            else if (c2_is_raw && !c1_is_raw) {
+                // Prefer c1 (typed) over c2 (raw)
+                ConstraintProvenance prov;
+                prov.description.sprnt("Prefer typed field at 0x%llX over raw at 0x%llX",
+                    static_cast<unsigned long long>(c1.offset),
+                    static_cast<unsigned long long>(c2.offset));
+                prov.is_soft = true;
+                prov.kind = ConstraintProvenance::Kind::TypeMatch;
+                prov.weight = 1;
+                
+                constraint_tracker_.add_soft(solver_, !field_vars_[j].selected, prov, 1);
+                ++preference_count;
+            }
+        }
+    }
+    
+    if (preference_count > 0) {
+        z3_log("[Structor/Z3]   Added %d type preference constraints (prefer typed over raw)\n", 
+               preference_count);
     }
 }
 
@@ -381,8 +550,6 @@ void LayoutConstraintBuilder::add_size_bound_constraints() {
 }
 
 void LayoutConstraintBuilder::add_array_constraints() {
-    auto& ctx = ctx_.ctx();
-
     // For each detected array, prefer selecting the array field over individual elements
     for (const auto& array : arrays_) {
         // Find the array field candidate (if any)
@@ -446,8 +613,17 @@ void LayoutConstraintBuilder::add_optimization_objectives() {
 Z3Result LayoutConstraintBuilder::solve() {
     auto start_time = std::chrono::steady_clock::now();
 
-    // First attempt: solve with all constraints
-    auto result = solver_.check();
+    z3_log("[Structor/Z3] Solving constraints...\n");
+    z3_log("[Structor/Z3] Solver assertions: %u\n", solver_.assertions().size());
+
+    // Build assumptions from all tracking literals
+    // All constraints are guarded by implications: tracking_lit => constraint
+    // By assuming all tracking_lits are true, we activate all constraints
+    ::z3::expr_vector assumptions = constraint_tracker_.get_all_literals();
+    z3_log("[Structor/Z3] Assumptions (tracking literals): %u\n", assumptions.size());
+
+    // First attempt: solve with all constraints assumed active
+    auto result = solver_.check(assumptions);
 
     auto end_time = std::chrono::steady_clock::now();
     auto solve_time = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -457,24 +633,39 @@ Z3Result LayoutConstraintBuilder::solve() {
     ++statistics_.solve_iterations;
 
     if (result == ::z3::sat) {
+        z3_log("[Structor/Z3] SAT - solution found in %lldms\n",
+               static_cast<long long>(solve_time.count()));
+
         ::z3::model model = solver_.get_model();
 
         // Extract packing if modeled
         if (packing_var_) {
             inferred_packing_ = static_cast<uint32_t>(get_int_value(model, *packing_var_));
+            z3_log("[Structor/Z3] Inferred packing: %u\n", *inferred_packing_);
         }
 
         // Detect union groups
         detect_union_groups(model);
+        if (!union_resolutions_.empty()) {
+            z3_log("[Structor/Z3] Detected %zu union groups\n", union_resolutions_.size());
+        }
 
         return Z3Result::make_sat(std::move(model), solve_time);
     }
     else if (result == ::z3::unsat) {
+        z3_log("[Structor/Z3] UNSAT - attempting relaxation...\n");
         // Try relaxation
         return solve_with_relaxation();
     }
     else {
-        return Z3Result::make_unknown("solver returned unknown", solve_time);
+        // Get the actual reason for unknown
+        std::string reason = Z3Context::get_unknown_reason(solver_);
+        z3_log("[Structor/Z3] UNKNOWN result after %lldms: %s\n",
+               static_cast<long long>(solve_time.count()), reason.c_str());
+        
+        qstring reason_msg;
+        reason_msg.sprnt("solver returned unknown: %s", reason.c_str());
+        return Z3Result::make_unknown(reason_msg.c_str(), solve_time);
     }
 }
 
@@ -482,23 +673,53 @@ Z3Result LayoutConstraintBuilder::solve_with_relaxation() {
     auto start_time = std::chrono::steady_clock::now();
     qvector<ConstraintProvenance> dropped_constraints;
 
+    // Build the set of active assumptions (tracking literals)
+    // Start with all tracking literals active
+    std::unordered_set<std::string> active_assumptions;
+    ::z3::expr_vector all_literals = constraint_tracker_.get_all_literals();
+    for (unsigned i = 0; i < all_literals.size(); ++i) {
+        active_assumptions.insert(all_literals[i].to_string());
+    }
+
     constexpr int MAX_RELAXATION_ITERATIONS = 10;
 
+    z3_log("[Structor/Z3] Starting constraint relaxation (max %d iterations)\n",
+           MAX_RELAXATION_ITERATIONS);
+    z3_log("[Structor/Z3] Initial assumptions: %zu\n", active_assumptions.size());
+
     for (int iteration = 0; iteration < MAX_RELAXATION_ITERATIONS; ++iteration) {
-        // Get UNSAT core
+        // Get UNSAT core from the last check (which used assumptions)
         auto core = solver_.unsat_core();
         auto core_provenances = constraint_tracker_.analyze_unsat_core(core);
+
+        z3_log("[Structor/Z3] Iteration %d: UNSAT core has %u constraints (%zu analyzed)\n",
+               iteration + 1, core.size(), core_provenances.size());
+
+        // Log all constraints in the core
+        z3_log("[Structor/Z3]   Core contents:\n");
+        for (const auto& prov : core_provenances) {
+            z3_log("[Structor/Z3]     [%s w=%d] %s (lit=%s)\n",
+                   prov.is_soft ? "SOFT" : "HARD",
+                   prov.weight,
+                   prov.description.c_str(),
+                   prov.tracking_literal ? prov.tracking_literal->to_string().c_str() : "none");
+        }
 
         // Find soft constraints in the core (prioritize by weight - lower weight = relax first)
         qvector<ConstraintProvenance> relaxable;
         for (const auto& prov : core_provenances) {
-            if (prov.is_soft) {
-                relaxable.push_back(prov);
+            if (prov.is_soft && prov.tracking_literal) {
+                // Only include if it's still in our active assumptions
+                std::string lit_str = prov.tracking_literal->to_string();
+                if (active_assumptions.count(lit_str)) {
+                    relaxable.push_back(prov);
+                }
             }
         }
 
         if (relaxable.empty()) {
             // All core constraints are hard - truly unsatisfiable
+            z3_log("[Structor/Z3] Relaxation failed - all core constraints are hard\n");
             auto end_time = std::chrono::steady_clock::now();
             auto solve_time = std::chrono::duration_cast<std::chrono::milliseconds>(
                 end_time - start_time);
@@ -511,23 +732,37 @@ Z3Result LayoutConstraintBuilder::solve_with_relaxation() {
                 return a.weight < b.weight;
             });
 
-        // Relax the lowest-weight soft constraint
+        // Relax the lowest-weight soft constraint by removing from assumptions
         const auto& to_relax = relaxable[0];
         dropped_constraints.push_back(to_relax);
 
-        // Add negation of the tracking literal to disable this constraint
-        // The constraint is: tracking_lit => actual_constraint
-        // To disable: add !tracking_lit (the constraint becomes vacuously true)
-        if (to_relax.tracking_literal) {
-            solver_.add(!(*to_relax.tracking_literal));
-        }
+        z3_log("[Structor/Z3] Relaxing constraint (weight=%d): %s\n",
+               to_relax.weight, to_relax.description.c_str());
+        z3_log("[Structor/Z3]   Tracking literal: %s\n",
+               to_relax.tracking_literal->to_string().c_str());
+
+        // Remove this tracking literal from active assumptions
+        active_assumptions.erase(to_relax.tracking_literal->to_string());
 
         ++statistics_.relaxations_performed;
 
-        // Re-solve
-        auto result = solver_.check();
+        // Build new assumptions vector
+        ::z3::expr_vector current_assumptions(ctx_.ctx());
+        for (unsigned i = 0; i < all_literals.size(); ++i) {
+            if (active_assumptions.count(all_literals[i].to_string())) {
+                current_assumptions.push_back(all_literals[i]);
+            }
+        }
+
+        z3_log("[Structor/Z3]   Remaining assumptions: %u\n", current_assumptions.size());
+
+        // Re-solve with reduced assumptions
+        auto result = solver_.check(current_assumptions);
 
         if (result == ::z3::sat) {
+            z3_log("[Structor/Z3] Relaxation succeeded after dropping %zu constraints\n",
+                   dropped_constraints.size());
+
             ::z3::model model = solver_.get_model();
 
             // Extract packing if modeled
@@ -571,6 +806,8 @@ qvector<ConstraintProvenance> LayoutConstraintBuilder::extract_mus() {
 SynthStruct LayoutConstraintBuilder::extract_struct(const ::z3::model& model) {
     auto start_time = std::chrono::steady_clock::now();
 
+    z3_log("[Structor/Z3] Extracting structure from Z3 model...\n");
+
     SynthStruct result;
 
     // Collect selected fields
@@ -582,15 +819,26 @@ SynthStruct LayoutConstraintBuilder::extract_struct(const ::z3::model& model) {
         }
     }
 
+    z3_log("[Structor/Z3]   Model selected %zu of %zu candidates\n", 
+           selected_fields.size(), field_vars_.size());
+
     // Sort by offset
     std::sort(selected_fields.begin(), selected_fields.end(),
         [](const auto& a, const auto& b) {
             return a.second.offset < b.second.offset;
         });
+    
+    // Log selected fields
+    for (const auto& [cand_id, cand] : selected_fields) {
+        z3_log("[Structor/Z3]   Selected: candidate %d at offset 0x%llX size %u type %s\n",
+               cand_id, static_cast<unsigned long long>(cand.offset), cand.size,
+               type_category_name(cand.type_category));
+    }
 
     // Build fields, handling unions
     std::unordered_set<int> processed_union_groups;
 
+    z3_log("[Structor/Z3]   Processing selected candidates for union detection:\n");
     for (const auto& [cand_id, candidate] : selected_fields) {
         const auto& fv = field_vars_[cand_id];
 
@@ -598,9 +846,14 @@ SynthStruct LayoutConstraintBuilder::extract_struct(const ::z3::model& model) {
         bool is_union = get_bool_value(model, fv.is_union_member);
         int union_group = static_cast<int>(get_int_value(model, fv.union_group));
 
+        z3_log("[Structor/Z3]     Candidate %d (offset=0x%llX, size=%u): is_union=%s, union_group=%d\n",
+               cand_id, static_cast<unsigned long long>(candidate.offset), candidate.size,
+               is_union ? "true" : "false", union_group);
+
         if (is_union && union_group >= 0) {
             // Check if we've already processed this union group
             if (processed_union_groups.count(union_group)) {
+                z3_log("[Structor/Z3]       -> Skipping (union group %d already processed)\n", union_group);
                 continue;
             }
             processed_union_groups.insert(union_group);
@@ -616,12 +869,24 @@ SynthStruct LayoutConstraintBuilder::extract_struct(const ::z3::model& model) {
                 }
             }
 
+            z3_log("[Structor/Z3]       -> Creating union with %zu members\n", union_members.size());
+            for (int member_idx : union_members) {
+                const auto& member_cand = candidates_[field_vars_[member_idx].candidate_id];
+                z3_log("[Structor/Z3]         Union member: idx=%d, offset=0x%llX, size=%u\n",
+                       member_idx, static_cast<unsigned long long>(member_cand.offset), member_cand.size);
+            }
+
             // Create union field
             SynthField union_field = create_union_field(union_members, model);
+            z3_log("[Structor/Z3]       -> Created union field: name='%s', offset=0x%llX, size=%u\n",
+                   union_field.name.c_str(), static_cast<unsigned long long>(union_field.offset), union_field.size);
             result.fields.push_back(std::move(union_field));
         } else {
             // Regular field
-            SynthField field = field_from_candidate(candidate, type_encoder_);
+            z3_log("[Structor/Z3]       -> Adding as regular field\n");
+            SynthField field = field_from_candidate(candidate, ctx_.type_encoder());
+            z3_log("[Structor/Z3]       -> Created field: name='%s', offset=0x%llX, size=%u\n",
+                   field.name.c_str(), static_cast<unsigned long long>(field.offset), field.size);
             result.fields.push_back(std::move(field));
         }
     }
@@ -640,6 +905,45 @@ SynthStruct LayoutConstraintBuilder::extract_struct(const ::z3::model& model) {
     auto end_time = std::chrono::steady_clock::now();
     statistics_.extraction_time = std::chrono::duration_cast<std::chrono::milliseconds>(
         end_time - start_time);
+
+    // Fill gaps between fields with padding
+    if (config_.fill_gaps_with_padding && !result.fields.empty()) {
+        qvector<SynthField> fields_with_padding;
+        sval_t current_end = 0;
+
+        for (const auto& field : result.fields) {
+            // Check for gap before this field
+            if (field.offset > current_end) {
+                uint32_t gap_size = static_cast<uint32_t>(field.offset - current_end);
+                z3_log("[Structor/Z3] Filling gap at 0x%llX (size %u) with padding\n",
+                       static_cast<unsigned long long>(current_end), gap_size);
+                fields_with_padding.push_back(SynthField::create_padding(current_end, gap_size));
+            }
+            fields_with_padding.push_back(field);
+            current_end = field.offset + static_cast<sval_t>(field.size);
+        }
+
+        result.fields = std::move(fields_with_padding);
+        
+        // Recalculate size
+        if (!result.fields.empty()) {
+            result.size = static_cast<uint32_t>(
+                result.fields.back().offset + result.fields.back().size);
+        }
+    }
+
+    z3_log("[Structor/Z3] Extracted structure: %zu fields, %u bytes, alignment %u\n",
+           result.fields.size(), result.size, result.alignment);
+    
+    // Dump all fields for debugging
+    z3_log("[Structor/Z3] Final field list:\n");
+    for (size_t i = 0; i < result.fields.size(); ++i) {
+        const auto& f = result.fields[i];
+        z3_log("[Structor/Z3]   [%zu] name='%s', offset=0x%llX, size=%u, is_union=%s%s\n",
+               i, f.name.c_str(), static_cast<unsigned long long>(f.offset),
+               f.size, f.is_union_candidate ? "yes" : "no",
+               f.is_padding ? " [padding]" : "");
+    }
 
     return result;
 }
@@ -684,7 +988,7 @@ void LayoutConstraintBuilder::detect_union_groups(const ::z3::model& model) {
         // Create alternative fields
         for (int idx : members) {
             const auto& cand = candidates_[field_vars_[idx].candidate_id];
-            resolution.alternatives.push_back(field_from_candidate(cand, type_encoder_));
+            resolution.alternatives.push_back(field_from_candidate(cand, ctx_.type_encoder()));
         }
 
         union_resolutions_.push_back(std::move(resolution));
@@ -702,15 +1006,34 @@ SynthField LayoutConstraintBuilder::create_union_field(
     sval_t min_offset = SVAL_MAX;
     sval_t max_end = 0;
 
+    z3_log("[Structor/Z3] create_union_field: %zu overlapping candidates\n", overlapping_ids.size());
     for (int idx : overlapping_ids) {
         const auto& cand = candidates_[field_vars_[idx].candidate_id];
+        z3_log("[Structor/Z3]   Member idx=%d, cand_id=%d, offset=0x%llX, size=%u\n",
+               idx, field_vars_[idx].candidate_id,
+               static_cast<unsigned long long>(cand.offset), cand.size);
         min_offset = std::min(min_offset, cand.offset);
         max_end = std::max(max_end, cand.offset + static_cast<sval_t>(cand.size));
+    }
+
+    // Validate: if no valid members, use offset 0
+    if (min_offset == SVAL_MAX || min_offset < 0) {
+        z3_log("[Structor/Z3] WARNING: Invalid min_offset=0x%llX, using 0\n",
+               static_cast<unsigned long long>(min_offset));
+        min_offset = 0;
+    }
+    if (max_end <= min_offset) {
+        z3_log("[Structor/Z3] WARNING: Invalid max_end=0x%llX (< min_offset), using min+8\n",
+               static_cast<unsigned long long>(max_end));
+        max_end = min_offset + 8;
     }
 
     union_field.offset = min_offset;
     union_field.size = static_cast<uint32_t>(max_end - min_offset);
     union_field.name.sprnt("union_%llX", static_cast<unsigned long long>(min_offset));
+    z3_log("[Structor/Z3] Created union: offset=0x%llX, size=%u, name='%s'\n",
+           static_cast<unsigned long long>(union_field.offset), union_field.size,
+           union_field.name.c_str());
     union_field.semantic = SemanticType::Unknown;
 
     // Create union type
@@ -724,7 +1047,7 @@ SynthField LayoutConstraintBuilder::create_union_field(
     }
 
     if (largest) {
-        union_field.type = type_encoder_.decode(
+        union_field.type = ctx_.type_encoder().decode(
             largest->type_category,
             largest->size,
             &largest->extended_type

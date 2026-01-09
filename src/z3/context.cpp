@@ -1,11 +1,31 @@
 #include "structor/z3/context.hpp"
+#include "structor/z3/type_encoding.hpp"
 #include <stdexcept>
 
+#ifndef STRUCTOR_TESTING
+#include <pro.h>
+#include <kernwin.hpp>
+#endif
+
 namespace structor::z3 {
+
+namespace {
+    // Helper for conditional logging
+    inline void z3_log(const char* fmt, ...) {
+#ifndef STRUCTOR_TESTING
+        va_list va;
+        va_start(va, fmt);
+        vmsg(fmt, va);
+        va_end(va);
+#endif
+    }
+}
 
 Z3Context::Z3Context(const Z3Config& config)
     : ctx_(std::make_unique<::z3::context>())
     , config_(config) {
+    z3_log("[Structor/Z3] Initializing Z3 context (timeout=%ums, memory=%uMB, ptr_size=%u)\n",
+           config_.timeout_ms, config_.max_memory_mb, config_.pointer_size);
     apply_global_params();
 }
 
@@ -18,10 +38,10 @@ void Z3Context::apply_global_params() {
     // Apply timeout via global Z3 parameters (more reliable than solver.set)
     ::z3::set_param("timeout", static_cast<int>(config_.timeout_ms));
 
-    // Memory limit
-    if (config_.max_memory_mb > 0) {
-        ::z3::set_param("memory_high_watermark", static_cast<int>(config_.max_memory_mb));
-    }
+    // Note: memory_high_watermark is problematic - it can cause immediate memout
+    // if set incorrectly. Z3's default memory handling is sufficient for our use case.
+    // The memory_max_size parameter (in bytes) could be used for hard limits if needed:
+    //   ::z3::set_param("memory_max_size", static_cast<unsigned>(config_.max_memory_mb) * 1024 * 1024);
 }
 
 ::z3::solver Z3Context::make_solver() {
@@ -97,6 +117,14 @@ std::string Z3Context::get_unknown_reason(const ::z3::solver& s) {
     } catch (...) {
         return "unknown";
     }
+}
+
+TypeEncoder& Z3Context::type_encoder() {
+    // Lazily initialize the TypeEncoder to avoid duplicate enumeration sort creation
+    if (!type_encoder_) {
+        type_encoder_ = std::make_unique<TypeEncoder>(*this);
+    }
+    return *type_encoder_;
 }
 
 // Z3ParamGuard implementation

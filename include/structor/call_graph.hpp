@@ -1,9 +1,11 @@
 #pragma once
 
+#ifndef STRUCTOR_TESTING
 #include <pro.h>
 #include <hexrays.hpp>
 #include <funcs.hpp>
 #include <xref.hpp>
+#endif
 #include <unordered_map>
 #include <unordered_set>
 #include <queue>

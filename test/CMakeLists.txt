@@ -14,9 +14,10 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 # Test sources (mock IDA tests)
+# Note: test_layout_synthesizer.cpp is tested via Z3 integration tests
+# as it requires the full LayoutSynthesizer with Z3 dependencies
 set(TEST_SOURCES
     test_synth_types.cpp
-    test_layout_synthesizer.cpp
     test_access_patterns.cpp
     test_vtable_detection.cpp
     test_config.cpp

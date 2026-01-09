@@ -122,6 +122,9 @@ public:
     /// Get all hard constraint tracking literals
     [[nodiscard]] ::z3::expr_vector get_hard_literals() const;
 
+    /// Get all tracking literals (hard + soft) for use as assumptions
+    [[nodiscard]] ::z3::expr_vector get_all_literals() const;
+
     /// Get provenance for a tracking literal
     [[nodiscard]] const ConstraintProvenance* get_provenance(
         const ::z3::expr& tracking_lit

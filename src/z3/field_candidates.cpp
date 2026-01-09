@@ -2,7 +2,24 @@
 #include <algorithm>
 #include <unordered_map>
 
+#ifndef STRUCTOR_TESTING
+#include <pro.h>
+#include <kernwin.hpp>
+#endif
+
 namespace structor::z3 {
+
+namespace {
+    // Helper for conditional logging
+    inline void z3_log(const char* fmt, ...) {
+#ifndef STRUCTOR_TESTING
+        va_list va;
+        va_start(va, fmt);
+        vmsg(fmt, va);
+        va_end(va);
+#endif
+    }
+}
 
 // ============================================================================
 // FieldCandidateGenerator Implementation
@@ -12,8 +29,7 @@ FieldCandidateGenerator::FieldCandidateGenerator(
     Z3Context& ctx,
     const CandidateGenerationConfig& config)
     : ctx_(ctx)
-    , config_(config)
-    , type_encoder_(ctx) {}
+    , config_(config) {}
 
 qvector<FieldCandidate> FieldCandidateGenerator::generate(
     const UnifiedAccessPattern& pattern)
@@ -21,30 +37,60 @@ qvector<FieldCandidate> FieldCandidateGenerator::generate(
     qvector<FieldCandidate> candidates;
     next_id_ = 0;
 
+    z3_log("[Structor/Z3] Generating field candidates from %zu accesses\n", pattern.all_accesses.size());
+
     if (pattern.all_accesses.empty()) {
         return candidates;
     }
 
     // Step 1: Generate direct access candidates
     generate_direct_candidates(pattern, candidates);
+    size_t direct_count = candidates.size();
+    z3_log("[Structor/Z3]   Direct access candidates: %zu\n", direct_count);
 
     // Step 2: Generate covering candidates (larger fields that cover multiple accesses)
     if (config_.generate_covering_candidates) {
         generate_covering_candidates(pattern, candidates);
+        z3_log("[Structor/Z3]   Covering candidates: %zu\n", candidates.size() - direct_count);
     }
 
+    size_t before_array = candidates.size();
     // Step 3: Generate array candidates
     if (config_.generate_array_candidates) {
         generate_array_candidates(pattern, candidates);
+        z3_log("[Structor/Z3]   Array candidates: %zu\n", candidates.size() - before_array);
     }
 
+    size_t before_padding = candidates.size();
     // Step 4: Generate padding candidates
     if (config_.generate_padding_candidates) {
         generate_padding_candidates(candidates, pattern.global_max_offset, candidates);
+        z3_log("[Structor/Z3]   Padding candidates: %zu\n", candidates.size() - before_padding);
     }
 
     // Finalize: assign IDs and sort
     finalize_candidates(candidates);
+
+    z3_log("[Structor/Z3]   Total candidates generated: %zu\n", candidates.size());
+    
+    // Log candidate summary by offset
+    if (!candidates.empty()) {
+        z3_log("[Structor/Z3]   Candidate summary:\n");
+        for (const auto& cand : candidates) {
+            const char* kind_str = "unknown";
+            switch (cand.kind) {
+                case FieldCandidate::Kind::DirectAccess: kind_str = "direct"; break;
+                case FieldCandidate::Kind::CoveringField: kind_str = "covering"; break;
+                case FieldCandidate::Kind::ArrayElement: kind_str = "array_elem"; break;
+                case FieldCandidate::Kind::ArrayField: kind_str = "array"; break;
+                case FieldCandidate::Kind::PaddingField: kind_str = "padding"; break;
+                case FieldCandidate::Kind::UnionAlternative: kind_str = "union_alt"; break;
+            }
+            z3_log("[Structor/Z3]     [%d] offset=0x%llX size=%u type=%s kind=%s\n",
+                   cand.id, static_cast<unsigned long long>(cand.offset), cand.size,
+                   type_category_name(cand.type_category), kind_str);
+        }
+    }
 
     return candidates;
 }
@@ -309,7 +355,7 @@ TypeCategory FieldCandidateGenerator::infer_category(const FieldAccess& access) 
 
     // Then check inferred type
     if (!access.inferred_type.empty()) {
-        return type_encoder_.categorize(access.inferred_type);
+        return ctx_.type_encoder().categorize(access.inferred_type);
     }
 
     // Fall back to size-based inference
@@ -344,7 +390,7 @@ FieldCandidate FieldCandidateGenerator::create_from_access(
 
     // Extract extended type info if available
     if (!access.inferred_type.empty()) {
-        candidate.extended_type = type_encoder_.extract_extended_info(access.inferred_type);
+        candidate.extended_type = ctx_.type_encoder().extract_extended_info(access.inferred_type);
     } else {
         candidate.extended_type.category = candidate.type_category;
         candidate.extended_type.size = access.size;

@@ -94,3 +94,5 @@ tests/string_obfuscation/test_strings
 
 .cache
 .claude
+
+__pycache__

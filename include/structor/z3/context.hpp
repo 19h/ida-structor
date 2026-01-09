@@ -7,6 +7,9 @@
 
 namespace structor::z3 {
 
+// Forward declaration
+class TypeEncoder;
+
 /// Configuration for Z3 solver behavior
 struct Z3Config {
     unsigned timeout_ms = 10000;          // 10 second default
@@ -78,6 +81,10 @@ public:
     /// Get default alignment from config
     [[nodiscard]] uint32_t default_alignment() const noexcept { return config_.default_alignment; }
 
+    /// Get or create the shared TypeEncoder for this context
+    /// This ensures enumeration sorts are only created once per context
+    [[nodiscard]] TypeEncoder& type_encoder();
+
     /// Apply bounds constraints to an offset variable
     void add_offset_bounds(::z3::solver& solver, const ::z3::expr& var);
     void add_offset_bounds(::z3::optimize& opt, const ::z3::expr& var);
@@ -93,6 +100,9 @@ public:
 private:
     std::unique_ptr<::z3::context> ctx_;
     Z3Config config_;
+
+    /// Shared TypeEncoder - lazily initialized to avoid circular dependency
+    std::unique_ptr<TypeEncoder> type_encoder_;
 
     /// Apply global timeout params (more reliable than solver.set)
     void apply_global_params();

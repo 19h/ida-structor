@@ -58,9 +58,11 @@ UnifiedAccessPattern UnifiedAccessPattern::merge(
         }
 
         // Copy and normalize accesses
+        // When a function receives ptr = (original + delta), an access at offset X
+        // corresponds to original + delta + X, so normalized offset = X + delta
         for (auto& access : pattern.accesses) {
             FieldAccess normalized = access;
-            normalized.offset -= delta;  // Subtract delta to normalize
+            normalized.offset += delta;  // Add delta to normalize to caller's coordinate system
 
             // Update bounds
             if (first) {
@@ -282,8 +284,8 @@ CallerFinder::CallerFinder(ea_t target_func, int param_idx)
     : target_func_(target_func)
     , param_idx_(param_idx) {}
 
-qvector<std::pair<ea_t, int>> CallerFinder::find_callers() {
-    qvector<std::pair<ea_t, int>> result;
+qvector<std::tuple<ea_t, int, sval_t>> CallerFinder::find_callers() {
+    qvector<std::tuple<ea_t, int, sval_t>> result;
 
     // Find all cross-references to this function
     xrefblk_t xref;
@@ -309,7 +311,7 @@ qvector<std::pair<ea_t, int>> CallerFinder::find_callers() {
     return result;
 }
 
-void CallerFinder::process_caller(ea_t caller_ea, ea_t call_site, qvector<std::pair<ea_t, int>>& result) {
+void CallerFinder::process_caller(ea_t caller_ea, ea_t call_site, qvector<std::tuple<ea_t, int, sval_t>>& result) {
     // Decompile the caller
     cfuncptr_t cfunc = utils::get_cfunc(caller_ea);
     if (!cfunc) return;
@@ -319,10 +321,10 @@ void CallerFinder::process_caller(ea_t caller_ea, ea_t call_site, qvector<std::p
         ea_t target_ea;
         ea_t callee_ea;
         int param_idx;
-        qvector<std::pair<ea_t, int>>* result;
+        qvector<std::tuple<ea_t, int, sval_t>>* result;
         cfunc_t* cfunc;
 
-        CallLocator(ea_t ea, ea_t callee, int idx, qvector<std::pair<ea_t, int>>* r, cfunc_t* cf)
+        CallLocator(ea_t ea, ea_t callee, int idx, qvector<std::tuple<ea_t, int, sval_t>>* r, cfunc_t* cf)
             : ctree_visitor_t(CV_FAST)
             , target_ea(ea)
             , callee_ea(callee)
@@ -338,28 +340,101 @@ void CallerFinder::process_caller(ea_t caller_ea, ea_t call_site, qvector<std::p
 
             // Check if calling our target function
             if (e->x && e->x->op == cot_obj && e->x->obj_ea == callee_ea) {
-                // Found the call - extract the argument
+                // Found the call - extract the argument and delta
                 if (e->a && static_cast<size_t>(param_idx) < e->a->size()) {
                     carg_t& arg = (*e->a)[param_idx];
 
-                    // Check if argument is a simple variable reference
+                    // Check if argument is a simple variable reference (delta = 0)
                     if (arg.op == cot_var) {
-                        result->push_back({cfunc->entry_ea, arg.v.idx});
+                        result->push_back({cfunc->entry_ea, arg.v.idx, 0});
                     }
-                    // Also handle casts
+                    // Also handle casts (delta = 0)
                     else if (arg.op == cot_cast && arg.x && arg.x->op == cot_var) {
-                        result->push_back({cfunc->entry_ea, arg.x->v.idx});
+                        result->push_back({cfunc->entry_ea, arg.x->v.idx, 0});
                     }
-                    // Handle ptr + delta
+                    // Handle ptr + delta (including casts like (char*)ptr + offset)
                     else if (arg.op == cot_add) {
                         cexpr_t* var_side = nullptr;
-                        if (arg.x && arg.x->op == cot_var) {
-                            var_side = arg.x;
-                        } else if (arg.y && arg.y->op == cot_var) {
-                            var_side = arg.y;
-                        }
+                        sval_t delta = 0;
+
+                        // Helper lambda to unwrap casts and find underlying cot_var
+                        auto find_var = [](cexpr_t* expr) -> cexpr_t* {
+                            while (expr) {
+                                if (expr->op == cot_var) return expr;
+                                if (expr->op == cot_cast && expr->x) {
+                                    expr = expr->x;
+                                } else {
+                                    break;
+                                }
+                            }
+                            return nullptr;
+                        };
+
+                        // Try to find var and number on each side
+                        var_side = find_var(arg.x);
                         if (var_side) {
-                            result->push_back({cfunc->entry_ea, var_side->v.idx});
+                            // x is the variable side, y might be the delta
+                            if (arg.y && arg.y->op == cot_num) {
+                                delta = static_cast<sval_t>(arg.y->numval());
+                            }
+                        } else {
+                            var_side = find_var(arg.y);
+                            if (var_side && arg.x && arg.x->op == cot_num) {
+                                delta = static_cast<sval_t>(arg.x->numval());
+                            }
+                        }
+
+                        if (var_side) {
+                            result->push_back({cfunc->entry_ea, var_side->v.idx, delta});
+                        }
+                    }
+                    // Handle ptr - delta (negative offset)
+                    else if (arg.op == cot_sub) {
+                        cexpr_t* var_side = nullptr;
+                        sval_t delta = 0;
+
+                        auto find_var = [](cexpr_t* expr) -> cexpr_t* {
+                            while (expr) {
+                                if (expr->op == cot_var) return expr;
+                                if (expr->op == cot_cast && expr->x) {
+                                    expr = expr->x;
+                                } else {
+                                    break;
+                                }
+                            }
+                            return nullptr;
+                        };
+
+                        var_side = find_var(arg.x);
+                        if (var_side && arg.y && arg.y->op == cot_num) {
+                            delta = -static_cast<sval_t>(arg.y->numval());
+                            result->push_back({cfunc->entry_ea, var_side->v.idx, delta});
+                        }
+                    }
+                    // Handle &struct.field (cot_ref of member access)
+                    else if (arg.op == cot_ref && arg.x) {
+                        cexpr_t* inner = arg.x;
+                        sval_t field_offset = 0;
+
+                        // Unwrap to find the base variable and accumulate field offsets
+                        while (inner) {
+                            if (inner->op == cot_var) {
+                                result->push_back({cfunc->entry_ea, inner->v.idx, field_offset});
+                                break;
+                            }
+                            if (inner->op == cot_memref || inner->op == cot_memptr) {
+                                // Accumulate the member offset
+                                field_offset += inner->m;
+                                inner = inner->x;
+                            } else if (inner->op == cot_idx && inner->y && inner->y->op == cot_num) {
+                                // Array indexing: accumulate index * element_size
+                                // For now, just track the index offset
+                                inner = inner->x;
+                            } else if (inner->op == cot_cast) {
+                                inner = inner->x;
+                            } else {
+                                break;
+                            }
                         }
                     }
                 }
@@ -529,29 +604,41 @@ void CrossFunctionAnalyzer::trace_backward(
 
     if (param_idx < 0) return;
 
-    // Find callers that pass to this parameter
+    // Find callers that pass to this parameter (includes delta from call expression)
     auto callers = find_callers_with_param(func_ea, param_idx);
 
-    for (const auto& [caller_ea, caller_var_idx] : callers) {
+    for (const auto& [caller_ea, caller_var_idx, arg_delta] : callers) {
         if (caller_ea == BADADDR) continue;
 
         // Check if we've already visited
         FunctionVariable fv(caller_ea, caller_var_idx, 0);
         if (visited_.count(fv)) continue;
 
-        // For backward tracing, we need to extract the delta from the call site.
-        // Extracting the actual delta requires analyzing how the argument is
-        // computed at the call site (e.g., "lea rdi, [rbp+0x10]; call func").
-        // For now, use delta = 0 which is conservative - it may miss some
-        // relationships but won't produce incorrect ones.
-        // Future enhancement: Use IDA's expression tracking to extract deltas.
-        sval_t arg_delta = 0;
+        // The arg_delta is extracted from the call expression.
+        // For example, if the call is `func((char*)ptr + 0x10)`, arg_delta = 0x10.
+        // This means the callee (current function) sees offsets relative to (ptr + 0x10).
+        //
+        // When going backward, we want to normalize to the CALLER's coordinate system
+        // (since the caller has the "original" struct). So:
+        // - The CURRENT function's (callee's) delta should be updated: delta += arg_delta
+        // - The CALLER gets delta = 0 (it has the original struct)
+        //
+        // Example: process_data receives (node + 0x10) from process_node_d
+        // - process_data's accesses at offset 0,4 should become 0x10,0x14
+        // - process_data's delta should be 0x10
+        // - process_node_d's accesses at 0,0x10 stay at 0,0x10
+        // - process_node_d's delta should be 0
 
-        // Calculate cumulative delta (negative because we're going backward)
-        sval_t cumulative_delta = current_delta - arg_delta;
+        // Update current function's delta if arg_delta is non-zero
+        if (arg_delta != 0) {
+            FunctionVariable current_fv(func_ea, var_idx, 0);
+            if (deltas_.count(current_fv)) {
+                deltas_[current_fv] += arg_delta;
+            }
+        }
 
-        // Add to equivalence class
-        add_variable(caller_ea, caller_var_idx, cumulative_delta);
+        // Caller gets delta = 0 (it has the original struct)
+        add_variable(caller_ea, caller_var_idx, 0);
 
         // Record flow edge (reversed direction)
         PointerFlowEdge edge;
@@ -569,8 +656,15 @@ void CrossFunctionAnalyzer::trace_backward(
             collected_patterns_.push_back(std::move(pattern));
         }
 
-        // Recurse
-        trace_backward(caller_ea, caller_var_idx, cumulative_delta, current_depth + 1, synth_opts);
+        // Recurse backward with delta=0 (caller has original struct)
+        trace_backward(caller_ea, caller_var_idx, 0, current_depth + 1, synth_opts);
+
+        // IMPORTANT: Also trace forward from the caller to discover sibling callees.
+        // This ensures that if main() calls both traverse_list() and sum_list()
+        // with the same struct, we collect access patterns from all siblings.
+        if (config_.follow_forward) {
+            trace_forward(caller_ea, caller_var_idx, 0, current_depth + 1, synth_opts);
+        }
     }
 }
 
@@ -603,7 +697,7 @@ std::optional<sval_t> CrossFunctionAnalyzer::extract_arg_delta(
     return extractor.delta();
 }
 
-qvector<std::pair<ea_t, int>> CrossFunctionAnalyzer::find_callers_with_param(
+qvector<std::tuple<ea_t, int, sval_t>> CrossFunctionAnalyzer::find_callers_with_param(
     ea_t func_ea,
     int param_idx)
 {

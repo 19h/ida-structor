@@ -1,7 +1,9 @@
 #pragma once
 
+#ifndef STRUCTOR_TESTING
 #include <pro.h>
 #include <hexrays.hpp>
+#endif
 #include <unordered_set>
 #include <unordered_map>
 #include <chrono>
@@ -218,7 +220,8 @@ public:
     );
 
     /// Find all callers that pass a value to this function's parameter
-    [[nodiscard]] qvector<std::pair<ea_t, int>> find_callers_with_param(
+    /// Returns tuples of (caller_ea, var_idx, delta) where delta is the pointer offset
+    [[nodiscard]] qvector<std::tuple<ea_t, int, sval_t>> find_callers_with_param(
         ea_t func_ea,
         int param_idx
     );
@@ -348,15 +351,17 @@ class CallerFinder {
 public:
     CallerFinder(ea_t target_func, int param_idx);
 
-    /// Find all callers and their corresponding variables
-    [[nodiscard]] qvector<std::pair<ea_t, int>> find_callers();
+    /// Find all callers and their corresponding variables with pointer deltas
+    /// Returns tuples of (caller_ea, var_idx, delta) where delta is the offset
+    /// added to the variable before passing (e.g., (char*)ptr + 0x10 has delta 0x10)
+    [[nodiscard]] qvector<std::tuple<ea_t, int, sval_t>> find_callers();
 
 private:
     ea_t target_func_;
     int param_idx_;
 
     /// Process a single caller function
-    void process_caller(ea_t caller_ea, ea_t call_site, qvector<std::pair<ea_t, int>>& result);
+    void process_caller(ea_t caller_ea, ea_t call_site, qvector<std::tuple<ea_t, int, sval_t>>& result);
 };
 
 } // namespace structor

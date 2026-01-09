@@ -98,7 +98,12 @@ inline tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
     udt.total_size = synth_struct.size;
 
     // Add fields
+    msg("Structor: Creating struct '%s' with %zu fields, total_size=%u\n",
+        name.c_str(), synth_struct.fields.size(), synth_struct.size);
     for (const auto& field : synth_struct.fields) {
+        msg("Structor:   Adding field '%s' at offset 0x%llX (bits: 0x%llX), size=%u\n",
+            field.name.c_str(), static_cast<unsigned long long>(field.offset),
+            static_cast<unsigned long long>(field.offset) * 8, field.size);
         udm_t udm;
         udm.name = field.name;
         udm.offset = static_cast<uint64>(field.offset) * 8;  // Convert to bits

@@ -6,6 +6,7 @@
 #include <structor/ui_integration.hpp>
 #include <structor/api.hpp>
 #include <expr.hpp>
+#include <auto.hpp>
 
 namespace structor {
 
@@ -120,10 +121,16 @@ public:
 
 private:
     void cleanup();
-    
+    void run_pending_auto_synth();
+
     SynthActionHandler action_handler_;  // Owned by plugin, passed to IDA
     bool initialized_ = false;
     bool cleaned_up_ = false;
+
+    // Pending auto-synthesis from env var
+    ea_t pending_synth_ea_ = BADADDR;
+    int pending_synth_var_idx_ = 0;
+    bool auto_synth_done_ = false;
 };
 
 StructorPlugin::StructorPlugin() {
@@ -143,6 +150,51 @@ StructorPlugin::StructorPlugin() {
             PLUGIN_VERSION, Config::instance().hotkey());
     } else {
         msg("Structor: Failed to initialize UI\n");
+    }
+
+    // Check for auto-synthesis env var: STRUCTOR_AUTO_SYNTH=func_ea or func_ea:var_idx
+    const char* env = getenv("STRUCTOR_AUTO_SYNTH");
+    if (env) {
+        char* endptr = nullptr;
+        pending_synth_ea_ = strtoull(env, &endptr, 0);
+        if (endptr && *endptr == ':') {
+            pending_synth_var_idx_ = static_cast<int>(strtol(endptr + 1, nullptr, 0));
+        }
+        if (pending_synth_ea_ != BADADDR) {
+            // Run synthesis immediately (auto_wait() is called internally)
+            run_pending_auto_synth();
+        }
+    }
+}
+
+void StructorPlugin::run_pending_auto_synth() {
+    if (auto_synth_done_ || pending_synth_ea_ == BADADDR) return;
+    auto_synth_done_ = true;
+
+    // Wait for auto-analysis to complete
+    auto_wait();
+
+    msg("Structor: Running auto-synthesis for func=0x%llx var_idx=%d\n",
+        (unsigned long long)pending_synth_ea_, pending_synth_var_idx_);
+
+    SynthOptions opts = Config::instance().options();
+    opts.interactive_mode = false;
+    opts.auto_open_struct = false;
+    opts.highlight_changes = false;
+
+    SynthResult result = StructorAPI::instance().synthesize_structure(
+        pending_synth_ea_, pending_synth_var_idx_, &opts);
+
+    g_last_error = result.error_message;
+    g_last_field_count = result.fields_created;
+    g_last_vtable_tid = result.vtable_tid;
+
+    if (result.success()) {
+        msg("Structor: Auto-synthesis OK - tid=0x%llx fields=%d\n",
+            (unsigned long long)result.struct_tid, result.fields_created);
+    } else {
+        msg("Structor: Auto-synthesis FAILED - %s\n",
+            result.error_message.empty() ? synth_error_str(result.error) : result.error_message.c_str());
     }
 }
 

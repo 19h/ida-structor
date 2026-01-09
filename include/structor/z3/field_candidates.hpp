@@ -117,13 +117,12 @@ public:
         const qvector<FieldCandidate>& candidates
     ) const;
 
-    /// Get type encoder for external use
-    [[nodiscard]] TypeEncoder& type_encoder() noexcept { return type_encoder_; }
+    /// Get type encoder for external use (shared with context)
+    [[nodiscard]] TypeEncoder& type_encoder() noexcept { return ctx_.type_encoder(); }
 
 private:
     Z3Context& ctx_;
     CandidateGenerationConfig config_;
-    TypeEncoder type_encoder_;
     int next_id_ = 0;
 
     /// Generate one candidate per unique (offset, size) pair

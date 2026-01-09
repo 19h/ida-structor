@@ -1,5 +1,7 @@
 #pragma once
 
+// When testing, IDA types are provided by mock_ida.hpp
+#ifndef STRUCTOR_TESTING
 #include <pro.h>
 #include <ida.hpp>
 #include <idp.hpp>
@@ -11,6 +13,7 @@
 #include <xref.hpp>
 #include <typeinf.hpp>
 #include <hexrays.hpp>
+#endif
 
 #include <cstdint>
 #include <string>
@@ -154,6 +157,7 @@ struct FieldAccess {
     qstring         context_expr;   // Expression context for debugging
     bool            is_vtable_access;
     sval_t          vtable_slot;    // If vtable access, which slot
+    bool            is_zero_init;   // True if this is a zero-initialization write (e.g., memset to 0)
 
     // Nested access support (adopted from Suture)
     std::optional<NestedAccessInfo> nested_info;  // For multi-level accesses like obj->vtable[slot]
@@ -165,7 +169,8 @@ struct FieldAccess {
         , access_type(AccessType::Unknown)
         , semantic_type(SemanticType::Unknown)
         , is_vtable_access(false)
-        , vtable_slot(-1) {}
+        , vtable_slot(-1)
+        , is_zero_init(false) {}
 
     bool operator<(const FieldAccess& other) const noexcept {
         if (offset != other.offset) return offset < other.offset;

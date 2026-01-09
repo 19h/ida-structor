@@ -33,6 +33,7 @@ private:
     [[nodiscard]] bool involves_target_var(const cexpr_t* expr) const;
     [[nodiscard]] SemanticType infer_semantic_from_usage(const cexpr_t* expr, const cexpr_t* parent);
     [[nodiscard]] AccessType determine_access_type(const cexpr_t* expr);
+    [[nodiscard]] bool is_zero_initialization(const cexpr_t* expr) const;
 
     cfunc_t* cfunc_;
     int target_var_idx_;
@@ -123,6 +124,11 @@ inline void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr
 
     // Determine if this is a read or write
     access.access_type = determine_access_type(expr);
+
+    // Check if this is a zero-initialization write
+    if (access.access_type == AccessType::Write) {
+        access.is_zero_init = is_zero_initialization(expr);
+    }
 
     // Infer semantic type from context
     const cexpr_t* parent = parent_expr();
@@ -405,6 +411,43 @@ inline AccessType AccessPatternVisitor::determine_access_type(const cexpr_t* exp
     }
 
     return AccessType::Read;
+}
+
+inline bool AccessPatternVisitor::is_zero_initialization(const cexpr_t* expr) const {
+    // Walk up parents to find an assignment
+    const cexpr_t* current = expr;
+
+    for (size_t i = 0; i < parents.size(); ++i) {
+        const citem_t* parent_item = parents[parents.size() - 1 - i];
+        if (!parent_item || !parent_item->is_expr()) {
+            continue;
+        }
+
+        const cexpr_t* parent = static_cast<const cexpr_t*>(parent_item);
+
+        if (parent->op == cot_asg && parent->x == current) {
+            // This is a write - check if the value is zero
+            const cexpr_t* rhs = parent->y;
+            if (!rhs) return false;
+
+            // Check for numeric constant 0
+            if (rhs->op == cot_num && rhs->numval() == 0) {
+                return true;
+            }
+
+            // Check for cast of 0: (type)0
+            if (rhs->op == cot_cast && rhs->x && 
+                rhs->x->op == cot_num && rhs->x->numval() == 0) {
+                return true;
+            }
+
+            return false;
+        }
+
+        current = parent;
+    }
+
+    return false;
 }
 
 // ============================================================================

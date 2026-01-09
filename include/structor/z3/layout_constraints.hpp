@@ -60,6 +60,9 @@ struct LayoutConstraintConfig {
     // Limits
     uint32_t max_struct_size = 0x10000;
 
+    // Post-processing
+    bool fill_gaps_with_padding = true;  // Fill gaps between fields with padding
+
     LayoutConstraintConfig() {
         packing_options.push_back(1);
         packing_options.push_back(2);
@@ -132,7 +135,6 @@ public:
 private:
     Z3Context& ctx_;
     LayoutConstraintConfig config_;
-    TypeEncoder type_encoder_;
     ArrayConstraintBuilder array_builder_;
     ConstraintTracker constraint_tracker_;
 
@@ -162,6 +164,7 @@ private:
     void add_non_overlap_constraints();    // Fields don't overlap (or form union)
     void add_alignment_constraints();      // Alignment as soft with packing var
     void add_type_constraints();           // Type consistency
+    void add_type_preference_constraints(); // Prefer typed fields over raw_bytes
     void add_size_bound_constraints();     // Size limits
     void add_array_constraints();          // Array-specific constraints
 

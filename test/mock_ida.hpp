@@ -12,8 +12,13 @@
 #include <algorithm>
 #include <cstring>
 
-// Define testing macro
+// Define testing macro (guard against redefinition from build system)
+#ifndef STRUCTOR_TESTING
 #define STRUCTOR_TESTING
+#endif
+
+// Define idaapi macro (calling convention, empty on non-Windows)
+#define idaapi
 
 // ============================================================================
 // Basic IDA Types
@@ -118,6 +123,7 @@ enum type_flags : std::uint32_t {
     BTF_DOUBLE  = 0x400,
     BT_INT8     = BTF_INT8,
     BTMT_CHAR   = 0x1000,
+    BTMT_USIGNED = 0x2000,
 };
 
 class tinfo_t {
@@ -161,6 +167,11 @@ public:
         return true;
     }
 
+    tinfo_t get_pointed_object() const {
+        if (!is_ptr_ || !pointed_type_) return tinfo_t();
+        return *pointed_type_;
+    }
+
     bool get_type_by_tid(tid_t tid) { return tid != BADADDR; }
     bool get_named_type(void*, const char* name) { return name != nullptr; }
 
@@ -198,6 +209,9 @@ struct funcarg_t {
 struct func_type_data_t : public qvector<funcarg_t> {
     tinfo_t rettype;
     int cc = 0;
+
+    void set_cc(int calling_conv) { cc = calling_conv; }
+    int get_cc() const { return cc; }
 };
 
 // ============================================================================
@@ -206,20 +220,7 @@ struct func_type_data_t : public qvector<funcarg_t> {
 
 enum ctype_t {
     cot_empty = 0,
-    cot_var,
-    cot_num,
-    cot_ptr,
-    cot_memptr,
-    cot_memref,
-    cot_idx,
-    cot_add,
-    cot_sub,
-    cot_mul,
-    cot_cast,
-    cot_ref,
-    cot_call,
-    cot_obj,
-    cot_helper,
+    cot_comma,
     cot_asg,
     cot_asgbor,
     cot_asgxor,
@@ -234,18 +235,60 @@ enum ctype_t {
     cot_asgudiv,
     cot_asgsmod,
     cot_asgumod,
-    cot_preinc,
-    cot_predec,
-    cot_postinc,
-    cot_postdec,
+    cot_tern,
+    cot_lor,
+    cot_land,
+    cot_bor,
+    cot_xor,
+    cot_band,
+    cot_eq,
+    cot_ne,
+    cot_sge,
+    cot_uge,
+    cot_sle,
+    cot_ule,
+    cot_sgt,
+    cot_ugt,
+    cot_slt,
+    cot_ult,
+    cot_sshr,
+    cot_ushr,
+    cot_shl,
+    cot_add,
+    cot_sub,
+    cot_mul,
+    cot_sdiv,
+    cot_udiv,
+    cot_smod,
+    cot_umod,
     cot_fadd,
     cot_fsub,
     cot_fmul,
     cot_fdiv,
-    cot_ult,
-    cot_ule,
-    cot_ugt,
-    cot_uge,
+    cot_fneg,
+    cot_neg,
+    cot_cast,
+    cot_lnot,
+    cot_bnot,
+    cot_ptr,
+    cot_ref,
+    cot_postinc,
+    cot_postdec,
+    cot_preinc,
+    cot_predec,
+    cot_call,
+    cot_idx,
+    cot_memref,
+    cot_memptr,
+    cot_num,
+    cot_fnum,
+    cot_str,
+    cot_obj,
+    cot_var,
+    cot_insn,
+    cot_sizeof,
+    cot_helper,
+    cot_type,
 };
 
 struct citem_t;
@@ -255,11 +298,25 @@ struct var_ref_t {
     int idx = -1;
 };
 
-struct carglist_t : public qvector<cexpr_t*> {};
+// Forward declarations
+struct cexpr_t;
+struct carglist_t;
 
-struct cexpr_t {
+// Base class for all c-tree items
+struct citem_t {
     ctype_t op = cot_empty;
     ea_t ea = BADADDR;
+
+    bool is_citem() const { return true; }
+    bool is_expr() const { return true; }
+
+    cexpr_t* cexpr();
+    const cexpr_t* cexpr() const;
+};
+
+struct carglist_t : public qvector<cexpr_t*> {};
+
+struct cexpr_t : public citem_t {
     tinfo_t type;
     cexpr_t* x = nullptr;
     cexpr_t* y = nullptr;
@@ -271,8 +328,6 @@ struct cexpr_t {
     sval_t numval() const { return num_value_; }
     void set_numval(sval_t val) { num_value_ = val; }
 
-    bool is_expr() const { return true; }
-
     void print1(qstring* out, void*) const {
         if (!out) return;
         out->sprnt("expr_%d", static_cast<int>(op));
@@ -282,16 +337,9 @@ private:
     sval_t num_value_ = 0;
 };
 
-struct citem_t {
-    ctype_t op = cot_empty;
-    ea_t ea = BADADDR;
-
-    bool is_citem() const { return true; }
-    bool is_expr() const { return true; }
-
-    cexpr_t* cexpr() { return reinterpret_cast<cexpr_t*>(this); }
-    const cexpr_t* cexpr() const { return reinterpret_cast<const cexpr_t*>(this); }
-};
+// Define the cexpr() methods after cexpr_t is complete
+inline cexpr_t* citem_t::cexpr() { return static_cast<cexpr_t*>(this); }
+inline const cexpr_t* citem_t::cexpr() const { return static_cast<const cexpr_t*>(this); }
 
 struct cinsn_t : public citem_t {};
 
@@ -607,5 +655,3 @@ inline bool operator<(const treeloc_t& a, const treeloc_t& b) {
     if (a.ea != b.ea) return a.ea < b.ea;
     return a.itp < b.itp;
 }
-
-#define idaapi

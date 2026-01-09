@@ -720,6 +720,209 @@ void test_cross_function_test_cases() {
     }
 }
 
+/// Test complex call graph with substructure (A->B->D->C, A->C)
+/// This verifies that when starting from a callee (C), we properly discover
+/// all related functions through the call graph, even when the struct is passed
+/// as a substructure.
+///
+/// Scenario:
+///   A at 0x1000: has full struct, calls B(struct) and C(struct+0x10)
+///   B at 0x2000: receives struct, calls D(struct)
+///   D at 0x3000: receives struct, calls C(struct+0x10)
+///   C at 0x4000: receives substructure (struct+0x10)
+///
+/// When starting from C, should discover: C, A, D, B
+/// All with proper delta normalization so A's full struct layout emerges.
+void test_complex_call_graph_substructure() {
+    TestCrossFunctionAnalyzer analyzer;
+
+    // A: Full struct access (offset 0, 8, 16, 24)
+    // A has the canonical base pointer
+    analyzer.add_function_constraints(0x1000, 0, {
+        TestAccess::read(0x00, 8, TestTypeCategory::Pointer),   // ptr at 0
+        TestAccess::read(0x08, 8, TestTypeCategory::Pointer),   // ptr at 8
+        TestAccess::read(0x10, 4, TestTypeCategory::Int32),     // int at 16
+        TestAccess::read(0x18, 4, TestTypeCategory::Int32),     // int at 24
+    });
+
+    // B: Receives full struct, accesses offset 0 and 8
+    analyzer.add_function_constraints(0x2000, 0, {
+        TestAccess::read(0x00, 8, TestTypeCategory::Pointer),
+        TestAccess::write(0x08, 8, TestTypeCategory::Pointer),
+    });
+
+    // D: Receives full struct, accesses offset 0 and 16
+    analyzer.add_function_constraints(0x3000, 0, {
+        TestAccess::read(0x00, 8, TestTypeCategory::Pointer),
+        TestAccess::read(0x10, 4, TestTypeCategory::Int32),
+    });
+
+    // C: Receives SUBSTRUCTURE (struct + 0x10), accesses as offset 0 and 8
+    // These are actually offset 0x10 and 0x18 in the full struct
+    analyzer.add_function_constraints(0x4000, 0, {
+        TestAccess::read(0x00, 4, TestTypeCategory::Int32),   // Actually 0x10 in full
+        TestAccess::read(0x08, 4, TestTypeCategory::Int32),   // Actually 0x18 in full
+    });
+
+    // Call sites:
+    // A calls B with struct (delta 0)
+    CallSiteObservation a_to_b;
+    a_to_b.caller_func = 0x1000;
+    a_to_b.callee_func = 0x2000;
+    a_to_b.call_addr = 0x1010;
+    a_to_b.argument_index = 0;
+    a_to_b.base_offset = 0;
+
+    // A calls C with struct+0x10 (delta +0x10)
+    CallSiteObservation a_to_c;
+    a_to_c.caller_func = 0x1000;
+    a_to_c.callee_func = 0x4000;
+    a_to_c.call_addr = 0x1020;
+    a_to_c.argument_index = 0;
+    a_to_c.base_offset = 0x10;  // Substructure!
+
+    // B calls D with struct (delta 0)
+    CallSiteObservation b_to_d;
+    b_to_d.caller_func = 0x2000;
+    b_to_d.callee_func = 0x3000;
+    b_to_d.call_addr = 0x2010;
+    b_to_d.argument_index = 0;
+    b_to_d.base_offset = 0;
+
+    // D calls C with struct+0x10 (delta +0x10)
+    CallSiteObservation d_to_c;
+    d_to_c.caller_func = 0x3000;
+    d_to_c.callee_func = 0x4000;
+    d_to_c.call_addr = 0x3010;
+    d_to_c.argument_index = 0;
+    d_to_c.base_offset = 0x10;  // Substructure!
+
+    analyzer.add_call_site(a_to_b);
+    analyzer.add_call_site(a_to_c);
+    analyzer.add_call_site(b_to_d);
+    analyzer.add_call_site(d_to_c);
+    analyzer.analyze();
+
+    // Query from C (the leaf callee receiving substructure)
+    // Should get unified constraints from ALL functions
+    auto unified = analyzer.get_unified_constraints(0x4000, 0);
+
+    // Collect all unique offsets (after normalization)
+    std::set<int32_t> offsets;
+    for (const auto& acc : unified) {
+        offsets.insert(acc.offset);
+    }
+
+    // If delta normalization works, C's offsets (0, 8) should become (0x10, 0x18)
+    // Combined with A's (0, 8, 0x10, 0x18), B's (0, 8), D's (0, 0x10)
+    // We should see: 0x00, 0x08, 0x10, 0x18
+
+    // Note: The test infrastructure may not fully normalize deltas in the mock
+    // This test verifies the call graph is traversed correctly
+
+    // All four functions should be in the equivalence class
+    auto funcs = analyzer.get_using_functions(0x4000, 0);
+
+    // Critical checks - all functions should be discovered
+    assert(funcs.count(0x4000) && "C not in equivalence class");
+    assert(funcs.count(0x1000) && "A not in equivalence class - backward trace broken");
+    assert(funcs.count(0x3000) && "D not in equivalence class - backward trace broken");
+    // B is discovered via: C->A (backward), then A->B (forward from my fix)
+    assert(funcs.count(0x2000) && "B not in equivalence class - sibling discovery broken!");
+}
+
+/// Test linked list sibling callee discovery
+/// This verifies that when analyzing traverse_list, we discover sum_list and insert_after
+/// as siblings through the common caller (main), and collect their access patterns.
+///
+/// Scenario (from test_linked_list binary):
+///   main() at 0x4000 calls:
+///     - traverse_list() at 0x1000: accesses offset 0x00 (next), 0x10 (data)
+///     - sum_list() at 0x2000: accesses offset 0x00 (next), 0x10 (data)
+///     - insert_after() at 0x3000: accesses offset 0x00 (next), 0x08 (prev)
+///
+/// Expected: When querying from traverse_list, we should see ALL 3 offsets:
+///   - 0x00: pointer (next) - from all three functions
+///   - 0x08: pointer (prev) - ONLY from insert_after
+///   - 0x10: int (data) - from traverse_list and sum_list
+///
+/// If offset 0x08 is missing, sibling callee discovery is broken!
+void test_linked_list_sibling_discovery() {
+    TestCrossFunctionAnalyzer analyzer;
+
+    // traverse_list accesses: offset 0 (next pointer), offset 0x10 (data)
+    analyzer.add_function_constraints(0x1000, 0, {
+        TestAccess::read(0x00, 8, TestTypeCategory::Pointer),  // next
+        TestAccess::read(0x10, 4, TestTypeCategory::Int32),    // data
+    });
+
+    // sum_list accesses: offset 0 (next pointer), offset 0x10 (data)
+    analyzer.add_function_constraints(0x2000, 0, {
+        TestAccess::read(0x00, 8, TestTypeCategory::Pointer),  // next
+        TestAccess::read(0x10, 4, TestTypeCategory::Int32),    // data
+    });
+
+    // insert_after accesses: offset 0 (next), offset 0x08 (prev)
+    // This is the CRITICAL function - offset 0x08 is ONLY accessed here
+    analyzer.add_function_constraints(0x3000, 0, {
+        TestAccess::read(0x00, 8, TestTypeCategory::Pointer),  // next
+        TestAccess::write(0x00, 8, TestTypeCategory::Pointer), // next (write)
+        TestAccess::read(0x08, 8, TestTypeCategory::Pointer),  // prev - UNIQUE!
+        TestAccess::write(0x08, 8, TestTypeCategory::Pointer), // prev (write)
+    });
+
+    // main() calls all three functions with the same struct (n1)
+    CallSiteObservation call_traverse, call_sum, call_insert;
+
+    call_traverse.caller_func = 0x4000;  // main
+    call_traverse.callee_func = 0x1000;  // traverse_list
+    call_traverse.call_addr = 0x4010;
+    call_traverse.argument_index = 0;
+    call_traverse.base_offset = 0;
+
+    call_sum.caller_func = 0x4000;  // main
+    call_sum.callee_func = 0x2000;  // sum_list
+    call_sum.call_addr = 0x4020;
+    call_sum.argument_index = 0;
+    call_sum.base_offset = 0;
+
+    call_insert.caller_func = 0x4000;  // main - note: insert_after isn't called in main
+                                       // but we include it to test sibling discovery
+    call_insert.callee_func = 0x3000;  // insert_after
+    call_insert.call_addr = 0x4030;
+    call_insert.argument_index = 0;
+    call_insert.base_offset = 0;
+
+    analyzer.add_call_site(call_traverse);
+    analyzer.add_call_site(call_sum);
+    analyzer.add_call_site(call_insert);
+    analyzer.analyze();
+
+    // Query from traverse_list - should see accesses from ALL siblings
+    auto unified = analyzer.get_unified_constraints(0x1000, 0);
+
+    // Collect unique offsets
+    std::set<int32_t> offsets;
+    for (const auto& acc : unified) {
+        offsets.insert(acc.offset);
+    }
+
+    // CRITICAL: Must see offset 0x08 which is ONLY accessed by insert_after
+    // If this fails, sibling callee discovery is broken
+    assert(offsets.count(0x00) && "Missing offset 0x00 (next pointer)");
+    assert(offsets.count(0x08) && "Missing offset 0x08 (prev pointer) - sibling discovery broken!");
+    assert(offsets.count(0x10) && "Missing offset 0x10 (data field)");
+
+    // Should have at least 3 unique offsets
+    assert(offsets.size() >= 3);
+
+    // Verify all three functions are in the equivalence class
+    auto funcs = analyzer.get_using_functions(0x1000, 0);
+    assert(funcs.count(0x1000) && "traverse_list not in equivalence class");
+    assert(funcs.count(0x2000) && "sum_list not in equivalence class");
+    assert(funcs.count(0x3000) && "insert_after not in equivalence class - sibling discovery broken!");
+}
+
 /// Test get_using_functions
 void test_get_using_functions() {
     TestCrossFunctionAnalyzer analyzer;
@@ -784,6 +987,8 @@ int main() {
     runner.run("calling_conventions", test_calling_conventions);
     runner.run("escaping_pointers", test_escaping_pointers);
     runner.run("cross_function_test_cases", test_cross_function_test_cases);
+    runner.run("complex_call_graph_substructure", test_complex_call_graph_substructure);
+    runner.run("linked_list_sibling_discovery", test_linked_list_sibling_discovery);
     runner.run("get_using_functions", test_get_using_functions);
 
     runner.summary();

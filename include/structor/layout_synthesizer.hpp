@@ -11,7 +11,24 @@
 #include <memory>
 #include <chrono>
 
+#ifndef STRUCTOR_TESTING
+#include <pro.h>
+#include <kernwin.hpp>
+#endif
+
 namespace structor {
+
+namespace detail {
+    // Helper for conditional logging in header
+    inline void synth_log(const char* fmt, ...) {
+#ifndef STRUCTOR_TESTING
+        va_list va;
+        va_start(va, fmt);
+        vmsg(fmt, va);
+        va_end(va);
+#endif
+    }
+}
 
 /// Result of synthesis attempt with detailed metadata
 struct SynthesisResult {
@@ -334,6 +351,8 @@ inline std::optional<SynthesisResult> LayoutSynthesizer::synthesize_z3(
 {
     SynthesisResult result;
 
+    detail::synth_log("[Structor] Starting Z3-based structure synthesis...\n");
+
     try {
         // Create Z3 context
         z3::Z3Config z3_config = make_z3_config();
@@ -344,7 +363,11 @@ inline std::optional<SynthesisResult> LayoutSynthesizer::synthesize_z3(
         z3::FieldCandidateGenerator generator(*z3_ctx_, cand_config);
         auto candidates = generator.generate(pattern);
 
+        detail::synth_log("[Structor] Generated %zu field candidates from %zu accesses\n",
+                          candidates.size(), pattern.all_accesses.size());
+
         if (candidates.empty()) {
+            detail::synth_log("[Structor] No field candidates - falling back to heuristics\n");
             result.fallback_reason = "No field candidates generated";
             return std::nullopt;
         }
@@ -371,7 +394,21 @@ inline std::optional<SynthesisResult> LayoutSynthesizer::synthesize_z3(
             if (z3_result.has_dropped_constraints()) {
                 result.had_relaxation = true;
                 result.dropped_constraints = z3_result.dropped_constraints;
+                detail::synth_log("[Structor] Z3 synthesis completed with %zu relaxed constraints\n",
+                                  z3_result.dropped_constraints.size());
+            } else {
+                detail::synth_log("[Structor] Z3 synthesis completed successfully\n");
             }
+
+            detail::synth_log("[Structor] Result: %zu fields, %u bytes",
+                              result.structure.fields.size(), result.structure.size);
+            if (result.arrays_detected > 0) {
+                detail::synth_log(", %d arrays", result.arrays_detected);
+            }
+            if (result.unions_created > 0) {
+                detail::synth_log(", %d unions", result.unions_created);
+            }
+            detail::synth_log("\n");
 
             // Set struct metadata
             result.structure.alignment = config_.default_alignment;
@@ -383,6 +420,7 @@ inline std::optional<SynthesisResult> LayoutSynthesizer::synthesize_z3(
             return result;
         }
         else if (z3_result.is_unsat()) {
+            detail::synth_log("[Structor] Z3 returned UNSAT - constraints unsatisfiable\n");
             // Try relaxation if configured
             if (config_.relax_alignment_on_unsat || config_.relax_types_on_unsat) {
                 return try_relaxed_solve(builder, z3_result, result);
@@ -393,10 +431,12 @@ inline std::optional<SynthesisResult> LayoutSynthesizer::synthesize_z3(
             if (!z3_result.unsat_core.empty()) {
                 result.fallback_reason.append(z3_result.unsat_core[0].description.c_str());
             }
+            detail::synth_log("[Structor] Falling back to heuristic synthesis\n");
             return std::nullopt;
         }
         else {
             // Unknown or error
+            detail::synth_log("[Structor] Z3 returned unknown/timeout - falling back to heuristics\n");
             result.fallback_reason = "Z3 ";
             result.fallback_reason.append(z3_result.status_string());
             if (!z3_result.error_message.empty()) {
@@ -407,11 +447,13 @@ inline std::optional<SynthesisResult> LayoutSynthesizer::synthesize_z3(
         }
     }
     catch (const std::exception& e) {
+        detail::synth_log("[Structor] Z3 exception: %s\n", e.what());
         result.fallback_reason = "Z3 exception: ";
         result.fallback_reason.append(e.what());
         return std::nullopt;
     }
     catch (...) {
+        detail::synth_log("[Structor] Unknown Z3 exception\n");
         result.fallback_reason = "Unknown Z3 exception";
         return std::nullopt;
     }
@@ -463,6 +505,8 @@ inline std::optional<SynthesisResult> LayoutSynthesizer::try_relaxed_solve(
 inline SynthesisResult LayoutSynthesizer::synthesize_heuristic(
     const UnifiedAccessPattern& pattern)
 {
+    detail::synth_log("[Structor] Using heuristic structure synthesis\n");
+
     SynthesisResult result;
     result.used_z3 = false;
 
@@ -504,6 +548,12 @@ inline SynthesisResult LayoutSynthesizer::synthesize_heuristic(
 
     // Copy conflicts
     result.conflicts = conflicts_;
+
+    detail::synth_log("[Structor] Heuristic synthesis completed: %zu fields, %u bytes\n",
+                      result.structure.fields.size(), result.structure.size);
+    if (!conflicts_.empty()) {
+        detail::synth_log("[Structor] Warning: %zu conflicts detected\n", conflicts_.size());
+    }
 
     return result;
 }

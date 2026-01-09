@@ -12,8 +12,7 @@ ArrayConstraintBuilder::ArrayConstraintBuilder(
     Z3Context& ctx,
     const ArrayDetectionConfig& config)
     : ctx_(ctx)
-    , config_(config)
-    , type_encoder_(ctx) {}
+    , config_(config) {}
 
 qvector<ArrayCandidate> ArrayConstraintBuilder::detect_arrays(
     const qvector<FieldAccess>& accesses)

@@ -10,13 +10,62 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Z3 Theorem Prover Integration
 # ============================================================================
 
-# Try to find system Z3 first (much faster than building from source)
-find_package(Z3 CONFIG QUIET)
+# Allow specifying custom Z3 location
+option(Z3_USE_CUSTOM "Use custom Z3 library instead of system" OFF)
+set(Z3_CUSTOM_INCLUDE_DIR "" CACHE PATH "Custom Z3 include directory")
+set(Z3_CUSTOM_LIBRARY "" CACHE FILEPATH "Custom Z3 library path")
+set(Z3_CUSTOM_IMPLIB "" CACHE FILEPATH "Custom Z3 import library path (Windows only)")
 
-if(Z3_FOUND)
-    message(STATUS "Found system Z3: ${Z3_VERSION}")
+if(Z3_USE_CUSTOM AND Z3_CUSTOM_INCLUDE_DIR AND Z3_CUSTOM_LIBRARY)
+    message(STATUS "Using custom Z3: ${Z3_CUSTOM_LIBRARY}")
     set(Z3_USE_SYSTEM TRUE)
+    set(Z3_CUSTOM TRUE)
+
+    # Create imported target for custom Z3
+    add_library(z3_custom SHARED IMPORTED)
+    if(WIN32)
+        # On Windows, we need the import library (.lib) for linking
+        if(Z3_CUSTOM_IMPLIB)
+            set_target_properties(z3_custom PROPERTIES
+                IMPORTED_LOCATION "${Z3_CUSTOM_LIBRARY}"
+                IMPORTED_IMPLIB "${Z3_CUSTOM_IMPLIB}"
+                INTERFACE_INCLUDE_DIRECTORIES "${Z3_CUSTOM_INCLUDE_DIR}"
+            )
+        else()
+            # Try to find .lib next to .dll or in lib/ directory
+            get_filename_component(Z3_LIB_DIR "${Z3_CUSTOM_LIBRARY}" DIRECTORY)
+            get_filename_component(Z3_LIB_DIR_PARENT "${Z3_LIB_DIR}" DIRECTORY)
+            find_file(Z3_IMPLIB_FOUND
+                NAMES libz3.lib z3.lib
+                PATHS "${Z3_LIB_DIR}" "${Z3_LIB_DIR_PARENT}/lib"
+                NO_DEFAULT_PATH
+            )
+            if(Z3_IMPLIB_FOUND)
+                message(STATUS "Found Z3 import library: ${Z3_IMPLIB_FOUND}")
+                set_target_properties(z3_custom PROPERTIES
+                    IMPORTED_LOCATION "${Z3_CUSTOM_LIBRARY}"
+                    IMPORTED_IMPLIB "${Z3_IMPLIB_FOUND}"
+                    INTERFACE_INCLUDE_DIRECTORIES "${Z3_CUSTOM_INCLUDE_DIR}"
+                )
+            else()
+                message(FATAL_ERROR "Z3_CUSTOM_IMPLIB not set and could not find import library (.lib) for Z3")
+            endif()
+        endif()
+    else()
+        set_target_properties(z3_custom PROPERTIES
+            IMPORTED_LOCATION "${Z3_CUSTOM_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${Z3_CUSTOM_INCLUDE_DIR}"
+        )
+    endif()
 else()
+    # Try to find system Z3 first (much faster than building from source)
+    find_package(Z3 CONFIG QUIET)
+
+    if(Z3_FOUND)
+        message(STATUS "Found system Z3: ${Z3_VERSION}")
+        set(Z3_USE_SYSTEM TRUE)
+        set(Z3_CUSTOM FALSE)
+    else()
     message(STATUS "System Z3 not found, building from source (this takes 15+ minutes)...")
     include(FetchContent)
 
@@ -38,8 +87,10 @@ else()
     set(Z3_BUILD_PYTHON_BINDINGS OFF CACHE BOOL "" FORCE)
     set(Z3_BUILD_DOTNET_BINDINGS OFF CACHE BOOL "" FORCE)
 
-    FetchContent_MakeAvailable(z3)
-    set(Z3_USE_SYSTEM FALSE)
+        FetchContent_MakeAvailable(z3)
+        set(Z3_USE_SYSTEM FALSE)
+        set(Z3_CUSTOM FALSE)
+    endif()
 endif()
 
 # Verify exceptions are enabled (required for Z3 C++ API)
@@ -240,7 +291,9 @@ if(HEXRAYS_LIB)
 endif()
 
 # Link Z3 to structor
-if(Z3_USE_SYSTEM)
+if(Z3_CUSTOM)
+    target_link_libraries(structor${IDA_SUFFIX} PRIVATE z3_custom)
+elseif(Z3_USE_SYSTEM)
     target_link_libraries(structor${IDA_SUFFIX} PRIVATE z3::libz3)
     # System Z3 includes are handled by the imported target
 else()
@@ -254,7 +307,7 @@ endif()
 
 # Set plugin output name and properties
 set_target_properties(structor${IDA_SUFFIX} PROPERTIES
-    OUTPUT_NAME "structor${IDA_SUFFIX}"
+    OUTPUT_NAME "structor"
     SUFFIX ${PLUGIN_EXT}
     PREFIX ""
 )

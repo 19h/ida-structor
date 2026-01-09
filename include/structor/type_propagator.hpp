@@ -296,8 +296,13 @@ inline void TypePropagator::propagate_backward(
         if (apply_type(caller_cfunc, caller_var_idx, type)) {
             result.add_success(std::move(site));
 
-            // Continue propagation
+            // Continue backward propagation
             propagate_backward(caller_ea, caller_var_idx, type, depth + 1, result);
+            
+            // IMPORTANT: Also propagate forward from the caller to reach sibling callees
+            // This ensures that if main() calls both init_simple() and process_simple()
+            // with the same struct, process_simple() also gets the type
+            propagate_forward(caller_ea, caller_var_idx, type, depth + 1, result);
         } else {
             site.failure_reason = "Failed to apply type";
             result.add_failure(std::move(site));
@@ -340,9 +345,9 @@ inline void TypePropagator::find_callees_with_arg(
             for (size_t i = 0; i < expr->a->size(); ++i) {
                 const carg_t& arg = expr->a->at(i);
 
-                // Check if argument is our variable (possibly with casts)
+                // Check if argument is our variable (possibly with casts or refs)
                 const cexpr_t* base = &arg;
-                while (base->op == cot_cast) {
+                while (base->op == cot_cast || base->op == cot_ref) {
                     base = base->x;
                 }
 
@@ -386,6 +391,30 @@ inline void TypePropagator::find_callers_with_param(
                 , results(r)
                 , caller_ea(caller) {}
 
+            // Helper to extract base variable from complex expressions
+            static cexpr_t* find_base_var(cexpr_t* expr) {
+                while (expr) {
+                    if (expr->op == cot_var) return expr;
+                    if (expr->op == cot_cast) {
+                        expr = expr->x;
+                    } else if (expr->op == cot_ref) {
+                        expr = expr->x;
+                    } else if (expr->op == cot_add) {
+                        // Try both sides for (ptr + offset) or (offset + ptr)
+                        cexpr_t* left = find_base_var(expr->x);
+                        if (left) return left;
+                        expr = expr->y;
+                    } else if (expr->op == cot_memref || expr->op == cot_memptr) {
+                        expr = expr->x;
+                    } else if (expr->op == cot_idx) {
+                        expr = expr->x;
+                    } else {
+                        break;
+                    }
+                }
+                return nullptr;
+            }
+
             int idaapi visit_expr(cexpr_t* expr) override {
                 if (expr->op != cot_call || !expr->a) return 0;
 
@@ -400,13 +429,11 @@ inline void TypePropagator::find_callers_with_param(
                 if (static_cast<size_t>(target_param) >= expr->a->size()) return 0;
 
                 const carg_t& arg = expr->a->at(target_param);
-                const cexpr_t* base = &arg;
-                while (base->op == cot_cast) {
-                    base = base->x;
-                }
 
-                if (base->op == cot_var) {
-                    results.push_back({caller_ea, base->v.idx});
+                // Use helper to find base variable through complex expressions
+                cexpr_t* base_var = find_base_var(const_cast<cexpr_t*>(static_cast<const cexpr_t*>(&arg)));
+                if (base_var && base_var->op == cot_var) {
+                    results.push_back({caller_ea, base_var->v.idx});
                 }
 
                 return 0;
