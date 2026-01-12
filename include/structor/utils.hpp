@@ -125,8 +125,8 @@ struct PtrArithInfo {
         return info;
     }
 
-    // Cast expression - recurse
-    if (expr->op == cot_cast) {
+    // Cast/address-of/deref expressions - recurse
+    if (expr->op == cot_cast || expr->op == cot_ref || expr->op == cot_ptr || expr->op == cot_memref) {
         return extract_ptr_arith(expr->x, depth + 1);
     }
 

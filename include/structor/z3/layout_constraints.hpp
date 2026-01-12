@@ -55,6 +55,7 @@ struct LayoutConstraintConfig {
     int weight_alignment = 5;            // Soft: prefer aligned fields
     int weight_minimize_fields = 2;      // Soft: prefer fewer fields
     int weight_minimize_padding = 1;     // Soft: prefer compact layout
+    int weight_prefer_non_union = 2;     // Soft: prefer non-union fields
     int weight_prefer_arrays = 3;        // Soft: prefer array detection
 
     // Limits

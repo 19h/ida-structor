@@ -13,7 +13,7 @@
 BUILD_DIR     := build
 BUILD_TYPE    ?= Release
 INSTALL_DIR   ?= $(HOME)/.idapro/plugins
-PLUGIN_NAME   := structor64.dylib
+PLUGIN_NAME   := structor.dylib
 
 # Support both IDA_SDK_DIR and IDASDK env vars
 # Also handle case where SDK is in $IDASDK/src/ subdirectory
@@ -56,12 +56,12 @@ rebuild: clean build
 
 install: build
 	@mkdir -p $(INSTALL_DIR)
-	@cp $(BUILD_DIR)/structor64$(PLUGIN_EXT) $(INSTALL_DIR)/
-	@echo "Installed to $(INSTALL_DIR)/structor64$(PLUGIN_EXT)"
+	@cp $(BUILD_DIR)/structor$(PLUGIN_EXT) $(INSTALL_DIR)/
+	@echo "Installed to $(INSTALL_DIR)/structor$(PLUGIN_EXT)"
 
 uninstall:
-	@rm -f $(INSTALL_DIR)/structor64$(PLUGIN_EXT)
-	@echo "Removed $(INSTALL_DIR)/structor64$(PLUGIN_EXT)"
+	@rm -f $(INSTALL_DIR)/structor$(PLUGIN_EXT)
+	@echo "Removed $(INSTALL_DIR)/structor$(PLUGIN_EXT)"
 
 # Debug build shortcut
 debug:

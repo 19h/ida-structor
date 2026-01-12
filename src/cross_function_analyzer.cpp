@@ -196,8 +196,8 @@ bool ArgDeltaExtractor::is_target_var(cexpr_t* e) const noexcept {
         return true;
     }
 
-    // Through cast
-    if (e->op == cot_cast) {
+    // Through cast or address-of
+    if (e->op == cot_cast || e->op == cot_ref) {
         return is_target_var(e->x);
     }
 

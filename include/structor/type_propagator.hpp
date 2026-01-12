@@ -37,6 +37,18 @@ private:
         PropagationDirection direction;
     };
 
+    struct CalleeArgInfo {
+        ea_t callee_ea = BADADDR;
+        int param_idx = -1;
+        bool by_ref = false;
+    };
+
+    struct CallerArgInfo {
+        ea_t caller_ea = BADADDR;
+        int var_idx = -1;
+        bool by_ref = false;
+    };
+
     void propagate_forward(
         ea_t func_ea,
         int var_idx,
@@ -54,12 +66,12 @@ private:
     void find_callees_with_arg(
         cfunc_t* cfunc,
         int var_idx,
-        qvector<std::pair<ea_t, int>>& callees);
+        qvector<CalleeArgInfo>& callees);
 
     void find_callers_with_param(
         ea_t func_ea,
         int param_idx,
-        qvector<std::pair<ea_t, int>>& callers);
+        qvector<CallerArgInfo>& callers);
 
     void find_aliased_vars(
         cfunc_t* cfunc,
@@ -224,34 +236,41 @@ inline void TypePropagator::propagate_forward(
     if (!cfunc) return;
 
     // Find all callees where this variable is passed as an argument
-    qvector<std::pair<ea_t, int>> callees;
+    qvector<CalleeArgInfo> callees;
     find_callees_with_arg(cfunc, var_idx, callees);
 
-    for (const auto& [callee_ea, param_idx] : callees) {
-        auto key = make_visit_key(callee_ea, param_idx);
+    for (const auto& info : callees) {
+        auto key = make_visit_key(info.callee_ea, info.param_idx);
         if (visited_.count(key)) continue;
         visited_.insert(key);
 
-        cfuncptr_t callee_cfunc = utils::get_cfunc(callee_ea);
+        cfuncptr_t callee_cfunc = utils::get_cfunc(info.callee_ea);
         if (!callee_cfunc) continue;
 
+        tinfo_t callee_type = type;
+        if (info.by_ref) {
+            tinfo_t ptr_type;
+            ptr_type.create_ptr(type);
+            callee_type = ptr_type;
+        }
+
         PropagationSite site;
-        site.func_ea = callee_ea;
-        site.var_idx = param_idx;
-        site.new_type = type;
+        site.func_ea = info.callee_ea;
+        site.var_idx = info.param_idx;
+        site.new_type = callee_type;
         site.direction = PropagationDirection::Forward;
 
         lvars_t& callee_lvars = *callee_cfunc->get_lvars();
-        if (param_idx >= 0 && static_cast<size_t>(param_idx) < callee_lvars.size()) {
-            site.var_name = callee_lvars[param_idx].name;
-            site.old_type = callee_lvars[param_idx].type();
+        if (info.param_idx >= 0 && static_cast<size_t>(info.param_idx) < callee_lvars.size()) {
+            site.var_name = callee_lvars[info.param_idx].name;
+            site.old_type = callee_lvars[info.param_idx].type();
         }
 
-        if (apply_type(callee_cfunc, param_idx, type)) {
+        if (apply_type(callee_cfunc, info.param_idx, callee_type)) {
             result.add_success(std::move(site));
 
             // Continue propagation
-            propagate_forward(callee_ea, param_idx, type, depth + 1, result);
+            propagate_forward(info.callee_ea, info.param_idx, callee_type, depth + 1, result);
         } else {
             site.failure_reason = "Failed to apply type";
             result.add_failure(std::move(site));
@@ -362,39 +381,47 @@ inline void TypePropagator::propagate_backward(
     if (param_idx < 0) return;
 
     // Find all callers that pass to this parameter
-    qvector<std::pair<ea_t, int>> callers;
+    qvector<CallerArgInfo> callers;
     find_callers_with_param(func_ea, param_idx, callers);
 
-    for (const auto& [caller_ea, caller_var_idx] : callers) {
-        auto key = make_visit_key(caller_ea, caller_var_idx);
+    for (const auto& info : callers) {
+        auto key = make_visit_key(info.caller_ea, info.var_idx);
         if (visited_.count(key)) continue;
         visited_.insert(key);
 
-        cfuncptr_t caller_cfunc = utils::get_cfunc(caller_ea);
+        cfuncptr_t caller_cfunc = utils::get_cfunc(info.caller_ea);
         if (!caller_cfunc) continue;
 
+        tinfo_t caller_type = type;
+        if (info.by_ref && type.is_ptr()) {
+            tinfo_t deref = type.get_pointed_object();
+            if (!deref.empty()) {
+                caller_type = deref;
+            }
+        }
+
         PropagationSite site;
-        site.func_ea = caller_ea;
-        site.var_idx = caller_var_idx;
-        site.new_type = type;
+        site.func_ea = info.caller_ea;
+        site.var_idx = info.var_idx;
+        site.new_type = caller_type;
         site.direction = PropagationDirection::Backward;
 
         lvars_t& caller_lvars = *caller_cfunc->get_lvars();
-        if (caller_var_idx >= 0 && static_cast<size_t>(caller_var_idx) < caller_lvars.size()) {
-            site.var_name = caller_lvars[caller_var_idx].name;
-            site.old_type = caller_lvars[caller_var_idx].type();
+        if (info.var_idx >= 0 && static_cast<size_t>(info.var_idx) < caller_lvars.size()) {
+            site.var_name = caller_lvars[info.var_idx].name;
+            site.old_type = caller_lvars[info.var_idx].type();
         }
 
-        if (apply_type(caller_cfunc, caller_var_idx, type)) {
+        if (apply_type(caller_cfunc, info.var_idx, caller_type)) {
             result.add_success(std::move(site));
 
             // Continue backward propagation
-            propagate_backward(caller_ea, caller_var_idx, type, depth + 1, result);
+            propagate_backward(info.caller_ea, info.var_idx, caller_type, depth + 1, result);
             
             // IMPORTANT: Also propagate forward from the caller to reach sibling callees
             // This ensures that if main() calls both init_simple() and process_simple()
             // with the same struct, process_simple() also gets the type
-            propagate_forward(caller_ea, caller_var_idx, type, depth + 1, result);
+            propagate_forward(info.caller_ea, info.var_idx, caller_type, depth + 1, result);
         } else {
             site.failure_reason = "Failed to apply type";
             result.add_failure(std::move(site));
@@ -405,19 +432,58 @@ inline void TypePropagator::propagate_backward(
 inline void TypePropagator::find_callees_with_arg(
     cfunc_t* cfunc,
     int var_idx,
-    qvector<std::pair<ea_t, int>>& callees)
+    qvector<CalleeArgInfo>& callees)
 {
     if (!cfunc) return;
 
     // Visit all call expressions
     struct CallVisitor : public ctree_visitor_t {
         int target_var_idx;
-        qvector<std::pair<ea_t, int>>& results;
+        qvector<CalleeArgInfo>& results;
 
-        CallVisitor(int var_idx, qvector<std::pair<ea_t, int>>& r)
+        CallVisitor(int var_idx, qvector<CalleeArgInfo>& r)
             : ctree_visitor_t(CV_FAST)
             , target_var_idx(var_idx)
             , results(r) {}
+
+        static const cexpr_t* find_base_var(const cexpr_t* expr) {
+            while (expr) {
+                if (expr->op == cot_var) return expr;
+                if (expr->op == cot_cast || expr->op == cot_ref || expr->op == cot_ptr) {
+                    expr = expr->x;
+                } else if (expr->op == cot_add || expr->op == cot_sub) {
+                    const cexpr_t* left = find_base_var(expr->x);
+                    if (left) return left;
+                    expr = expr->y;
+                } else if (expr->op == cot_memref || expr->op == cot_memptr) {
+                    expr = expr->x;
+                } else if (expr->op == cot_idx) {
+                    expr = expr->x;
+                } else {
+                    break;
+                }
+            }
+            return nullptr;
+        }
+
+        static bool contains_ref(const cexpr_t* expr) {
+            if (!expr) return false;
+            if (expr->op == cot_ref) return true;
+
+            switch (expr->op) {
+                case cot_cast:
+                case cot_ptr:
+                case cot_memref:
+                case cot_memptr:
+                case cot_idx:
+                    return contains_ref(expr->x);
+                case cot_add:
+                case cot_sub:
+                    return contains_ref(expr->x) || contains_ref(expr->y);
+                default:
+                    return false;
+            }
+        }
 
         int idaapi visit_expr(cexpr_t* expr) override {
             if (expr->op != cot_call || !expr->a) return 0;
@@ -436,15 +502,14 @@ inline void TypePropagator::find_callees_with_arg(
             // Check each argument
             for (size_t i = 0; i < expr->a->size(); ++i) {
                 const carg_t& arg = expr->a->at(i);
+                const cexpr_t* base = find_base_var(&arg);
 
-                // Check if argument is our variable (possibly with casts or refs)
-                const cexpr_t* base = &arg;
-                while (base->op == cot_cast || base->op == cot_ref) {
-                    base = base->x;
-                }
-
-                if (base->op == cot_var && base->v.idx == target_var_idx) {
-                    results.push_back({callee_ea, static_cast<int>(i)});
+                if (base && base->op == cot_var && base->v.idx == target_var_idx) {
+                    CalleeArgInfo info;
+                    info.callee_ea = callee_ea;
+                    info.param_idx = static_cast<int>(i);
+                    info.by_ref = contains_ref(&arg);
+                    results.push_back(info);
                     break;
                 }
             }
@@ -460,7 +525,7 @@ inline void TypePropagator::find_callees_with_arg(
 inline void TypePropagator::find_callers_with_param(
     ea_t func_ea,
     int param_idx,
-    qvector<std::pair<ea_t, int>>& callers)
+    qvector<CallerArgInfo>& callers)
 {
     // Get all callers
     qvector<ea_t> caller_funcs = utils::get_callers(func_ea);
@@ -473,10 +538,10 @@ inline void TypePropagator::find_callers_with_param(
         struct CallerFinder : public ctree_visitor_t {
             ea_t target_func;
             int target_param;
-            qvector<std::pair<ea_t, int>>& results;
+            qvector<CallerArgInfo>& results;
             ea_t caller_ea;
 
-            CallerFinder(ea_t func, int param, ea_t caller, qvector<std::pair<ea_t, int>>& r)
+            CallerFinder(ea_t func, int param, ea_t caller, qvector<CallerArgInfo>& r)
                 : ctree_visitor_t(CV_FAST)
                 , target_func(func)
                 , target_param(param)
@@ -487,11 +552,9 @@ inline void TypePropagator::find_callers_with_param(
             static cexpr_t* find_base_var(cexpr_t* expr) {
                 while (expr) {
                     if (expr->op == cot_var) return expr;
-                    if (expr->op == cot_cast) {
+                    if (expr->op == cot_cast || expr->op == cot_ref || expr->op == cot_ptr) {
                         expr = expr->x;
-                    } else if (expr->op == cot_ref) {
-                        expr = expr->x;
-                    } else if (expr->op == cot_add) {
+                    } else if (expr->op == cot_add || expr->op == cot_sub) {
                         // Try both sides for (ptr + offset) or (offset + ptr)
                         cexpr_t* left = find_base_var(expr->x);
                         if (left) return left;
@@ -505,6 +568,25 @@ inline void TypePropagator::find_callers_with_param(
                     }
                 }
                 return nullptr;
+            }
+
+            static bool contains_ref(const cexpr_t* expr) {
+                if (!expr) return false;
+                if (expr->op == cot_ref) return true;
+
+                switch (expr->op) {
+                    case cot_cast:
+                    case cot_ptr:
+                    case cot_memref:
+                    case cot_memptr:
+                    case cot_idx:
+                        return contains_ref(expr->x);
+                    case cot_add:
+                    case cot_sub:
+                        return contains_ref(expr->x) || contains_ref(expr->y);
+                    default:
+                        return false;
+                }
             }
 
             int idaapi visit_expr(cexpr_t* expr) override {
@@ -525,7 +607,11 @@ inline void TypePropagator::find_callers_with_param(
                 // Use helper to find base variable through complex expressions
                 cexpr_t* base_var = find_base_var(const_cast<cexpr_t*>(static_cast<const cexpr_t*>(&arg)));
                 if (base_var && base_var->op == cot_var) {
-                    results.push_back({caller_ea, base_var->v.idx});
+                    CallerArgInfo info;
+                    info.caller_ea = caller_ea;
+                    info.var_idx = base_var->v.idx;
+                    info.by_ref = contains_ref(&arg);
+                    results.push_back(info);
                 }
 
                 return 0;

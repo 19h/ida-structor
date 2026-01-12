@@ -20,6 +20,23 @@ namespace {
         va_end(va);
 #endif
     }
+
+    inline int clamp_weight(int value, int min_val, int max_val) {
+        return std::max(min_val, std::min(max_val, value));
+    }
+
+    inline int access_weight(const FieldCandidate& cand, int base_weight) {
+        if (base_weight <= 0) return 0;
+        int count = static_cast<int>(cand.source_access_indices.size());
+        int multiplier = clamp_weight(count, 1, 10);
+        return base_weight * multiplier;
+    }
+
+    inline int padding_weight(uint32_t size, int base_weight) {
+        if (base_weight <= 0) return 0;
+        int multiplier = clamp_weight(static_cast<int>((size + 3) / 4), 1, 10);
+        return base_weight * multiplier;
+    }
 }
 
 // ============================================================================
@@ -222,12 +239,28 @@ void LayoutConstraintBuilder::create_field_variables() {
         // Soft constraint: prefer NOT being a union member
         // This prevents Z3 from arbitrarily marking fields as unions
         {
-            ConstraintProvenance prov;
-            prov.description.sprnt("Prefer non-union for field %zu", i);
-            prov.is_soft = true;
-            prov.kind = ConstraintProvenance::Kind::Other;
-            prov.weight = 1;  // Low weight - easily overridden when union is needed
-            constraint_tracker_.add_soft(solver_, !fv.is_union_member, prov, 1);
+            int weight = access_weight(cand, config_.weight_prefer_non_union);
+            if (weight > 0) {
+                ConstraintProvenance prov;
+                prov.description.sprnt("Prefer non-union for field %zu", i);
+                prov.is_soft = true;
+                prov.kind = ConstraintProvenance::Kind::Other;
+                prov.weight = weight;
+                constraint_tracker_.add_soft(solver_, !fv.is_union_member, prov, weight);
+            }
+        }
+
+        // Soft constraint: penalize selecting padding fields
+        if (cand.kind == FieldCandidate::Kind::PaddingField) {
+            int weight = padding_weight(cand.size, config_.weight_minimize_padding);
+            if (weight > 0) {
+                ConstraintProvenance prov;
+                prov.description.sprnt("Penalize padding at 0x%llX", static_cast<unsigned long long>(cand.offset));
+                prov.is_soft = true;
+                prov.kind = ConstraintProvenance::Kind::Other;
+                prov.weight = weight;
+                constraint_tracker_.add_soft(solver_, !fv.selected, prov, weight);
+            }
         }
 
         field_vars_.push_back(fv);
@@ -448,15 +481,18 @@ void LayoutConstraintBuilder::add_type_constraints() {
                     static_cast<unsigned long long>(c1.offset),
                     type_category_name(c1.type_category),
                     type_category_name(c2.type_category));
+                const auto& weight_source = (c1.source_access_indices.size() >= c2.source_access_indices.size())
+                    ? c1 : c2;
+                int weight = access_weight(weight_source, config_.weight_type_consistency);
+
                 prov.is_soft = true;
                 prov.kind = ConstraintProvenance::Kind::TypeMatch;
-                prov.weight = config_.weight_type_consistency;
+                prov.weight = weight;
 
                 // Prefer not selecting both incompatible types
                 ::z3::expr constraint = !(field_vars_[i].selected && field_vars_[j].selected);
 
-                constraint_tracker_.add_soft(solver_, constraint, prov,
-                    config_.weight_type_consistency);
+                constraint_tracker_.add_soft(solver_, constraint, prov, weight);
                 ++statistics_.type_constraints;
             }
         }
@@ -492,16 +528,13 @@ void LayoutConstraintBuilder::add_type_preference_constraints() {
                 prov.description.sprnt("Prefer typed field at 0x%llX over raw at 0x%llX",
                     static_cast<unsigned long long>(c2.offset),
                     static_cast<unsigned long long>(c1.offset));
+                int weight = access_weight(c2, 1);
                 prov.is_soft = true;
                 prov.kind = ConstraintProvenance::Kind::TypeMatch;
-                prov.weight = 1;
+                prov.weight = weight;
                 
-                // If both could be selected, prefer the typed one
-                // !c1.selected || c2.selected  (if c1 is selected, c2 should also be selected)
-                // But actually we want: prefer selecting c2 over c1 when they overlap
-                // So: if c1 is selected, c2 should be selected instead: implies(!c1, c2)
-                // Simpler: just penalize selecting raw when typed exists: !c1.selected
-                constraint_tracker_.add_soft(solver_, !field_vars_[i].selected, prov, 1);
+                // Prefer the typed candidate by penalizing selecting raw when typed exists
+                constraint_tracker_.add_soft(solver_, !field_vars_[i].selected, prov, weight);
                 ++preference_count;
             }
             else if (c2_is_raw && !c1_is_raw) {
@@ -510,11 +543,12 @@ void LayoutConstraintBuilder::add_type_preference_constraints() {
                 prov.description.sprnt("Prefer typed field at 0x%llX over raw at 0x%llX",
                     static_cast<unsigned long long>(c1.offset),
                     static_cast<unsigned long long>(c2.offset));
+                int weight = access_weight(c1, 1);
                 prov.is_soft = true;
                 prov.kind = ConstraintProvenance::Kind::TypeMatch;
-                prov.weight = 1;
+                prov.weight = weight;
                 
-                constraint_tracker_.add_soft(solver_, !field_vars_[j].selected, prov, 1);
+                constraint_tracker_.add_soft(solver_, !field_vars_[j].selected, prov, weight);
                 ++preference_count;
             }
         }

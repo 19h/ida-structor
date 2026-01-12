@@ -1,6 +1,8 @@
 #include "structor/z3/field_candidates.hpp"
+#include "structor/z3/array_constraints.hpp"
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 
 #ifndef STRUCTOR_TESTING
 #include <pro.h>
@@ -202,56 +204,68 @@ void FieldCandidateGenerator::generate_array_candidates(
     const UnifiedAccessPattern& pattern,
     qvector<FieldCandidate>& candidates)
 {
-    // Find potential array patterns among existing candidates
-    auto array_groups = find_array_patterns(candidates);
+    ArrayDetectionConfig array_config;
+    array_config.min_elements = static_cast<int>(config_.min_array_elements);
 
-    for (const auto& group : array_groups) {
-        if (group.size() < config_.min_array_elements) continue;
+    ArrayConstraintBuilder array_builder(ctx_, array_config);
+    auto arrays = array_builder.detect_arrays(pattern.all_accesses);
+    if (arrays.empty()) {
+        return;
+    }
 
-        // Extract offsets and check for arithmetic progression
-        qvector<sval_t> offsets;
-        uint32_t element_size = 0;
-
-        for (int idx : group) {
-            offsets.push_back(candidates[idx].offset);
-            if (element_size == 0) {
-                element_size = candidates[idx].size;
-            }
-        }
-
-        std::sort(offsets.begin(), offsets.end());
-
-        // Calculate stride
-        if (offsets.size() < 2) continue;
-
-        sval_t stride = offsets[1] - offsets[0];
-        if (stride <= 0 || stride > 1024) continue;
-
-        // Verify it's a valid arithmetic progression
-        if (!is_arithmetic_progression(offsets, static_cast<uint32_t>(stride))) {
+    std::unordered_map<uint64_t, int> direct_index;
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        if (candidates[i].kind != FieldCandidate::Kind::DirectAccess) {
             continue;
         }
+        uint64_t key = (static_cast<uint64_t>(candidates[i].offset) << 32) |
+                       static_cast<uint64_t>(candidates[i].size);
+        direct_index[key] = static_cast<int>(i);
+    }
 
-        // Create array field candidate
+    for (const auto& array : arrays) {
+        size_t elem_size = array.element_type.get_size();
+        if (elem_size == BADSIZE || elem_size == 0) {
+            elem_size = array.stride;
+        }
+
+        uint32_t access_size = static_cast<uint32_t>(elem_size);
+        if (array.needs_element_struct && array.inner_access_size > 0) {
+            access_size = array.inner_access_size;
+        }
+
         FieldCandidate array_candidate;
-        array_candidate.offset = offsets.front();
-        array_candidate.size = static_cast<uint32_t>(stride * offsets.size());
+        array_candidate.offset = array.base_offset;
+        array_candidate.size = array.total_size();
         array_candidate.kind = FieldCandidate::Kind::ArrayField;
-        array_candidate.type_category = candidates[group[0]].type_category;
-        array_candidate.array_element_count = static_cast<uint32_t>(offsets.size());
-        array_candidate.array_stride = static_cast<uint32_t>(stride);
-        array_candidate.confidence = TypeConfidence::Medium;
+        array_candidate.type_category = ctx_.type_encoder().categorize(array.element_type);
+        array_candidate.extended_type = ctx_.type_encoder().extract_extended_info(array.element_type);
+        array_candidate.array_element_count = array.element_count;
+        array_candidate.array_stride = array.stride;
+        array_candidate.confidence = array.confidence;
 
-        // Copy source accesses
-        for (int idx : group) {
-            for (int src_idx : candidates[idx].source_access_indices) {
-                array_candidate.source_access_indices.push_back(src_idx);
+        std::unordered_set<sval_t> member_offsets;
+        for (sval_t off : array.member_offsets) {
+            member_offsets.insert(off);
+        }
+
+        for (size_t i = 0; i < pattern.all_accesses.size(); ++i) {
+            const auto& access = pattern.all_accesses[i];
+            if (member_offsets.count(access.offset) == 0) {
+                continue;
+            }
+            if (access.size == access_size) {
+                array_candidate.source_access_indices.push_back(static_cast<int>(i));
             }
         }
 
-        // Mark original candidates as array elements
-        for (int idx : group) {
-            candidates[idx].kind = FieldCandidate::Kind::ArrayElement;
+        for (sval_t off : array.member_offsets) {
+            uint64_t key = (static_cast<uint64_t>(off) << 32) |
+                           static_cast<uint64_t>(access_size);
+            auto it = direct_index.find(key);
+            if (it != direct_index.end()) {
+                candidates[it->second].kind = FieldCandidate::Kind::ArrayElement;
+            }
         }
 
         candidates.push_back(std::move(array_candidate));

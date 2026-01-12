@@ -101,6 +101,8 @@ struct Z3Options {
     std::uint8_t    min_confidence;     // Minimum confidence threshold (0-100)
     bool            relax_on_unsat;     // Relax constraints if UNSAT
     std::uint32_t   max_relax_iterations;  // Maximum relaxation iterations
+    int             weight_minimize_padding;   // Penalty for padding fields
+    int             weight_prefer_non_union;   // Penalty for union membership
 
     Z3Options()
         : mode(Z3SynthesisMode::Preferred)
@@ -115,7 +117,9 @@ struct Z3Options {
         , allow_unions(true)
         , min_confidence(20)
         , relax_on_unsat(true)
-        , max_relax_iterations(5) {}
+        , max_relax_iterations(5)
+        , weight_minimize_padding(1)
+        , weight_prefer_non_union(2) {}
 };
 
 /// Configuration options for structure synthesis
@@ -337,6 +341,10 @@ inline bool Config::load() {
             options_.z3.relax_on_unsat = parse_bool(value);
         } else if (key == "z3_max_relax_iterations") {
             options_.z3.max_relax_iterations = static_cast<std::uint32_t>(std::stoul(value));
+        } else if (key == "z3_weight_minimize_padding") {
+            options_.z3.weight_minimize_padding = std::stoi(value);
+        } else if (key == "z3_weight_prefer_non_union") {
+            options_.z3.weight_prefer_non_union = std::stoi(value);
         }
     }
 
@@ -405,6 +413,8 @@ inline bool Config::save() {
     file << "z3_min_confidence=" << static_cast<int>(options_.z3.min_confidence) << "\n";
     file << "z3_relax_on_unsat=" << (options_.z3.relax_on_unsat ? "true" : "false") << "\n";
     file << "z3_max_relax_iterations=" << options_.z3.max_relax_iterations << "\n";
+    file << "z3_weight_minimize_padding=" << options_.z3.weight_minimize_padding << "\n";
+    file << "z3_weight_prefer_non_union=" << options_.z3.weight_prefer_non_union << "\n";
 
     dirty_ = false;
     return true;

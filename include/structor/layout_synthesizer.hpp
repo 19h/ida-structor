@@ -136,6 +136,8 @@ struct LayoutSynthConfig {
     int weight_type_consistency = 10;
     int weight_alignment = 5;
     int weight_minimize_fields = 2;
+    int weight_minimize_padding = 1;
+    int weight_prefer_non_union = 2;
     int weight_prefer_arrays = 3;
     
     // Type inference integration
@@ -270,7 +272,10 @@ inline LayoutSynthesizer::LayoutSynthesizer(const SynthOptions& opts)
     config_.default_alignment = opts.alignment;
     config_.cross_function = opts.propagate_to_callees || opts.propagate_to_callers;
     config_.cross_function_depth = opts.max_propagation_depth;
+    config_.weight_minimize_padding = opts.z3.weight_minimize_padding;
+    config_.weight_prefer_non_union = opts.z3.weight_prefer_non_union;
 }
+
 
 inline SynthesisResult LayoutSynthesizer::synthesize(
     const AccessPattern& pattern,
@@ -899,6 +904,8 @@ inline z3::LayoutConstraintConfig LayoutSynthesizer::make_layout_config() const 
     cfg.weight_type_consistency = config_.weight_type_consistency;
     cfg.weight_alignment = config_.weight_alignment;
     cfg.weight_minimize_fields = config_.weight_minimize_fields;
+    cfg.weight_minimize_padding = config_.weight_minimize_padding;
+    cfg.weight_prefer_non_union = config_.weight_prefer_non_union;
     cfg.weight_prefer_arrays = config_.weight_prefer_arrays;
     return cfg;
 }
