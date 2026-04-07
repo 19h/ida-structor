@@ -316,6 +316,13 @@ namespace {
             return std::nullopt;
         }
 
+        // Reject spurious "struct arrays" that only explain roughly one
+        // access per element. Real arrays-of-structs should expose multiple
+        // inner members across repeated elements.
+        if (used_indices.size() < count * 2) {
+            return std::nullopt;
+        }
+
         std::sort(repeated.begin(), repeated.end(), [](const MixedStrideField& a, const MixedStrideField& b) {
             if (a.access_indices.size() != b.access_indices.size()) {
                 return a.access_indices.size() > b.access_indices.size();
@@ -798,7 +805,8 @@ void FieldCandidateGenerator::generate_array_candidates(
         }
 
         const size_t run_len = run_end - run_start;
-        if (run_len >= static_cast<size_t>(config_.min_array_elements)) {
+        const int byte_tail_min = config_.min_array_elements > 2 ? 2 : config_.min_array_elements;
+        if (run_len >= static_cast<size_t>(byte_tail_min)) {
             FieldCandidate byte_array;
             byte_array.offset = byte_offsets[run_start];
             byte_array.size = static_cast<uint32_t>(run_len);
