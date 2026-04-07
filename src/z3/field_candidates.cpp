@@ -130,6 +130,22 @@ namespace {
 
         uint32_t cursor = 0;
 
+        auto is_array_mergeable = [](const MixedStrideField& a, const MixedStrideField& b) {
+            if (a.inner_offset + a.size != b.inner_offset) {
+                return false;
+            }
+            if (a.size != b.size) {
+                return false;
+            }
+            if (a.type.empty() != b.type.empty()) {
+                return false;
+            }
+            if (!a.type.empty()) {
+                return a.type.equals_to(b.type);
+            }
+            return true;
+        };
+
         auto is_byte_field = [](const MixedStrideField& field) {
             if (field.size != 1) {
                 return false;
@@ -139,17 +155,15 @@ namespace {
 
         for (size_t i = 0; i < fields.size(); ++i) {
             MixedStrideField merged = fields[i];
+            uint32_t merged_count = 1;
 
-            if (is_byte_field(merged)) {
-                size_t j = i + 1;
-                while (j < fields.size() &&
-                       is_byte_field(fields[j]) &&
-                       fields[j].inner_offset == merged.inner_offset + merged.size) {
-                    merged.size += fields[j].size;
-                    ++j;
-                }
-                i = j - 1;
+            size_t j = i + 1;
+            while (j < fields.size() && is_array_mergeable(merged, fields[j])) {
+                merged.size += fields[j].size;
+                ++merged_count;
+                ++j;
             }
+            i = j - 1;
 
             if (merged.inner_offset > cursor) {
                 append_gap_member(cursor, merged.inner_offset - cursor);
@@ -157,13 +171,23 @@ namespace {
 
             udm_t udm;
             udm.offset = static_cast<uint64>(merged.inner_offset) * 8;
-            if (merged.size > 1 && is_byte_field(merged)) {
+            if (merged_count > 1) {
                 udm.name.sprnt("arr_%X", merged.inner_offset);
             } else {
                 udm.name = generate_field_name(merged.inner_offset);
             }
 
-            if (!merged.type.empty() && !(merged.size > 1 && is_byte_field(merged))) {
+            if (merged_count > 1) {
+                tinfo_t elem_type;
+                if (!merged.type.empty()) {
+                    elem_type = merged.type;
+                } else {
+                    elem_type.create_simple_type(BT_INT8 | BTMT_USIGNED);
+                }
+
+                udm.type.create_array(elem_type, merged_count);
+                udm.size = merged.size * 8;
+            } else if (!merged.type.empty()) {
                 udm.type = merged.type;
                 udm.size = merged.type.get_size() * 8;
             } else {

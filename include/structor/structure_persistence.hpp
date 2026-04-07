@@ -104,6 +104,10 @@ private:
         sval_t offset,
         uint32_t storage_size,
         const qvector<const SynthField*>& bitfields);
+    [[nodiscard]] tinfo_t materialize_nested_type(
+        const qstring& parent_name,
+        const SynthField& field,
+        const tinfo_t& type);
 
     const SynthOptions& options_;
 

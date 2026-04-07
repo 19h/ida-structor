@@ -118,7 +118,7 @@ tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
             if (enum_it != bitfield_enums.end()) {
                 udm.type = enum_it->second;
             } else if (!field.type.empty()) {
-                udm.type = field.type;
+                udm.type = materialize_nested_type(name, field, field.type);
             } else {
                 udm.type = create_bitfield_base_type(field.size);
             }
@@ -126,7 +126,7 @@ tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
             udm.offset = static_cast<uint64>(field.offset) * 8;  // Convert to bits
 
             if (!field.type.empty()) {
-                udm.type = field.type;
+                udm.type = materialize_nested_type(name, field, field.type);
                 udm.size = field.type.get_size() * 8;
             } else {
                 // Default to bytes array for unknown types
@@ -726,6 +726,52 @@ tinfo_t StructurePersistence::create_bitmask_enum_type(
     tinfo_t enum_type;
     enum_type.get_type_by_tid(tid);
     return enum_type;
+}
+
+tinfo_t StructurePersistence::materialize_nested_type(
+    const qstring& parent_name,
+    const SynthField& field,
+    const tinfo_t& type)
+{
+    if (type.empty()) {
+        return type;
+    }
+
+    if (type.is_array()) {
+        array_type_data_t atd;
+        if (!type.get_array_details(&atd)) {
+            return type;
+        }
+
+        if (atd.elem_type.is_struct() || atd.elem_type.is_union()) {
+            qstring elem_name;
+            atd.elem_type.get_type_name(&elem_name);
+            if (elem_name.empty() || atd.elem_type.is_anonymous_udt()) {
+                qstring nested_name;
+                nested_name.sprnt("%s_%s_elem", parent_name.c_str(), field.name.c_str());
+                if (struct_exists(nested_name.c_str())) {
+                    nested_name = make_unique_name(nested_name.c_str());
+                }
+
+                tinfo_t elem_type = atd.elem_type;
+                elem_type.set_udt_pack(1);
+                elem_type.set_udt_alignment(1);
+                if (elem_type.set_named_type(nullptr, nested_name.c_str(), NTF_TYPE | NTF_REPLACE) == TERR_OK) {
+                    tid_t tid = get_named_type_tid(nested_name.c_str());
+                    if (tid != BADADDR) {
+                        tinfo_t named_elem;
+                        if (named_elem.get_type_by_tid(tid)) {
+                            tinfo_t array_type;
+                            array_type.create_array(named_elem, static_cast<uint32_t>(atd.nelems), atd.base);
+                            return array_type;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return type;
 }
 
 SemanticType StructurePersistence::semantic_from_type(const tinfo_t& type) {
