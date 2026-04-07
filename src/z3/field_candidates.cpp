@@ -130,30 +130,55 @@ namespace {
 
         uint32_t cursor = 0;
 
-        for (const auto& field : fields) {
-            if (field.inner_offset > cursor) {
-                append_gap_member(cursor, field.inner_offset - cursor);
+        auto is_byte_field = [](const MixedStrideField& field) {
+            if (field.size != 1) {
+                return false;
+            }
+            return field.type.empty() || field.type.get_size() == 1;
+        };
+
+        for (size_t i = 0; i < fields.size(); ++i) {
+            MixedStrideField merged = fields[i];
+
+            if (is_byte_field(merged)) {
+                size_t j = i + 1;
+                while (j < fields.size() &&
+                       is_byte_field(fields[j]) &&
+                       fields[j].inner_offset == merged.inner_offset + merged.size) {
+                    merged.size += fields[j].size;
+                    ++j;
+                }
+                i = j - 1;
+            }
+
+            if (merged.inner_offset > cursor) {
+                append_gap_member(cursor, merged.inner_offset - cursor);
             }
 
             udm_t udm;
-            udm.offset = static_cast<uint64>(field.inner_offset) * 8;
-            udm.name = generate_field_name(field.inner_offset);
-            if (!field.type.empty()) {
-                udm.type = field.type;
-                udm.size = field.type.get_size() * 8;
+            udm.offset = static_cast<uint64>(merged.inner_offset) * 8;
+            if (merged.size > 1 && is_byte_field(merged)) {
+                udm.name.sprnt("arr_%X", merged.inner_offset);
+            } else {
+                udm.name = generate_field_name(merged.inner_offset);
+            }
+
+            if (!merged.type.empty() && !(merged.size > 1 && is_byte_field(merged))) {
+                udm.type = merged.type;
+                udm.size = merged.type.get_size() * 8;
             } else {
                 tinfo_t byte_type;
                 byte_type.create_simple_type(BT_INT8 | BTMT_USIGNED);
-                if (field.size > 1) {
-                    udm.type.create_array(byte_type, field.size);
+                if (merged.size > 1) {
+                    udm.type.create_array(byte_type, merged.size);
                 } else {
                     udm.type = byte_type;
                 }
-                udm.size = field.size * 8;
+                udm.size = merged.size * 8;
             }
             udt.push_back(udm);
 
-            cursor = std::max(cursor, field.inner_offset + field.size);
+            cursor = std::max(cursor, merged.inner_offset + merged.size);
         }
 
         if (cursor < stride) {
@@ -316,13 +341,6 @@ namespace {
             return std::nullopt;
         }
 
-        // Reject spurious "struct arrays" that only explain roughly one
-        // access per element. Real arrays-of-structs should expose multiple
-        // inner members across repeated elements.
-        if (used_indices.size() < count * 2) {
-            return std::nullopt;
-        }
-
         std::sort(repeated.begin(), repeated.end(), [](const MixedStrideField& a, const MixedStrideField& b) {
             if (a.access_indices.size() != b.access_indices.size()) {
                 return a.access_indices.size() > b.access_indices.size();
@@ -382,6 +400,13 @@ namespace {
         }), repeated.end());
 
         if (repeated.size() < 2) {
+            return std::nullopt;
+        }
+
+        // Reject spurious "struct arrays" that only explain roughly one
+        // access per element. Real arrays-of-structs should expose multiple
+        // inner members across repeated elements.
+        if (used_indices.size() < effective_count * 2) {
             return std::nullopt;
         }
 
@@ -838,6 +863,58 @@ void FieldCandidateGenerator::generate_array_candidates(
         run_start = run_end;
     }
 
+    // Explicit repeated-anchor detection for arrays-of-structs. Start from a
+    // repeated same-size anchor field (e.g. element.kind at offsets 8,20,32)
+    // and then try to build a mixed-layout element struct around that stride.
+    std::unordered_map<uint32_t, qvector<sval_t>> offsets_by_size;
+    for (const auto& access : pattern.all_accesses) {
+        if (access.size >= 2 && access.size <= 8) {
+            offsets_by_size[access.size].push_back(access.offset);
+        }
+    }
+
+    auto array_candidate_exists = [&](const FieldCandidate& candidate) {
+        return std::any_of(candidates.begin(), candidates.end(), [&](const FieldCandidate& existing) {
+            return existing.kind == FieldCandidate::Kind::ArrayField &&
+                   existing.offset == candidate.offset &&
+                   existing.size == candidate.size;
+        });
+    };
+
+    for (auto& [size, offsets_for_size] : offsets_by_size) {
+        std::sort(offsets_for_size.begin(), offsets_for_size.end());
+        offsets_for_size.erase(std::unique(offsets_for_size.begin(), offsets_for_size.end()), offsets_for_size.end());
+
+        if (offsets_for_size.size() < static_cast<size_t>(config_.min_array_elements)) {
+            continue;
+        }
+
+        for (size_t i = 0; i + 2 < offsets_for_size.size(); ++i) {
+            for (size_t j = i + 1; j < offsets_for_size.size() && j <= i + 8; ++j) {
+                const uint32_t stride = static_cast<uint32_t>(offsets_for_size[j] - offsets_for_size[i]);
+                if (stride < size || stride > 64) {
+                    continue;
+                }
+
+                uint32_t count = 1;
+                sval_t expected = offsets_for_size[i];
+                while (std::binary_search(offsets_for_size.begin(), offsets_for_size.end(), expected)) {
+                    ++count;
+                    expected += stride;
+                }
+                --count;
+
+                if (count >= static_cast<uint32_t>(config_.min_array_elements)) {
+                    auto candidate = build_struct_array_candidate(
+                        ctx_, pattern, offsets_for_size[i], stride, count);
+                    if (candidate.has_value() && !array_candidate_exists(*candidate)) {
+                        candidates.push_back(std::move(*candidate));
+                    }
+                }
+            }
+        }
+    }
+
     // Mixed-size repeated-stride detection for arrays of structs.
     if (pattern.all_accesses.size() >= 6) {
         std::unordered_set<uint32_t> stride_candidates;
@@ -847,8 +924,9 @@ void FieldCandidateGenerator::generate_array_candidates(
             offsets.push_back(access.offset);
         }
         std::sort(offsets.begin(), offsets.end());
+        const size_t max_lookahead = std::min<std::size_t>(offsets.size(), 16);
         for (size_t i = 0; i < offsets.size(); ++i) {
-            for (size_t j = i + 1; j < offsets.size() && j <= i + 6; ++j) {
+            for (size_t j = i + 1; j < offsets.size() && j <= i + max_lookahead; ++j) {
                 sval_t diff = offsets[j] - offsets[i];
                 if (diff >= 8 && diff <= 64) {
                     stride_candidates.insert(static_cast<uint32_t>(diff));
@@ -879,12 +957,7 @@ void FieldCandidateGenerator::generate_array_candidates(
                     continue;
                 }
 
-                bool duplicate = std::any_of(candidates.begin(), candidates.end(), [&](const FieldCandidate& existing) {
-                    return existing.kind == FieldCandidate::Kind::ArrayField &&
-                           existing.offset == candidate->offset &&
-                           existing.size == candidate->size;
-                });
-                if (!duplicate) {
+                if (!array_candidate_exists(*candidate)) {
                     candidates.push_back(std::move(*candidate));
                 }
             }
