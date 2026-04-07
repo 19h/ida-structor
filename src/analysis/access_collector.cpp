@@ -90,6 +90,11 @@ int AccessPatternVisitor::visit_expr(cexpr_t* expr) {
             break;
         }
 
+        case cot_eq:
+        case cot_ne:
+            process_constant_comparison(expr);
+            break;
+
         case cot_call:
             // Check for indirect calls through our variable
             process_call_through_ptr(expr);
@@ -143,8 +148,76 @@ void AccessPatternVisitor::process_assignment(cexpr_t* expr) {
     }
 
     if (resolved) {
+        auto pending_it = pending_constants_.find(lhs->v.idx);
+        if (pending_it != pending_constants_.end()) {
+            for (auto value : pending_it->second) {
+                alias.add_observed_constant(value);
+            }
+            pending_constants_.erase(pending_it);
+        }
         local_aliases_[lhs->v.idx] = std::move(alias);
     }
+}
+
+void AccessPatternVisitor::process_constant_comparison(cexpr_t* expr) {
+    if (!expr || !expr->x || !expr->y) {
+        return;
+    }
+
+    const cexpr_t* value_expr = nullptr;
+    std::uint64_t constant = 0;
+
+    if (expr->x->op == cot_num) {
+        constant = static_cast<std::uint64_t>(expr->x->numval());
+        value_expr = expr->y;
+    } else if (expr->y->op == cot_num) {
+        constant = static_cast<std::uint64_t>(expr->y->numval());
+        value_expr = expr->x;
+    } else {
+        return;
+    }
+
+    while (value_expr && value_expr->op == cot_cast) {
+        value_expr = value_expr->x;
+    }
+    if (!value_expr) {
+        return;
+    }
+
+    sval_t offset = 0;
+    uint32_t size = 0;
+    std::optional<std::uint8_t> base_indirection;
+    bool resolved = extract_access(value_expr, offset, size, &base_indirection);
+
+    FieldAccess access;
+    if (!resolved && value_expr->op == cot_var) {
+        auto it = local_aliases_.find(value_expr->v.idx);
+        if (it == local_aliases_.end()) {
+            pending_constants_[value_expr->v.idx].push_back(constant);
+            return;
+        }
+        access = it->second;
+        resolved = true;
+    }
+
+    if (!resolved) {
+        return;
+    }
+
+    if (access.size == 0) {
+        access.insn_ea = expr->ea;
+        access.source_func_ea = cfunc_->entry_ea;
+        access.offset = offset;
+        access.size = size;
+        access.access_type = AccessType::Read;
+        access.semantic_type = infer_semantic_from_usage(value_expr, parent_expr());
+        access.context_expr = utils::expr_to_string(value_expr, cfunc_);
+        access.inferred_type = value_expr->type;
+        access.base_indirection = base_indirection;
+    }
+
+    access.add_observed_constant(constant);
+    accesses_.push_back(std::move(access));
 }
 
 void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr_expr) {
@@ -818,6 +891,10 @@ void AccessCollector::deduplicate_accesses(AccessPattern& pattern) {
                     for (const auto& bf : access.bitfields) {
                         existing.add_bitfield(bf);
                     }
+                }
+
+                for (auto value : access.observed_constants) {
+                    existing.add_observed_constant(value);
                 }
 
                 if (access.array_stride_hint.has_value()) {

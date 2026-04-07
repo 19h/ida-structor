@@ -95,8 +95,16 @@ tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
     udt.total_size = synth_struct.size;
 
     std::unordered_map<uint64_t, tinfo_t> bitfield_enums;
+    std::unordered_map<uint64_t, tinfo_t> value_enums;
     for (const auto& field : synth_struct.fields) {
         if (!field.is_bitfield) {
+            uint64_t key = (static_cast<uint64_t>(field.offset) << 32) | field.size;
+            if (value_enums.find(key) == value_enums.end()) {
+                tinfo_t enum_type = create_value_enum_type(name, field);
+                if (!enum_type.empty()) {
+                    value_enums.emplace(key, enum_type);
+                }
+            }
             continue;
         }
 
@@ -161,7 +169,13 @@ tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
         } else {
             udm.offset = static_cast<uint64>(field.offset) * 8;  // Convert to bits
 
-            if (!field.type.empty()) {
+            uint64_t key = (static_cast<uint64_t>(field.offset) << 32) | field.size;
+            auto value_enum_it = value_enums.find(key);
+
+            if (value_enum_it != value_enums.end()) {
+                udm.type = value_enum_it->second;
+                udm.size = field.size * 8;
+            } else if (!field.type.empty()) {
                 udm.type = materialize_nested_type(name, field, field.type);
                 udm.size = field.type.get_size() * 8;
             } else {
@@ -760,6 +774,65 @@ tinfo_t StructurePersistence::create_bitmask_enum_type(
     if (tid == BADADDR) {
         return tinfo_t();
     }
+
+    tinfo_t enum_type;
+    enum_type.get_type_by_tid(tid);
+    return enum_type;
+}
+
+tinfo_t StructurePersistence::create_value_enum_type(
+    const qstring& base_name,
+    const SynthField& field)
+{
+    if (field.is_bitfield || field.size == 0 || field.size > 8) {
+        return tinfo_t();
+    }
+
+    std::unordered_set<std::uint64_t> values;
+    for (const auto& access : field.source_accesses) {
+        for (auto value : access.observed_constants) {
+            values.insert(value);
+        }
+    }
+
+    if (!values.empty()) {
+        msg("Structor:   Field '%s' has %zu observed constants\n",
+            field.name.c_str(), values.size());
+    }
+
+    if (values.size() < 2 || values.size() > 32) {
+        return tinfo_t();
+    }
+
+    qstring enum_name;
+    enum_name.sprnt("%s_%s_enum", base_name.c_str(), field.name.c_str());
+    if (struct_exists(enum_name.c_str())) {
+        enum_name = make_unique_name(enum_name.c_str());
+    }
+
+    enum_type_data_t ei(BTE_ALWAYS | BTE_HEX);
+    qvector<std::uint64_t> ordered;
+    ordered.reserve(values.size());
+    for (auto value : values) {
+        ordered.push_back(value);
+    }
+    std::sort(ordered.begin(), ordered.end());
+
+    for (auto value : ordered) {
+        qstring member_name;
+        member_name.sprnt("value_%llX", static_cast<unsigned long long>(value));
+        ei.push_back(edm_t(member_name.c_str(), value));
+    }
+
+    tid_t tid = create_enum_type(enum_name.c_str(), ei, static_cast<int>(field.size),
+                                 type_unsigned, true, "Structor recovered semantic constants");
+    if (tid == BADADDR) {
+        msg("Structor:   Failed to create semantic enum '%s'\n", enum_name.c_str());
+        return tinfo_t();
+    }
+
+    msg("Structor:   Created semantic enum '%s' for field '%s'\n",
+        enum_name.c_str(), field.name.c_str());
 
     tinfo_t enum_type;
     enum_type.get_type_by_tid(tid);

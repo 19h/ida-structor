@@ -33,6 +33,7 @@ private:
     void process_call_through_ptr(cexpr_t* call_expr);
     void process_array_access(cexpr_t* expr);
     void process_assignment(cexpr_t* expr);
+    void process_constant_comparison(cexpr_t* expr);
 
     void record_bitfield_access(const cexpr_t* expr, sval_t offset, uint32_t size,
                                 const BitfieldInfo& info,
@@ -53,6 +54,7 @@ private:
     int target_var_idx_;
     qvector<FieldAccess> accesses_;
     std::unordered_map<int, FieldAccess> local_aliases_;
+    std::unordered_map<int, qvector<std::uint64_t>> pending_constants_;
 };
 
 /// Collects all access patterns for a variable in a function

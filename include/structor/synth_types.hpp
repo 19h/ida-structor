@@ -178,6 +178,9 @@ struct FieldAccess {
     // Bitfield observations for this access (if any)
     qvector<BitfieldInfo> bitfields;
 
+    // Semantic constant comparisons observed for this access (e.g. field == 1)
+    qvector<std::uint64_t> observed_constants;
+
     // Array stride hint derived from index expressions (if any)
     std::optional<std::uint32_t> array_stride_hint;
 
@@ -234,6 +237,15 @@ struct FieldAccess {
             }
         }
         bitfields.push_back(info);
+    }
+
+    void add_observed_constant(std::uint64_t value) {
+        for (auto existing : observed_constants) {
+            if (existing == value) {
+                return;
+            }
+        }
+        observed_constants.push_back(value);
     }
 };
 
