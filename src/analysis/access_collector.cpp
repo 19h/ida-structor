@@ -308,14 +308,14 @@ void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr
 
         if (info.has_base && info.index_var >= 0) {
             auto bound_it = local_index_bounds_.find(info.index_var);
-            if (bound_it != local_index_bounds_.end()) {
-                tinfo_t pointed = ptr_expr->type.get_pointed_object();
-                size_t stride = pointed.empty() ? 0 : pointed.get_size();
-                if (stride == BADSIZE || stride == 0) {
-                    stride = !expr->type.empty() ? utils::get_type_size(expr->type, get_ptr_size()) : 0;
-                }
+            tinfo_t pointed = ptr_expr->type.get_pointed_object();
+            size_t stride = pointed.empty() ? 0 : pointed.get_size();
+            if (stride == BADSIZE || stride == 0) {
+                stride = !expr->type.empty() ? utils::get_type_size(expr->type, get_ptr_size()) : 0;
+            }
 
-                if (stride > 0 && bound_it->second > 0 && bound_it->second <= 32) {
+            if (stride > 0) {
+                if (bound_it != local_index_bounds_.end() && bound_it->second > 0 && bound_it->second <= 32) {
                     for (std::uint32_t idx = 0; idx < bound_it->second; ++idx) {
                         FieldAccess access;
                         access.insn_ea = expr->ea;
@@ -333,6 +333,23 @@ void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr
                         accesses_.push_back(std::move(access));
                     }
                     return;
+                } else {
+                    PendingSymbolicAccess pending;
+                    pending.insn_ea = expr->ea;
+                    pending.base_offset = (info.const_index) * static_cast<sval_t>(stride);
+                    pending.stride = static_cast<std::uint32_t>(stride);
+                    pending.size = !expr->type.empty()
+                        ? utils::get_type_size(expr->type, get_ptr_size())
+                        : get_ptr_size();
+                    pending.access_type = determine_access_type(expr);
+                    const cexpr_t* parent = parent_expr();
+                    pending.semantic_type = infer_semantic_from_usage(expr, parent);
+                    pending.context_expr = utils::expr_to_string(expr, cfunc_);
+                    pending.inferred_type = expr->type;
+                    if (arith.base_indirection > 0) {
+                        pending.base_indirection = arith.base_indirection;
+                    }
+                    pending_symbolic_accesses_[info.index_var].push_back(std::move(pending));
                 }
             }
         }

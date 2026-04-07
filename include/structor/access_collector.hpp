@@ -28,6 +28,18 @@ public:
     }
 
 private:
+    struct PendingSymbolicAccess {
+        ea_t insn_ea = BADADDR;
+        sval_t base_offset = 0;
+        std::uint32_t stride = 0;
+        std::uint32_t size = 0;
+        AccessType access_type = AccessType::Unknown;
+        SemanticType semantic_type = SemanticType::Unknown;
+        tinfo_t inferred_type;
+        qstring context_expr;
+        std::optional<std::uint8_t> base_indirection;
+    };
+
     void process_dereference(cexpr_t* expr, const cexpr_t* ptr_expr);
     void process_memptr_access(cexpr_t* expr);
     void process_call_through_ptr(cexpr_t* call_expr);
@@ -57,6 +69,7 @@ private:
     std::unordered_map<int, FieldAccess> local_aliases_;
     std::unordered_map<int, qvector<std::uint64_t>> pending_constants_;
     std::unordered_map<int, std::uint32_t> local_index_bounds_;
+    std::unordered_map<int, qvector<PendingSymbolicAccess>> pending_symbolic_accesses_;
 };
 
 /// Collects all access patterns for a variable in a function
