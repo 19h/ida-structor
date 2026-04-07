@@ -420,30 +420,61 @@ void TypePropagator::find_callees_with_arg(
     struct CallVisitor : public ctree_visitor_t {
         int target_var_idx;
         qvector<CalleeArgInfo>& results;
+        std::unordered_map<int, std::pair<int, sval_t>> aliases;
 
         CallVisitor(int var_idx, qvector<CalleeArgInfo>& r)
             : ctree_visitor_t(CV_FAST)
             , target_var_idx(var_idx)
             , results(r) {}
 
-        static const cexpr_t* find_base_var(const cexpr_t* expr) {
-            while (expr) {
-                if (expr->op == cot_var) return expr;
-                if (expr->op == cot_cast || expr->op == cot_ref || expr->op == cot_ptr) {
-                    expr = expr->x;
-                } else if (expr->op == cot_add || expr->op == cot_sub) {
-                    const cexpr_t* left = find_base_var(expr->x);
-                    if (left) return left;
-                    expr = expr->y;
-                } else if (expr->op == cot_memref || expr->op == cot_memptr) {
-                    expr = expr->x;
-                } else if (expr->op == cot_idx) {
-                    expr = expr->x;
-                } else {
-                    break;
-                }
+        bool resolve_var_delta(const cexpr_t* expr, int& var_idx, sval_t& delta) const {
+            if (!expr) {
+                return false;
             }
-            return nullptr;
+
+            switch (expr->op) {
+                case cot_var: {
+                    auto it = aliases.find(expr->v.idx);
+                    if (it != aliases.end()) {
+                        var_idx = it->second.first;
+                        delta += it->second.second;
+                    } else {
+                        var_idx = expr->v.idx;
+                    }
+                    return true;
+                }
+                case cot_cast:
+                case cot_ref:
+                case cot_ptr:
+                    return resolve_var_delta(expr->x, var_idx, delta);
+                case cot_add:
+                    if (expr->y && expr->y->op == cot_num && resolve_var_delta(expr->x, var_idx, delta)) {
+                        delta += static_cast<sval_t>(expr->y->numval());
+                        return true;
+                    }
+                    if (expr->x && expr->x->op == cot_num && resolve_var_delta(expr->y, var_idx, delta)) {
+                        delta += static_cast<sval_t>(expr->x->numval());
+                        return true;
+                    }
+                    return false;
+                case cot_sub:
+                    if (expr->y && expr->y->op == cot_num && resolve_var_delta(expr->x, var_idx, delta)) {
+                        delta -= static_cast<sval_t>(expr->y->numval());
+                        return true;
+                    }
+                    return false;
+                case cot_memptr:
+                case cot_memref:
+                    if (resolve_var_delta(expr->x, var_idx, delta)) {
+                        delta += expr->m;
+                        return true;
+                    }
+                    return false;
+                case cot_idx:
+                    return resolve_var_delta(expr->x, var_idx, delta);
+                default:
+                    return false;
+            }
         }
 
         static const cexpr_t* strip_casts_and_refs(const cexpr_t* expr) {
@@ -458,7 +489,7 @@ void TypePropagator::find_callees_with_arg(
             return expr && expr->op == cot_var && expr->v.idx == var_idx;
         }
 
-        static tinfo_t extract_member_arg_type(const cexpr_t* expr, int var_idx) {
+        tinfo_t extract_member_arg_type(const cexpr_t* expr, int var_idx) const {
             const bool by_ref = contains_ref(expr);
             expr = strip_casts_and_refs(expr);
             if (!expr) {
@@ -466,8 +497,9 @@ void TypePropagator::find_callees_with_arg(
             }
 
             if ((expr->op == cot_memptr || expr->op == cot_memref) && expr->x) {
-                const cexpr_t* base = find_base_var(expr->x);
-                if (base && base->op == cot_var && base->v.idx == var_idx && !expr->type.empty()) {
+                int base_var = -1;
+                sval_t delta = 0;
+                if (resolve_var_delta(expr->x, base_var, delta) && base_var == var_idx && !expr->type.empty()) {
                     tinfo_t member_type = expr->type;
                     if (by_ref) {
                         tinfo_t ptr_type;
@@ -481,16 +513,17 @@ void TypePropagator::find_callees_with_arg(
             return tinfo_t();
         }
 
-        static sval_t extract_member_offset(const cexpr_t* expr, int var_idx) {
+        sval_t extract_member_offset(const cexpr_t* expr, int var_idx) const {
             expr = strip_casts_and_refs(expr);
             if (!expr) {
                 return -1;
             }
 
             if ((expr->op == cot_memptr || expr->op == cot_memref) && expr->x) {
-                const cexpr_t* base = find_base_var(expr->x);
-                if (base && base->op == cot_var && base->v.idx == var_idx) {
-                    return static_cast<sval_t>(expr->m);
+                int base_var = -1;
+                sval_t delta = 0;
+                if (resolve_var_delta(expr->x, base_var, delta) && base_var == var_idx) {
+                    return delta + static_cast<sval_t>(expr->m);
                 }
             }
 
@@ -517,6 +550,17 @@ void TypePropagator::find_callees_with_arg(
         }
 
         int idaapi visit_expr(cexpr_t* expr) override {
+            if (!expr) return 0;
+
+            if (expr->op == cot_asg && expr->x && expr->x->op == cot_var && expr->y) {
+                int base_var = -1;
+                sval_t delta = 0;
+                if (resolve_var_delta(expr->y, base_var, delta)) {
+                    aliases[expr->x->v.idx] = {base_var, delta};
+                }
+                return 0;
+            }
+
             if (expr->op != cot_call || !expr->a) return 0;
 
             // Check if target is a direct call
@@ -533,9 +577,10 @@ void TypePropagator::find_callees_with_arg(
             // Check each argument
             for (size_t i = 0; i < expr->a->size(); ++i) {
                 const carg_t& arg = expr->a->at(i);
-                const cexpr_t* base = find_base_var(&arg);
+                int base_var = -1;
+                sval_t delta = 0;
 
-                if (base && base->op == cot_var && base->v.idx == target_var_idx) {
+                if (resolve_var_delta(&arg, base_var, delta) && base_var == target_var_idx) {
                     CalleeArgInfo info;
                     info.callee_ea = callee_ea;
                     info.param_idx = static_cast<int>(i);

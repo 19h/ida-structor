@@ -567,6 +567,7 @@ void CallerFinder::process_caller(ea_t caller_ea, ea_t call_site, qvector<Caller
         int param_idx;
         qvector<CallerCallInfo>* result;
         cfunc_t* cfunc;
+        std::unordered_map<int, std::pair<int, sval_t>> aliases;
 
         CallLocator(ea_t ea, ea_t callee, int idx, qvector<CallerCallInfo>* r, cfunc_t* cf)
             : ctree_visitor_t(CV_FAST)
@@ -595,8 +596,68 @@ void CallerFinder::process_caller(ea_t caller_ea, ea_t call_site, qvector<Caller
             }
         }
 
+        bool resolve_var_delta(const cexpr_t* expr, int& var_idx, sval_t& delta) const {
+            if (!expr) {
+                return false;
+            }
+
+            switch (expr->op) {
+                case cot_var: {
+                    auto it = aliases.find(expr->v.idx);
+                    if (it != aliases.end()) {
+                        var_idx = it->second.first;
+                        delta += it->second.second;
+                    } else {
+                        var_idx = expr->v.idx;
+                    }
+                    return true;
+                }
+                case cot_cast:
+                case cot_ref:
+                case cot_ptr:
+                    return resolve_var_delta(expr->x, var_idx, delta);
+                case cot_add: {
+                    if (expr->y && expr->y->op == cot_num && resolve_var_delta(expr->x, var_idx, delta)) {
+                        delta += static_cast<sval_t>(expr->y->numval());
+                        return true;
+                    }
+                    if (expr->x && expr->x->op == cot_num && resolve_var_delta(expr->y, var_idx, delta)) {
+                        delta += static_cast<sval_t>(expr->x->numval());
+                        return true;
+                    }
+                    return false;
+                }
+                case cot_sub:
+                    if (expr->y && expr->y->op == cot_num && resolve_var_delta(expr->x, var_idx, delta)) {
+                        delta -= static_cast<sval_t>(expr->y->numval());
+                        return true;
+                    }
+                    return false;
+                case cot_memptr:
+                case cot_memref:
+                    if (resolve_var_delta(expr->x, var_idx, delta)) {
+                        delta += expr->m;
+                        return true;
+                    }
+                    return false;
+                default:
+                    return false;
+            }
+        }
+
         int idaapi visit_expr(cexpr_t* e) override {
-            if (!e || e->op != cot_call) return 0;
+            if (!e) return 0;
+
+            if (e->op == cot_asg && e->x && e->x->op == cot_var && e->y) {
+                int base_var = -1;
+                sval_t delta = 0;
+                if (resolve_var_delta(e->y, base_var, delta)) {
+                    aliases[e->x->v.idx] = {base_var, delta};
+                }
+                return 0;
+            }
+
+            if (e->op != cot_call) return 0;
 
             // Check if this is the right call site
             if (e->ea != target_ea) return 0;
@@ -617,98 +678,10 @@ void CallerFinder::process_caller(ea_t caller_ea, ea_t call_site, qvector<Caller
                         result->push_back(std::move(info));
                     };
 
-                    // Check if argument is a simple variable reference (delta = 0)
-                    if (arg.op == cot_var) {
-                        push_info(arg.v.idx, 0);
-                    }
-                    // Also handle casts (delta = 0)
-                    else if (arg.op == cot_cast && arg.x && arg.x->op == cot_var) {
-                        push_info(arg.x->v.idx, 0);
-                    }
-                    // Handle ptr + delta (including casts like (char*)ptr + offset)
-                    else if (arg.op == cot_add) {
-                        cexpr_t* var_side = nullptr;
-                        sval_t delta = 0;
-
-                        // Helper lambda to unwrap casts and find underlying cot_var
-                        auto find_var = [](cexpr_t* expr) -> cexpr_t* {
-                            while (expr) {
-                                if (expr->op == cot_var) return expr;
-                                if (expr->op == cot_cast && expr->x) {
-                                    expr = expr->x;
-                                } else {
-                                    break;
-                                }
-                            }
-                            return nullptr;
-                        };
-
-                        // Try to find var and number on each side
-                        var_side = find_var(arg.x);
-                        if (var_side) {
-                            // x is the variable side, y might be the delta
-                            if (arg.y && arg.y->op == cot_num) {
-                                delta = static_cast<sval_t>(arg.y->numval());
-                            }
-                        } else {
-                            var_side = find_var(arg.y);
-                            if (var_side && arg.x && arg.x->op == cot_num) {
-                                delta = static_cast<sval_t>(arg.x->numval());
-                            }
-                        }
-
-                        if (var_side) {
-                            push_info(var_side->v.idx, delta);
-                        }
-                    }
-                    // Handle ptr - delta (negative offset)
-                    else if (arg.op == cot_sub) {
-                        cexpr_t* var_side = nullptr;
-                        sval_t delta = 0;
-
-                        auto find_var = [](cexpr_t* expr) -> cexpr_t* {
-                            while (expr) {
-                                if (expr->op == cot_var) return expr;
-                                if (expr->op == cot_cast && expr->x) {
-                                    expr = expr->x;
-                                } else {
-                                    break;
-                                }
-                            }
-                            return nullptr;
-                        };
-
-                        var_side = find_var(arg.x);
-                        if (var_side && arg.y && arg.y->op == cot_num) {
-                            delta = -static_cast<sval_t>(arg.y->numval());
-                            push_info(var_side->v.idx, delta);
-                        }
-                    }
-                    // Handle &struct.field (cot_ref of member access)
-                    else if (arg.op == cot_ref && arg.x) {
-                        cexpr_t* inner = arg.x;
-                        sval_t field_offset = 0;
-
-                        // Unwrap to find the base variable and accumulate field offsets
-                        while (inner) {
-                            if (inner->op == cot_var) {
-                                push_info(inner->v.idx, field_offset);
-                                break;
-                            }
-                            if (inner->op == cot_memref || inner->op == cot_memptr) {
-                                // Accumulate the member offset
-                                field_offset += inner->m;
-                                inner = inner->x;
-                            } else if (inner->op == cot_idx && inner->y && inner->y->op == cot_num) {
-                                // Array indexing: accumulate index * element_size
-                                // For now, just track the index offset
-                                inner = inner->x;
-                            } else if (inner->op == cot_cast) {
-                                inner = inner->x;
-                            } else {
-                                break;
-                            }
-                        }
+                    int base_var = -1;
+                    sval_t delta = 0;
+                    if (resolve_var_delta(&arg, base_var, delta)) {
+                        push_info(base_var, delta);
                     }
                 }
             }

@@ -95,6 +95,11 @@ int AccessPatternVisitor::visit_expr(cexpr_t* expr) {
             process_constant_comparison(expr);
             break;
 
+        case cot_ult:
+        case cot_ule:
+            process_index_bound(expr);
+            break;
+
         case cot_call:
             // Check for indirect calls through our variable
             process_call_through_ptr(expr);
@@ -227,8 +232,111 @@ void AccessPatternVisitor::process_constant_comparison(cexpr_t* expr) {
     accesses_.push_back(std::move(access));
 }
 
+void AccessPatternVisitor::process_index_bound(cexpr_t* expr) {
+    if (!expr || !expr->x || !expr->y) {
+        return;
+    }
+
+    const cexpr_t* var_expr = nullptr;
+    std::uint32_t bound = 0;
+
+    if (expr->x->op == cot_num && expr->y->op == cot_var) {
+        bound = static_cast<std::uint32_t>(expr->x->numval());
+        var_expr = expr->y;
+    } else if (expr->y->op == cot_num && expr->x->op == cot_var) {
+        bound = static_cast<std::uint32_t>(expr->y->numval());
+        var_expr = expr->x;
+    } else if (expr->y->op == cot_num && expr->x->op == cot_cast && expr->x->x && expr->x->x->op == cot_var) {
+        bound = static_cast<std::uint32_t>(expr->y->numval());
+        var_expr = expr->x->x;
+    } else {
+        return;
+    }
+
+    if (!var_expr || var_expr->op != cot_var || bound == 0 || bound > 32) {
+        return;
+    }
+
+    local_index_bounds_[var_expr->v.idx] = bound;
+}
+
 void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr_expr) {
     auto arith = utils::extract_ptr_arith(expr);
+
+    if (!arith.valid && ptr_expr) {
+        struct SymbolicPtrInfo {
+            bool has_base = false;
+            int index_var = -1;
+            sval_t const_index = 0;
+        } info;
+
+        std::function<void(const cexpr_t*)> walk = [&](const cexpr_t* e) {
+            if (!e) {
+                return;
+            }
+            switch (e->op) {
+                case cot_var:
+                    if (e->v.idx == target_var_idx_) {
+                        info.has_base = true;
+                    } else if (info.index_var < 0) {
+                        info.index_var = e->v.idx;
+                    }
+                    break;
+                case cot_num:
+                    info.const_index += static_cast<sval_t>(e->numval());
+                    break;
+                case cot_cast:
+                case cot_ref:
+                    walk(e->x);
+                    break;
+                case cot_add:
+                    walk(e->x);
+                    walk(e->y);
+                    break;
+                case cot_sub:
+                    walk(e->x);
+                    if (e->y && e->y->op == cot_num) {
+                        info.const_index -= static_cast<sval_t>(e->y->numval());
+                    }
+                    break;
+                default:
+                    break;
+            }
+        };
+
+        walk(ptr_expr);
+
+        if (info.has_base && info.index_var >= 0) {
+            auto bound_it = local_index_bounds_.find(info.index_var);
+            if (bound_it != local_index_bounds_.end()) {
+                tinfo_t pointed = ptr_expr->type.get_pointed_object();
+                size_t stride = pointed.empty() ? 0 : pointed.get_size();
+                if (stride == BADSIZE || stride == 0) {
+                    stride = !expr->type.empty() ? utils::get_type_size(expr->type, get_ptr_size()) : 0;
+                }
+
+                if (stride > 0 && bound_it->second > 0 && bound_it->second <= 32) {
+                    for (std::uint32_t idx = 0; idx < bound_it->second; ++idx) {
+                        FieldAccess access;
+                        access.insn_ea = expr->ea;
+                        access.offset = (info.const_index + static_cast<sval_t>(idx)) * static_cast<sval_t>(stride);
+                        access.size = !expr->type.empty()
+                            ? utils::get_type_size(expr->type, get_ptr_size())
+                            : get_ptr_size();
+                        access.access_type = determine_access_type(expr);
+                        const cexpr_t* parent = parent_expr();
+                        access.semantic_type = infer_semantic_from_usage(expr, parent);
+                        access.context_expr = utils::expr_to_string(expr, cfunc_);
+                        access.inferred_type = expr->type;
+                        access.source_func_ea = cfunc_->entry_ea;
+                        access.array_stride_hint = static_cast<std::uint32_t>(stride);
+                        accesses_.push_back(std::move(access));
+                    }
+                    return;
+                }
+            }
+        }
+    }
 
     if (!arith.valid || arith.var_idx != target_var_idx_) {
         return;
@@ -341,6 +449,33 @@ void AccessPatternVisitor::process_array_access(cexpr_t* expr) {
             offset += expr->y->numval() * static_cast<sval_t>(*stride_hint);
         } else {
             offset += expr->y->numval();
+        }
+    }
+
+    if (expr->y->op == cot_var && stride_hint.has_value()) {
+        auto it = local_index_bounds_.find(expr->y->v.idx);
+        if (it != local_index_bounds_.end()) {
+            const std::uint32_t bound = it->second;
+            for (std::uint32_t idx = 0; idx < bound; ++idx) {
+                FieldAccess bounded;
+                bounded.insn_ea = expr->ea;
+                bounded.offset = offset + static_cast<sval_t>(idx) * static_cast<sval_t>(*stride_hint);
+                bounded.size = !expr->type.empty()
+                    ? utils::get_type_size(expr->type, get_ptr_size())
+                    : get_ptr_size();
+                bounded.access_type = determine_access_type(expr);
+                const cexpr_t* parent = parent_expr();
+                bounded.semantic_type = infer_semantic_from_usage(expr, parent);
+                if (arith.base_indirection > 0) {
+                    bounded.base_indirection = arith.base_indirection;
+                }
+                bounded.context_expr = utils::expr_to_string(expr, cfunc_);
+                bounded.inferred_type = expr->type;
+                bounded.source_func_ea = cfunc_->entry_ea;
+                bounded.array_stride_hint = stride_hint;
+                accesses_.push_back(std::move(bounded));
+            }
+            return;
         }
     }
 
