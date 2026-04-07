@@ -185,7 +185,13 @@ namespace {
             append_gap_member(cursor, stride - cursor);
         }
 
-        return out_type.create_udt(udt);
+        if (!out_type.create_udt(udt)) {
+            return false;
+        }
+
+        out_type.set_udt_pack(1);
+        out_type.set_udt_alignment(1);
+        return true;
     }
 
     void augment_struct_array_candidate(ArrayCandidate& array, const UnifiedAccessPattern& pattern) {
@@ -351,10 +357,6 @@ namespace {
             return a.size > b.size;
         });
 
-        if (repeated.size() > 4) {
-            repeated.resize(4);
-        }
-
         uint32_t effective_count = count;
         for (const auto& field : repeated) {
             std::unordered_set<uint32_t> indices;
@@ -410,32 +412,8 @@ namespace {
             return std::nullopt;
         }
 
-        udt_type_data_t udt;
-        udt.is_union = false;
-        udt.total_size = stride;
-
-        for (const auto& field : repeated) {
-            udm_t udm;
-            udm.offset = static_cast<uint64>(field.inner_offset) * 8;
-            udm.name = generate_field_name(field.inner_offset);
-            if (!field.type.empty()) {
-                udm.type = field.type;
-                udm.size = field.type.get_size() * 8;
-            } else {
-                tinfo_t byte_type;
-                byte_type.create_simple_type(BT_INT8 | BTMT_USIGNED);
-                if (field.size > 1) {
-                    udm.type.create_array(byte_type, field.size);
-                } else {
-                    udm.type = byte_type;
-                }
-                udm.size = field.size * 8;
-            }
-            udt.push_back(udm);
-        }
-
         tinfo_t elem_type;
-        if (!elem_type.create_udt(udt)) {
+        if (!build_struct_type_from_groups(repeated, stride, elem_type)) {
             return std::nullopt;
         }
 

@@ -154,6 +154,9 @@ tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
         return BADADDR;
     }
 
+    struct_type.set_udt_pack(1);
+    struct_type.set_udt_alignment(1);
+
     // Save to local type library
     tinfo_code_t err = struct_type.set_named_type(nullptr, name.c_str(), NTF_TYPE | NTF_REPLACE);
     if (err != TERR_OK) {
@@ -354,6 +357,9 @@ bool StructurePersistence::update_struct(tid_t tid, const SynthStruct& synth_str
     if (!new_type.create_udt(udt)) {
         return false;
     }
+
+    new_type.set_udt_pack(1);
+    new_type.set_udt_alignment(1);
 
     tinfo_code_t err = new_type.set_named_type(nullptr, name.c_str(), NTF_TYPE | NTF_REPLACE);
     if (err != TERR_OK) {
