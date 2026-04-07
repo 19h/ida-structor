@@ -930,10 +930,13 @@ struct RewriteResult {
         default: break;
     }
 
-    if (offset < 0) {
-        name.sprnt("%s_neg_%X", prefix, static_cast<unsigned>(-offset));
+    const int64_t signed_offset = static_cast<int64_t>(offset);
+    if (signed_offset < 0) {
+        name.sprnt("%s_neg_%llX", prefix,
+                   static_cast<unsigned long long>(-signed_offset));
     } else {
-        name.sprnt("%s_%X", prefix, static_cast<unsigned>(offset));
+        name.sprnt("%s_%llX", prefix,
+                   static_cast<unsigned long long>(signed_offset));
     }
     return name;
 }
