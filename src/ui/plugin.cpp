@@ -379,6 +379,13 @@ ssize_t StructorPlugin::on_event(ssize_t code, va_list /*va*/) {
 void StructorPlugin::on_decompilation_complete(cfunc_t* cfunc) {
     if (!cfunc) return;
 
+    // When running an explicit non-interactive auto-synthesis session
+    // (used by idump verification), do not let the background type fixer
+    // mutate the database at the same time.
+    if (pending_synth_ea_ != BADADDR) {
+        return;
+    }
+
     ea_t func_ea = cfunc->entry_ea;
 
     // Check if we've already processed this function

@@ -58,6 +58,15 @@ namespace {
             return false;
         }
 
+        const bool compact_byte_array =
+            other.kind == FieldCandidate::Kind::ArrayField &&
+            other.type_category == TypeCategory::UInt8 &&
+            other.array_stride.value_or(0) == 1 &&
+            other.size <= 16;
+        if (compact_byte_array) {
+            return false;
+        }
+
         if (array_candidate.offset > other.offset ||
             array_candidate.end_offset() < other.end_offset()) {
             return false;

@@ -102,6 +102,15 @@ namespace {
     }
 
     inline bool should_prefer_candidate(const FieldCandidate& preferred, const FieldCandidate& other) {
+        const bool compact_byte_array =
+            other.kind == FieldCandidate::Kind::ArrayField &&
+            other.type_category == TypeCategory::UInt8 &&
+            other.array_stride.value_or(0) == 1 &&
+            other.size <= 16;
+        if (compact_byte_array) {
+            return false;
+        }
+
         if (!preferred.overlaps(other)) {
             return false;
         }

@@ -306,6 +306,38 @@ inline SynthResult StructorAPI::do_synthesis(ea_t func_ea, int var_idx, const Sy
         return SynthResult::make_error(SynthError::InternalError, "Failed to decompile function");
     }
 
+    lvars_t* lvars = cfunc->get_lvars();
+    if (!lvars || var_idx < 0 || static_cast<size_t>(var_idx) >= lvars->size()) {
+        return SynthResult::make_error(SynthError::InvalidVariable, "Invalid variable index");
+    }
+
+    const lvar_t& var = lvars->at(static_cast<size_t>(var_idx));
+    tinfo_t current_type = var.type();
+    tinfo_t current_struct = current_type;
+    if (current_struct.is_ptr()) {
+        current_struct = current_struct.get_pointed_object();
+    }
+
+    qstring current_name;
+    current_struct.get_type_name(&current_name);
+    qstring current_decl;
+    current_type.print(&current_decl);
+    if ((!current_name.empty() && current_name.find("synth_struct_") == 0) ||
+        (!current_decl.empty() && current_decl.find("synth_struct_") != qstring::npos)) {
+        tid_t existing_tid = current_struct.get_tid();
+        if (existing_tid != BADADDR) {
+            result.struct_tid = existing_tid;
+            result.error = SynthError::Success;
+
+            udt_type_data_t udt;
+            if (current_struct.get_udt_details(&udt)) {
+                result.fields_created = static_cast<int>(udt.size());
+            }
+
+            return result;
+        }
+    }
+
     // Collect access patterns
     AccessCollector collector(opts);
     AccessPattern pattern = collector.collect(cfunc, var_idx);
