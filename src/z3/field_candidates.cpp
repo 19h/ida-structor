@@ -46,6 +46,34 @@ namespace {
         }
     };
 
+    bool is_dominated_by_struct_array(const FieldCandidate& array_candidate,
+                                      const FieldCandidate& other) {
+        if (array_candidate.kind != FieldCandidate::Kind::ArrayField ||
+            array_candidate.type_category != TypeCategory::Struct) {
+            return false;
+        }
+
+        if (other.kind != FieldCandidate::Kind::DirectAccess &&
+            other.kind != FieldCandidate::Kind::ArrayField) {
+            return false;
+        }
+
+        if (array_candidate.offset > other.offset ||
+            array_candidate.end_offset() < other.end_offset()) {
+            return false;
+        }
+
+        if (other.kind == FieldCandidate::Kind::DirectAccess) {
+            return other.offset == array_candidate.offset ||
+                   (other.offset >= array_candidate.offset &&
+                    other.offset < array_candidate.end_offset() &&
+                    array_candidate.source_access_indices.size() > other.source_access_indices.size());
+        }
+
+        return array_candidate.offset < other.offset ||
+               array_candidate.source_access_indices.size() > other.source_access_indices.size();
+    }
+
     bool build_struct_type_from_groups(
         const qvector<MixedStrideField>& fields,
         uint32_t stride,
@@ -389,6 +417,26 @@ qvector<FieldCandidate> FieldCandidateGenerator::generate(
         generate_padding_candidates(candidates, pattern.global_max_offset, candidates);
         z3_log("[Structor/Z3]   Padding candidates: %zu\n", candidates.size() - before_padding);
     }
+
+    // Step 5: Prune candidates dominated by richer struct-array candidates.
+    qvector<FieldCandidate> pruned;
+    pruned.reserve(candidates.size());
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        bool dominated = false;
+        for (size_t j = 0; j < candidates.size(); ++j) {
+            if (i == j) {
+                continue;
+            }
+            if (is_dominated_by_struct_array(candidates[j], candidates[i])) {
+                dominated = true;
+                break;
+            }
+        }
+        if (!dominated) {
+            pruned.push_back(std::move(candidates[i]));
+        }
+    }
+    candidates = std::move(pruned);
 
     // Finalize: assign IDs and sort
     finalize_candidates(candidates);

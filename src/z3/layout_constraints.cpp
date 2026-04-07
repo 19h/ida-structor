@@ -69,6 +69,55 @@ namespace {
         int multiplier = clamp_weight(static_cast<int>((size + 3) / 4), 1, 10);
         return base_weight * multiplier;
     }
+
+    inline int candidate_specificity_score(const FieldCandidate& cand) {
+        int score = 0;
+
+        switch (cand.kind) {
+            case FieldCandidate::Kind::ArrayField: score += 40; break;
+            case FieldCandidate::Kind::DirectAccess: score += 5; break;
+            case FieldCandidate::Kind::ArrayElement: score += 2; break;
+            default: break;
+        }
+
+        switch (cand.type_category) {
+            case TypeCategory::Struct: score += 25; break;
+            case TypeCategory::Union: score += 20; break;
+            case TypeCategory::Array: score += 15; break;
+            case TypeCategory::RawBytes:
+            case TypeCategory::Unknown:
+                score -= 10;
+                break;
+            default:
+                score += 5;
+                break;
+        }
+
+        score += clamp_weight(static_cast<int>(cand.source_access_indices.size()), 0, 16) * 3;
+        if (cand.array_element_count.has_value()) {
+            score += clamp_weight(static_cast<int>(*cand.array_element_count), 0, 8) * 2;
+        }
+
+        return score;
+    }
+
+    inline bool should_prefer_candidate(const FieldCandidate& preferred, const FieldCandidate& other) {
+        if (!preferred.overlaps(other)) {
+            return false;
+        }
+
+        if (!(preferred.contains(other) || other.contains(preferred))) {
+            return false;
+        }
+
+        const int preferred_score = candidate_specificity_score(preferred);
+        const int other_score = candidate_specificity_score(other);
+        if (preferred_score == other_score) {
+            return preferred.offset < other.offset;
+        }
+
+        return preferred_score > other_score;
+    }
 }
 
 // ============================================================================
@@ -731,6 +780,31 @@ void LayoutConstraintBuilder::add_type_preference_constraints() {
                 
                 constraint_tracker_.add_soft(solver_, !field_vars_[idx_j].selected, prov, weight);
                 ++preference_count;
+            } else if (!c1_is_raw && !c2_is_raw) {
+                const FieldCandidate* preferred = nullptr;
+                size_t penalize_idx = 0;
+
+                if (should_prefer_candidate(c1, c2)) {
+                    preferred = &c1;
+                    penalize_idx = idx_j;
+                } else if (should_prefer_candidate(c2, c1)) {
+                    preferred = &c2;
+                    penalize_idx = idx_i;
+                }
+
+                if (preferred) {
+                    ConstraintProvenance prov;
+                    prov.description.sprnt("Prefer richer aggregate at 0x%llX over overlap at 0x%llX",
+                        static_cast<unsigned long long>(preferred->offset),
+                        static_cast<unsigned long long>(candidates_[field_vars_[penalize_idx].candidate_id].offset));
+                    int weight = access_weight(*preferred, std::max(2, config_.weight_prefer_arrays));
+                    prov.is_soft = true;
+                    prov.kind = ConstraintProvenance::Kind::TypeMatch;
+                    prov.weight = weight;
+
+                    constraint_tracker_.add_soft(solver_, !field_vars_[penalize_idx].selected, prov, weight);
+                    ++preference_count;
+                }
             }
         }
     } else {
@@ -777,6 +851,31 @@ void LayoutConstraintBuilder::add_type_preference_constraints() {
                     
                     constraint_tracker_.add_soft(solver_, !field_vars_[j].selected, prov, weight);
                     ++preference_count;
+                } else if (!c1_is_raw && !c2_is_raw) {
+                    const FieldCandidate* preferred = nullptr;
+                    size_t penalize_idx = 0;
+
+                    if (should_prefer_candidate(c1, c2)) {
+                        preferred = &c1;
+                        penalize_idx = j;
+                    } else if (should_prefer_candidate(c2, c1)) {
+                        preferred = &c2;
+                        penalize_idx = i;
+                    }
+
+                    if (preferred) {
+                        ConstraintProvenance prov;
+                        prov.description.sprnt("Prefer richer aggregate at 0x%llX over overlap at 0x%llX",
+                            static_cast<unsigned long long>(preferred->offset),
+                            static_cast<unsigned long long>(candidates_[field_vars_[penalize_idx].candidate_id].offset));
+                        int weight = access_weight(*preferred, std::max(2, config_.weight_prefer_arrays));
+                        prov.is_soft = true;
+                        prov.kind = ConstraintProvenance::Kind::TypeMatch;
+                        prov.weight = weight;
+
+                        constraint_tracker_.add_soft(solver_, !field_vars_[penalize_idx].selected, prov, weight);
+                        ++preference_count;
+                    }
                 }
             }
         }
