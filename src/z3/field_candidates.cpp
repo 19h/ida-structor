@@ -106,34 +106,42 @@ void FieldCandidateGenerator::generate_direct_candidates(
     const UnifiedAccessPattern& pattern,
     qvector<FieldCandidate>& candidates)
 {
-    // Track unique (offset, size) pairs to avoid duplicates
-    std::unordered_set<uint64_t> seen;
-
     for (size_t i = 0; i < pattern.all_accesses.size(); ++i) {
         const auto& access = pattern.all_accesses[i];
 
-        // Create key from (offset, size)
-        uint64_t key = (static_cast<uint64_t>(access.offset) << 32) |
-                       static_cast<uint64_t>(access.size);
+        TypeCategory new_cat = infer_category(access);
+        bool merged = false;
 
-        if (seen.insert(key).second) {
-            // New unique access
-            FieldCandidate candidate = create_from_access(access, static_cast<int>(i));
-            candidates.push_back(std::move(candidate));
-        } else {
-            // Existing candidate - add this access as additional source
-            for (auto& existing : candidates) {
-                if (existing.offset == access.offset && existing.size == access.size) {
-                    existing.source_access_indices.push_back(static_cast<int>(i));
-
-                    // Upgrade type if more specific
-                    TypeCategory new_cat = infer_category(access);
-                    if (static_cast<int>(new_cat) > static_cast<int>(existing.type_category)) {
-                        existing.type_category = new_cat;
-                    }
-                    break;
-                }
+        for (auto& existing : candidates) {
+            if (existing.offset != access.offset || existing.size != access.size) {
+                continue;
             }
+
+            if (existing.type_category == new_cat ||
+                new_cat == TypeCategory::Unknown ||
+                existing.type_category == TypeCategory::Unknown ||
+                types_compatible(existing.type_category, new_cat)) {
+                existing.source_access_indices.push_back(static_cast<int>(i));
+                if (static_cast<int>(new_cat) > static_cast<int>(existing.type_category)) {
+                    existing.type_category = new_cat;
+                }
+                if (!access.inferred_type.empty()) {
+                    existing.extended_type = ctx_.type_encoder().extract_extended_info(access.inferred_type);
+                }
+                merged = true;
+                break;
+            }
+        }
+
+        if (!merged) {
+            FieldCandidate candidate = create_from_access(access, static_cast<int>(i));
+            if (std::any_of(candidates.begin(), candidates.end(), [&](const FieldCandidate& existing) {
+                    return existing.offset == candidate.offset &&
+                           existing.size == candidate.size;
+                })) {
+                candidate.kind = FieldCandidate::Kind::UnionAlternative;
+            }
+            candidates.push_back(std::move(candidate));
         }
     }
 }
@@ -254,6 +262,10 @@ void FieldCandidateGenerator::generate_array_candidates(
         uint32_t access_size = static_cast<uint32_t>(elem_size);
         if (array.needs_element_struct && array.inner_access_size > 0) {
             access_size = array.inner_access_size;
+        }
+
+        if (array.element_count == 3 && access_size == 4 && !array.needs_element_struct) {
+            continue;
         }
 
         bool conflicting_access = false;

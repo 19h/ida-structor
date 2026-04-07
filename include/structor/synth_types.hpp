@@ -302,6 +302,13 @@ enum class TypeConfidence : std::uint8_t {
 
 /// A single field in a synthesized structure
 struct SynthField {
+    struct UnionMember {
+        qstring name;
+        std::uint32_t size = 0;
+        tinfo_t type;
+        qstring comment;
+    };
+
     qstring         name;           // Field name (e.g., "field_10")
     sval_t          offset;         // Byte offset in structure
     std::uint32_t   size;           // Field size
@@ -317,6 +324,7 @@ struct SynthField {
     std::uint16_t   bit_size;       // Bit size of the bitfield
     TypeConfidence  confidence;     // How confident we are in the type
     qvector<FieldAccess> source_accesses;  // Accesses that contributed to this field
+    qvector<UnionMember> union_members;    // Alternatives when this field is a union
 
     SynthField()
         : offset(0)
@@ -922,7 +930,11 @@ struct RewriteResult {
         default: break;
     }
 
-    name.sprnt("%s_%X", prefix, static_cast<unsigned>(offset));
+    if (offset < 0) {
+        name.sprnt("%s_neg_%X", prefix, static_cast<unsigned>(-offset));
+    } else {
+        name.sprnt("%s_%X", prefix, static_cast<unsigned>(offset));
+    }
     return name;
 }
 

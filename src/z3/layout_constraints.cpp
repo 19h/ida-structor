@@ -1268,10 +1268,22 @@ SynthField LayoutConstraintBuilder::create_union_field(
     union_field.semantic = SemanticType::Unknown;
 
     // Create union type
-    // For now, use the largest member's type
+    union_field.union_members.clear();
+
+    // For now, use the largest member's type as the representative field type,
+    // but preserve all alternatives so persistence can materialize a real union.
     const FieldCandidate* largest = nullptr;
     for (int idx : overlapping_ids) {
         const auto& cand = candidates_[field_vars_[idx].candidate_id];
+        SynthField alt = field_from_candidate(cand, ctx_.type_encoder(),
+                                              pattern_ ? &pattern_->all_accesses : nullptr);
+        SynthField::UnionMember member;
+        member.name = alt.name;
+        member.size = alt.size;
+        member.type = alt.type;
+        member.comment = alt.comment;
+        union_field.union_members.push_back(std::move(member));
+
         if (!largest || cand.size > largest->size) {
             largest = &cand;
         }
@@ -1325,6 +1337,31 @@ bool LayoutConstraintBuilder::candidate_covers_access(
     const FieldCandidate& candidate,
     const FieldAccess& access) const
 {
+    if ((candidate.type_category == TypeCategory::Array ||
+         candidate.type_category == TypeCategory::Struct ||
+         candidate.type_category == TypeCategory::Union) &&
+        candidate.kind == FieldCandidate::Kind::DirectAccess) {
+        return candidate.offset == access.offset && candidate.size == access.size;
+    }
+
+    if ((candidate.kind == FieldCandidate::Kind::DirectAccess ||
+         candidate.kind == FieldCandidate::Kind::UnionAlternative) &&
+        candidate.offset == access.offset && candidate.size == access.size &&
+        candidate.type_category != TypeCategory::RawBytes) {
+        TypeCategory access_cat = TypeCategory::Unknown;
+        if (!access.inferred_type.empty()) {
+            access_cat = ctx_.type_encoder().categorize(access.inferred_type);
+        } else {
+            access_cat = semantic_to_category(static_cast<int>(access.semantic_type));
+        }
+
+        if (access_cat != TypeCategory::Unknown && access_cat != TypeCategory::RawBytes &&
+            access_cat != candidate.type_category &&
+            !types_compatible(candidate.type_category, access_cat)) {
+            return false;
+        }
+    }
+
     // Candidate covers access if:
     //   cand.offset <= access.offset AND
     //   cand.offset + cand.size >= access.offset + access.size

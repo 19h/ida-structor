@@ -62,6 +62,24 @@ tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
     msg("Structor: Creating struct '%s' with %zu fields, total_size=%u\n",
         name.c_str(), synth_struct.fields.size(), synth_struct.size);
     for (const auto& field : synth_struct.fields) {
+        if (field.is_union_candidate && !field.union_members.empty()) {
+            qvector<SynthField> members;
+            members.reserve(field.union_members.size());
+            for (const auto& alt : field.union_members) {
+                SynthField member;
+                member.name = alt.name;
+                member.size = alt.size;
+                member.type = alt.type;
+                member.comment = alt.comment;
+                members.push_back(std::move(member));
+            }
+
+            qstring union_name = field.name.empty() ? qstring("union") : field.name;
+            if (add_union_field(udt, field.offset, union_name, members) != BADADDR) {
+                continue;
+            }
+        }
+
         msg("Structor:   Adding field '%s' at offset 0x%llX (bits: 0x%llX), size=%u\n",
             field.name.c_str(), static_cast<unsigned long long>(field.offset),
             static_cast<unsigned long long>(field.offset) * 8, field.size);

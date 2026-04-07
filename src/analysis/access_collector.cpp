@@ -787,6 +787,41 @@ void AccessCollector::deduplicate_accesses(AccessPattern& pattern) {
     }
 
     pattern.accesses = std::move(unique);
+
+    // Drop coarse aggregate accesses when we already observed finer-grained
+    // accesses inside the same region. These usually come from decompiler-
+    // synthesized array/struct expressions and can overwhelm real field
+    // recovery by forcing overly large direct candidates.
+    qvector<FieldAccess> filtered;
+    filtered.reserve(pattern.accesses.size());
+
+    for (const auto& access : pattern.accesses) {
+        bool redundant_aggregate = false;
+        if (!access.inferred_type.empty() &&
+            (access.inferred_type.is_array() || access.inferred_type.is_struct())) {
+            int contained_smaller = 0;
+            const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
+
+            for (const auto& other : pattern.accesses) {
+                if (&other == &access) {
+                    continue;
+                }
+                const sval_t other_end = other.offset + static_cast<sval_t>(other.size);
+                if (other.offset >= access.offset && other_end <= access_end &&
+                    (other.size < access.size || other.offset != access.offset)) {
+                    ++contained_smaller;
+                }
+            }
+
+            redundant_aggregate = contained_smaller >= 2;
+        }
+
+        if (!redundant_aggregate) {
+            filtered.push_back(access);
+        }
+    }
+
+    pattern.accesses = std::move(filtered);
     utils::debug_log("After deduplication: %zu unique accesses", pattern.accesses.size());
 }
 

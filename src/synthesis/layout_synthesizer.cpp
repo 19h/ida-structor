@@ -761,15 +761,7 @@ void LayoutSynthesizer::detect_subobjects(
                 continue;
             }
 
-            bool removable = !field.source_accesses.empty();
-            if (removable) {
-                for (const auto& access : field.source_accesses) {
-                    if (group.funcs.count(access.source_func_ea) == 0) {
-                        removable = false;
-                        break;
-                    }
-                }
-            }
+            bool removable = field.offset >= delta && field_end <= sub_end;
 
             if (removable) {
                 remove_indices.push_back(i);
