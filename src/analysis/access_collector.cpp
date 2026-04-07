@@ -150,6 +150,8 @@ void AccessPatternVisitor::process_assignment(cexpr_t* expr) {
     if (resolved) {
         auto pending_it = pending_constants_.find(lhs->v.idx);
         if (pending_it != pending_constants_.end()) {
+            msg("Structor:   Applying %zu pending constants to local v%d\n",
+                pending_it->second.size(), lhs->v.idx);
             for (auto value : pending_it->second) {
                 alias.add_observed_constant(value);
             }
@@ -193,6 +195,8 @@ void AccessPatternVisitor::process_constant_comparison(cexpr_t* expr) {
     if (!resolved && value_expr->op == cot_var) {
         auto it = local_aliases_.find(value_expr->v.idx);
         if (it == local_aliases_.end()) {
+            msg("Structor:   Queueing constant 0x%llX for unresolved local v%d\n",
+                static_cast<unsigned long long>(constant), value_expr->v.idx);
             pending_constants_[value_expr->v.idx].push_back(constant);
             return;
         }
@@ -216,6 +220,9 @@ void AccessPatternVisitor::process_constant_comparison(cexpr_t* expr) {
         access.base_indirection = base_indirection;
     }
 
+    msg("Structor:   Observed comparison constant 0x%llX at offset 0x%llX size=%u\n",
+        static_cast<unsigned long long>(constant),
+        static_cast<unsigned long long>(access.offset), access.size);
     access.add_observed_constant(constant);
     accesses_.push_back(std::move(access));
 }
