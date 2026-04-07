@@ -37,7 +37,7 @@ void rebase_negative_offsets(SynthStruct& structure, qvector<SubStructInfo>* sub
         }
     }
 
-    structure.name.cat_sprnt("_window");
+    structure.name.cat_sprnt("_window_%llX", static_cast<unsigned long long>(delta));
 }
 
 } // namespace

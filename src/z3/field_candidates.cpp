@@ -102,7 +102,39 @@ namespace {
         udt.is_union = false;
         udt.total_size = stride;
 
+        auto append_gap_member = [&](uint32_t offset, uint32_t size) {
+            if (size == 0) {
+                return;
+            }
+
+            udm_t gap;
+            gap.offset = static_cast<uint64>(offset) * 8;
+            gap.name = generate_field_name(offset);
+
+            if (size == 4) {
+                gap.type.create_simple_type(BT_INT32 | BTMT_UNSIGNED);
+            } else if (size == 2) {
+                gap.type.create_simple_type(BT_INT16 | BTMT_UNSIGNED);
+            } else if (size == 1) {
+                gap.type.create_simple_type(BT_INT8 | BTMT_UNSIGNED);
+            } else {
+                tinfo_t byte_type;
+                byte_type.create_simple_type(BT_INT8 | BTMT_UNSIGNED);
+                gap.type.create_array(byte_type, size);
+            }
+
+            const asize_t member_size = gap.type.get_size();
+            gap.size = member_size == BADSIZE ? size * 8 : member_size * 8;
+            udt.push_back(gap);
+        };
+
+        uint32_t cursor = 0;
+
         for (const auto& field : fields) {
+            if (field.inner_offset > cursor) {
+                append_gap_member(cursor, field.inner_offset - cursor);
+            }
+
             udm_t udm;
             udm.offset = static_cast<uint64>(field.inner_offset) * 8;
             udm.name = generate_field_name(field.inner_offset);
@@ -120,6 +152,12 @@ namespace {
                 udm.size = field.size * 8;
             }
             udt.push_back(udm);
+
+            cursor = std::max(cursor, field.inner_offset + field.size);
+        }
+
+        if (cursor < stride) {
+            append_gap_member(cursor, stride - cursor);
         }
 
         return out_type.create_udt(udt);

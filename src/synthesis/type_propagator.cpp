@@ -5,6 +5,49 @@
 
 namespace structor {
 
+namespace {
+
+bool make_shifted_window_ptr(const tinfo_t& type, tinfo_t& out_ptr_type) {
+    qstring type_name;
+    type.get_type_name(&type_name);
+    if (type_name.empty()) {
+        return false;
+    }
+
+    const char* marker = strstr(type_name.c_str(), "_window_");
+    if (!marker) {
+        return false;
+    }
+
+    char* endptr = nullptr;
+    long long delta = strtoll(marker + 8, &endptr, 16);
+    if (endptr == marker + 8 || delta <= 0) {
+        return false;
+    }
+
+    tinfo_t object_type;
+    udt_type_data_t udt;
+    if (type.get_udt_details(&udt)) {
+        for (const auto& member : udt) {
+            if (member.offset == static_cast<uint64>(delta) * 8 && !member.type.empty()) {
+                object_type = member.type;
+                break;
+            }
+        }
+    }
+
+    if (object_type.empty()) {
+        object_type.create_simple_type(BT_INT8 | BTMT_USIGNED);
+    }
+
+    ptr_type_data_t pi(tinfo_t(), sizeof(void*), type, static_cast<int32>(delta));
+    pi.obj_type = object_type;
+    pi.taptr_bits |= TAPTR_SHIFTED;
+    return out_ptr_type.create_ptr(pi);
+}
+
+} // namespace
+
 PropagationResult TypePropagator::propagate(
     ea_t origin_func,
     int origin_var_idx,
@@ -104,7 +147,9 @@ bool TypePropagator::apply_type(cfunc_t* cfunc, int var_idx, const tinfo_t& type
     // Create pointer type to the synthesized struct
     tinfo_t ptr_type = type;
     if (!ptr_type.is_ptr()) {
-        ptr_type.create_ptr(type);
+        if (!make_shifted_window_ptr(type, ptr_type)) {
+            ptr_type.create_ptr(type);
+        }
     }
 
     // Apply type
