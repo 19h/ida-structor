@@ -793,6 +793,7 @@ void LayoutSynthesizer::detect_subobjects(
     LayoutSynthesizer sub_synth(sub_config);
 
     for (auto& [delta, group] : groups) {
+
         AccessPattern sub_pattern;
         sub_pattern.func_ea = group.patterns.front().func_ea;
         sub_pattern.var_name.sprnt("sub_%llX", static_cast<unsigned long long>(delta));

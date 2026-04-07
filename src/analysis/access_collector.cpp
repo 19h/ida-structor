@@ -253,11 +253,51 @@ void AccessPatternVisitor::process_index_bound(cexpr_t* expr) {
         return;
     }
 
+    if (expr->op == cot_ule && bound < 32) {
+        ++bound;
+    }
+
     if (!var_expr || var_expr->op != cot_var || bound == 0 || bound > 32) {
         return;
     }
 
     local_index_bounds_[var_expr->v.idx] = bound;
+    flush_pending_symbolic_accesses(var_expr->v.idx, bound);
+}
+
+void AccessPatternVisitor::flush_pending_symbolic_accesses(int index_var, std::uint32_t bound) {
+    if (bound == 0 || bound > 32) {
+        return;
+    }
+
+    auto it = pending_symbolic_accesses_.find(index_var);
+    if (it == pending_symbolic_accesses_.end()) {
+        return;
+    }
+
+    msg("Structor:   Materializing %zu deferred symbolic accesses for idx=v%d bound=%u\n",
+        it->second.size(), index_var, bound);
+
+    for (const auto& pending : it->second) {
+        for (std::uint32_t idx = 0; idx < bound; ++idx) {
+            FieldAccess access;
+            access.insn_ea = pending.insn_ea;
+            access.offset = pending.base_offset + static_cast<sval_t>(idx) * static_cast<sval_t>(pending.stride);
+            access.size = pending.size;
+            access.access_type = pending.access_type;
+            access.semantic_type = pending.semantic_type;
+            access.context_expr = pending.context_expr;
+            access.inferred_type = pending.inferred_type;
+            access.source_func_ea = cfunc_->entry_ea;
+            access.array_stride_hint = pending.stride;
+            if (pending.base_indirection.has_value()) {
+                access.base_indirection = pending.base_indirection;
+            }
+            accesses_.push_back(std::move(access));
+        }
+    }
+
+    pending_symbolic_accesses_.erase(it);
 }
 
 void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr_expr) {

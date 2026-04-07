@@ -235,8 +235,8 @@ elif "enum_constants" in binary_name:
 elif "bounded_index" in binary_name:
     test(
         ["_read_indexed", "read_indexed"],
-        0,
-        "read_indexed (bounded computed index - expected fail)",
+        3,
+        "read_indexed (bounded computed index)",
     )
     test(
         ["_read_marks", "read_marks"], 2, "read_marks (tail after bounded index array)"

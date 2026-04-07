@@ -47,6 +47,7 @@ private:
     void process_assignment(cexpr_t* expr);
     void process_constant_comparison(cexpr_t* expr);
     void process_index_bound(cexpr_t* expr);
+    void flush_pending_symbolic_accesses(int index_var, std::uint32_t bound);
 
     void record_bitfield_access(const cexpr_t* expr, sval_t offset, uint32_t size,
                                 const BitfieldInfo& info,
