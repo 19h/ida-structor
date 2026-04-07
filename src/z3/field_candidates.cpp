@@ -70,6 +70,12 @@ namespace {
                     array_candidate.source_access_indices.size() > other.source_access_indices.size());
         }
 
+        if (other.kind == FieldCandidate::Kind::ArrayField &&
+            other.type_category == TypeCategory::Struct) {
+            return array_candidate.offset < other.offset &&
+                   array_candidate.end_offset() >= other.end_offset();
+        }
+
         return array_candidate.offset < other.offset ||
                array_candidate.source_access_indices.size() > other.source_access_indices.size();
     }
@@ -423,6 +429,23 @@ qvector<FieldCandidate> FieldCandidateGenerator::generate(
     pruned.reserve(candidates.size());
     for (size_t i = 0; i < candidates.size(); ++i) {
         bool dominated = false;
+
+        if (candidates[i].kind == FieldCandidate::Kind::DirectAccess) {
+            for (size_t j = 0; j < candidates.size(); ++j) {
+                if (i == j) {
+                    continue;
+                }
+                const auto& other = candidates[j];
+                if (other.kind == FieldCandidate::Kind::ArrayField &&
+                    other.type_category == TypeCategory::Struct &&
+                    other.offset == candidates[i].offset &&
+                    other.end_offset() >= candidates[i].end_offset()) {
+                    dominated = true;
+                    break;
+                }
+            }
+        }
+
         for (size_t j = 0; j < candidates.size(); ++j) {
             if (i == j) {
                 continue;

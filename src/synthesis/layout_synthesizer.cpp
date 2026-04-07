@@ -5,6 +5,43 @@
 
 namespace structor {
 
+namespace {
+
+void rebase_negative_offsets(SynthStruct& structure, qvector<SubStructInfo>* sub_structs) {
+    sval_t min_offset = 0;
+    bool found = false;
+    for (const auto& field : structure.fields) {
+        min_offset = found ? std::min(min_offset, field.offset) : field.offset;
+        found = true;
+    }
+
+    if (!found || min_offset >= 0) {
+        return;
+    }
+
+    const sval_t delta = -min_offset;
+    for (auto& field : structure.fields) {
+        field.offset += delta;
+        for (auto& access : field.source_accesses) {
+            access.offset += delta;
+        }
+        if (field.name.empty() || field.name.find("neg_") != qstring::npos) {
+            field.name = generate_field_name(field.offset, field.semantic);
+        }
+    }
+
+    if (sub_structs) {
+        for (auto& sub : *sub_structs) {
+            sub.parent_offset += delta;
+            rebase_negative_offsets(sub.structure, nullptr);
+        }
+    }
+
+    structure.name.cat_sprnt("_window");
+}
+
+} // namespace
+
 LayoutSynthesizer::LayoutSynthesizer(const LayoutSynthConfig& config)
     : config_(config) {}
 
@@ -81,6 +118,8 @@ SynthesisResult LayoutSynthesizer::synthesize(
         detect_subobjects(unified_pattern, opts, synth_result);
     }
     apply_bitfield_recovery(unified_pattern, synth_result.structure);
+    rebase_negative_offsets(synth_result.structure, &synth_result.sub_structs);
+    compute_struct_size(synth_result.structure);
 
     auto end_time = std::chrono::steady_clock::now();
     synth_result.synthesis_time = std::chrono::duration_cast<std::chrono::milliseconds>(

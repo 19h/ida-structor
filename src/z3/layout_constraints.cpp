@@ -696,6 +696,10 @@ void LayoutConstraintBuilder::add_type_constraints() {
             ++type_constraint_count;
 
             if (!compatible) {
+                if (config_.allow_unions) {
+                    continue;
+                }
+
                 ConstraintProvenance prov;
                 prov.description.sprnt("Type consistency at 0x%llX: %s vs %s",
                     static_cast<unsigned long long>(c1.offset),
