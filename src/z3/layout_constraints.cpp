@@ -54,12 +54,11 @@ SynthField field_from_candidate(
     SynthField field;
     field.offset = candidate.offset;
     field.size = candidate.size;
-    field.name = generate_field_name(candidate.offset,
-        semantic_to_category(static_cast<int>(candidate.type_category)) == TypeCategory::Pointer
-            ? SemanticType::Pointer
-            : (semantic_to_category(static_cast<int>(candidate.type_category)) == TypeCategory::FuncPtr
-                ? SemanticType::FunctionPointer
-                : SemanticType::Unknown));
+
+    SemanticType semantic = static_cast<SemanticType>(category_to_semantic(candidate.type_category));
+    if (candidate.kind == FieldCandidate::Kind::ArrayField) {
+        semantic = SemanticType::Array;
+    }
 
     // Decode type
     field.type = type_encoder.decode(
@@ -70,24 +69,26 @@ SynthField field_from_candidate(
 
     // Set semantic type
     if (TypeEncoder::is_integer(candidate.type_category)) {
-        field.semantic = TypeEncoder::is_signed_int(candidate.type_category)
+        semantic = TypeEncoder::is_signed_int(candidate.type_category)
             ? SemanticType::Integer : SemanticType::UnsignedInteger;
     } else if (TypeEncoder::is_floating(candidate.type_category)) {
-        field.semantic = candidate.size == 4 ? SemanticType::Float : SemanticType::Double;
-    } else if (candidate.type_category == TypeCategory::Pointer) {
-        field.semantic = SemanticType::Pointer;
-    } else if (candidate.type_category == TypeCategory::FuncPtr) {
-        field.semantic = SemanticType::FunctionPointer;
-    } else if (candidate.type_category == TypeCategory::Array) {
-        field.semantic = SemanticType::Array;
+        semantic = candidate.size == 4 ? SemanticType::Float : SemanticType::Double;
     }
+    field.semantic = semantic;
 
     // Handle arrays
-    if (candidate.is_array() && candidate.array_element_count.has_value()) {
+    if (candidate.kind == FieldCandidate::Kind::ArrayField &&
+        candidate.array_element_count.has_value()) {
         tinfo_t array_type;
         array_type.create_array(field.type, *candidate.array_element_count);
         field.type = array_type;
+        field.is_array = true;
+        field.array_count = *candidate.array_element_count;
+        field.semantic = SemanticType::Array;
         field.size = candidate.array_stride.value_or(candidate.size) * *candidate.array_element_count;
+        field.name.sprnt("arr_%X", static_cast<unsigned>(candidate.offset));
+    } else {
+        field.name = generate_field_name(candidate.offset, field.semantic);
     }
 
     if (access_list) {
@@ -566,12 +567,16 @@ void LayoutConstraintBuilder::add_alignment_constraints() {
             : ctx.int_val(static_cast<int>(natural_align));
 
         // Soft constraint: offset % effective_align == 0
-        // Since offset is fixed, we can check this statically
-        bool is_aligned = (cand.offset % natural_align) == 0;
+        // This must respect modeled packing. A packed struct can legitimately
+        // contain fields that are misaligned with respect to their natural size.
+        bool always_aligned = (cand.offset % natural_align) == 0;
 
-        if (!is_aligned) {
+        if (!always_aligned) {
             // Only add constraint if misaligned
-            ::z3::expr constraint = ::z3::implies(fv.selected, ctx.bool_val(is_aligned));
+            ::z3::expr offset_val = ctx.int_val(static_cast<int>(cand.offset));
+            ::z3::expr constraint = ::z3::implies(
+                fv.selected,
+                ::z3::mod(offset_val, effective_align) == 0);
 
             ConstraintProvenance prov;
             prov.description.sprnt("Alignment of field at 0x%llX (need %u, candidate %d)",

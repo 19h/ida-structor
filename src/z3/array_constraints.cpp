@@ -5,6 +5,51 @@
 
 namespace structor::z3 {
 
+namespace {
+
+double coverage_ratio(const qvector<sval_t>& offsets, sval_t base, uint32_t stride) {
+    if (offsets.empty() || stride == 0) {
+        return 0.0;
+    }
+
+    const std::size_t expected =
+        static_cast<std::size_t>((offsets.back() - base) / static_cast<sval_t>(stride)) + 1;
+    if (expected == 0) {
+        return 0.0;
+    }
+
+    return static_cast<double>(offsets.size()) / static_cast<double>(expected);
+}
+
+bool has_excessive_gap(const qvector<sval_t>& offsets, uint32_t stride, int max_gap_ratio) {
+    if (offsets.size() < 2 || stride == 0) {
+        return false;
+    }
+
+    const sval_t max_gap = static_cast<sval_t>(std::max(1, max_gap_ratio)) * stride;
+    for (size_t i = 1; i < offsets.size(); ++i) {
+        if (offsets[i] - offsets[i - 1] > max_gap) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool categories_compatible_for_array(TypeCategory a, TypeCategory b) {
+    if (a == b) {
+        return true;
+    }
+
+    if (TypeEncoder::is_integer(a) && TypeEncoder::is_integer(b)) {
+        return true;
+    }
+
+    return false;
+}
+
+} // namespace
+
 // ============================================================================
 // ArrayConstraintBuilder Implementation
 // ============================================================================
@@ -70,6 +115,48 @@ qvector<ArrayCandidate> ArrayConstraintBuilder::detect_arrays(
             }
         }
 
+        auto append_exact_stride_runs = [&](uint32_t stride) {
+            if (stride == 0 || stride > config_.max_stride || offsets.size() < 2) {
+                return;
+            }
+
+            size_t run_start = 0;
+            while (run_start + 1 < offsets.size()) {
+                size_t run_end = run_start + 1;
+                while (run_end < offsets.size() &&
+                       offsets[run_end] - offsets[run_end - 1] == static_cast<sval_t>(stride)) {
+                    ++run_end;
+                }
+
+                const size_t run_len = run_end - run_start;
+                if (static_cast<int>(run_len) >= config_.min_elements) {
+                    qvector<const FieldAccess*> run_group;
+                    std::unordered_set<sval_t> run_offsets;
+                    for (size_t i = run_start; i < run_end; ++i) {
+                        run_offsets.insert(offsets[i]);
+                    }
+
+                    for (const auto* access : group) {
+                        if (run_offsets.count(access->offset) > 0) {
+                            run_group.push_back(access);
+                        }
+                    }
+
+                    if (!config_.require_consistent_types || verify_type_consistency(run_group)) {
+                        candidates.push_back(create_candidate(
+                            offsets[run_start],
+                            stride,
+                            static_cast<uint32_t>(run_len),
+                            run_group));
+                        stats_.arrays_found++;
+                        stats_.elements_covered += static_cast<int>(run_len);
+                    }
+                }
+
+                run_start = run_end;
+            }
+        };
+
         // Try simple arithmetic progression detection first
         auto ap_result = find_arithmetic_progression(offsets);
 
@@ -96,7 +183,11 @@ qvector<ArrayCandidate> ArrayConstraintBuilder::detect_arrays(
                 candidates.push_back(std::move(*symbolic_result));
                 stats_.arrays_found++;
                 stats_.symbolic_detections++;
+            } else {
+                append_exact_stride_runs(size);
             }
+        } else {
+            append_exact_stride_runs(size);
         }
     }
 
@@ -156,9 +247,13 @@ ArrayConstraintBuilder::find_arithmetic_progression(const qvector<sval_t>& offse
         return std::nullopt;
     }
 
+    if (has_excessive_gap(offsets, stride, config_.max_gap_ratio)) {
+        return std::nullopt;
+    }
+
     // Allow some gaps based on config
-    double coverage_ratio = static_cast<double>(offsets.size()) / expected_count;
-    if (coverage_ratio < 1.0 / config_.max_gap_ratio) {
+    double ratio = static_cast<double>(offsets.size()) / expected_count;
+    if (ratio < 1.0 / config_.max_gap_ratio) {
         return std::nullopt;  // Too sparse
     }
 
@@ -225,8 +320,12 @@ std::optional<std::pair<sval_t, uint32_t>> ArrayConstraintBuilder::find_progress
         return std::nullopt;
     }
 
-    double coverage_ratio = static_cast<double>(offsets.size()) / expected_count;
-    if (coverage_ratio < 1.0 / config_.max_gap_ratio) {
+    if (has_excessive_gap(offsets, stride_hint, config_.max_gap_ratio)) {
+        return std::nullopt;
+    }
+
+    double ratio = static_cast<double>(offsets.size()) / expected_count;
+    if (ratio < 1.0 / config_.max_gap_ratio) {
         return std::nullopt;
     }
 
@@ -264,6 +363,14 @@ bool ArrayConstraintBuilder::verify_type_consistency(
             }
 
             return false;
+        }
+
+        if (!accesses[0]->inferred_type.empty() && !access->inferred_type.empty()) {
+            TypeCategory first_cat = ctx_.type_encoder().categorize(accesses[0]->inferred_type);
+            TypeCategory this_cat = ctx_.type_encoder().categorize(access->inferred_type);
+            if (!categories_compatible_for_array(first_cat, this_cat)) {
+                return false;
+            }
         }
     }
 
@@ -430,6 +537,14 @@ std::optional<ArrayCandidate> ArrayConstraintBuilder::solve_stride_z3(
     uint32_t count = static_cast<uint32_t>((last - base) / stride) + 1;
 
     if (count > config_.max_elements || count < static_cast<uint32_t>(config_.min_elements)) {
+        return std::nullopt;
+    }
+
+    if (has_excessive_gap(offsets, stride, config_.max_gap_ratio)) {
+        return std::nullopt;
+    }
+
+    if (coverage_ratio(offsets, base, stride) < 1.0 / config_.max_gap_ratio) {
         return std::nullopt;
     }
 

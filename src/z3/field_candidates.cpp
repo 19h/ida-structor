@@ -209,6 +209,8 @@ void FieldCandidateGenerator::generate_array_candidates(
     const UnifiedAccessPattern& pattern,
     qvector<FieldCandidate>& candidates)
 {
+    constexpr double kMinArrayCoverageRatio = 0.75;
+
     ArrayDetectionConfig array_config;
     array_config.min_elements = static_cast<int>(config_.min_array_elements);
 
@@ -229,6 +231,21 @@ void FieldCandidateGenerator::generate_array_candidates(
     }
 
     for (const auto& array : arrays) {
+        if (array.element_count == 0) {
+            continue;
+        }
+
+        std::unordered_set<sval_t> member_offsets;
+        for (sval_t off : array.member_offsets) {
+            member_offsets.insert(off);
+        }
+
+        const double ratio = static_cast<double>(member_offsets.size()) /
+                             static_cast<double>(array.element_count);
+        if (ratio < kMinArrayCoverageRatio) {
+            continue;
+        }
+
         size_t elem_size = array.element_type.get_size();
         if (elem_size == BADSIZE || elem_size == 0) {
             elem_size = array.stride;
@@ -237,6 +254,26 @@ void FieldCandidateGenerator::generate_array_candidates(
         uint32_t access_size = static_cast<uint32_t>(elem_size);
         if (array.needs_element_struct && array.inner_access_size > 0) {
             access_size = array.inner_access_size;
+        }
+
+        bool conflicting_access = false;
+        if (!array.needs_element_struct) {
+            for (const auto& access : pattern.all_accesses) {
+                if (!array.contains_offset(access.offset)) {
+                    continue;
+                }
+
+                if (member_offsets.count(access.offset) > 0 && access.size == access_size) {
+                    continue;
+                }
+
+                conflicting_access = true;
+                break;
+            }
+        }
+
+        if (conflicting_access) {
+            continue;
         }
 
         FieldCandidate array_candidate;
@@ -248,11 +285,6 @@ void FieldCandidateGenerator::generate_array_candidates(
         array_candidate.array_element_count = array.element_count;
         array_candidate.array_stride = array.stride;
         array_candidate.confidence = array.confidence;
-
-        std::unordered_set<sval_t> member_offsets;
-        for (sval_t off : array.member_offsets) {
-            member_offsets.insert(off);
-        }
 
         for (size_t i = 0; i < pattern.all_accesses.size(); ++i) {
             const auto& access = pattern.all_accesses[i];

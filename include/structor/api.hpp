@@ -177,7 +177,7 @@ inline SynthStruct StructorAPI::synthesize_layout(
 {
     const SynthOptions& options = opts ? *opts : Config::instance().options();
     LayoutSynthesizer synthesizer(options);
-    return synthesizer.synthesize(pattern).structure;
+    return synthesizer.synthesize(pattern, options).structure;
 }
 
 inline std::optional<SynthVTable> StructorAPI::detect_vtable(
@@ -323,7 +323,7 @@ inline SynthResult StructorAPI::do_synthesis(ea_t func_ea, int var_idx, const Sy
 
     // Synthesize structure layout
     LayoutSynthesizer synthesizer(opts);
-    SynthesisResult synth_result = synthesizer.synthesize(pattern);
+    SynthesisResult synth_result = synthesizer.synthesize(pattern, opts);
     SynthStruct synth_struct = std::move(synth_result.structure);
     qvector<SubStructInfo> sub_structs = std::move(synth_result.sub_structs);
 

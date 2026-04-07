@@ -11,10 +11,18 @@ LayoutSynthesizer::LayoutSynthesizer(const LayoutSynthConfig& config)
 LayoutSynthesizer::LayoutSynthesizer(const SynthOptions& opts)
     : config_() {
     // Map SynthOptions to LayoutSynthConfig
+    config_.z3_timeout_ms = opts.z3.timeout_ms;
+    config_.z3_memory_mb = opts.z3.memory_limit_mb;
+    config_.use_z3 = opts.z3.mode != Z3SynthesisMode::Disabled;
+    config_.fallback_to_heuristics = opts.z3.mode != Z3SynthesisMode::Required;
     config_.default_alignment = opts.alignment;
-    config_.cross_function = opts.propagate_to_callees || opts.propagate_to_callers;
+    config_.cross_function = opts.z3.cross_function;
     config_.cross_function_depth = opts.max_propagation_depth;
     config_.emit_substructs = opts.emit_substructs;
+    config_.min_array_elements = static_cast<int>(opts.z3.min_array_elements);
+    config_.create_unions = opts.z3.allow_unions;
+    config_.relax_alignment_on_unsat = opts.z3.relax_on_unsat;
+    config_.relax_types_on_unsat = opts.z3.relax_on_unsat;
     config_.weight_minimize_padding = opts.z3.weight_minimize_padding;
     config_.weight_prefer_non_union = opts.z3.weight_prefer_non_union;
 }

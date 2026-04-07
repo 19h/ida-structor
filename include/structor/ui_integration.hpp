@@ -50,7 +50,7 @@ inline SynthResult do_synthesis(cfunc_t* cfunc, int var_idx, const SynthOptions&
 
     // Step 2: Synthesize structure layout
     LayoutSynthesizer synthesizer(opts);
-    SynthesisResult synth_result = synthesizer.synthesize(pattern);
+    SynthesisResult synth_result = synthesizer.synthesize(pattern, opts);
     SynthStruct synth_struct = std::move(synth_result.structure);
     qvector<SubStructInfo> sub_structs = std::move(synth_result.sub_structs);
 
