@@ -48,6 +48,24 @@ bool categories_compatible_for_array(TypeCategory a, TypeCategory b) {
     return false;
 }
 
+bool is_weak_single_field_struct_array(const ArrayCandidate& candidate,
+                                       const qvector<const FieldAccess*>& accesses) {
+    if (!candidate.needs_element_struct || candidate.element_count >= 4 || accesses.empty()) {
+        return false;
+    }
+
+    std::unordered_set<uint32_t> inner_offsets;
+    for (const auto* access : accesses) {
+        if (access->offset < candidate.base_offset) {
+            continue;
+        }
+        const sval_t rel = access->offset - candidate.base_offset;
+        inner_offsets.insert(static_cast<uint32_t>(rel % candidate.stride));
+    }
+
+    return inner_offsets.size() <= 1 && accesses.size() == candidate.element_count;
+}
+
 } // namespace
 
 // ============================================================================
@@ -108,6 +126,10 @@ qvector<ArrayCandidate> ArrayConstraintBuilder::detect_arrays(
                 uint32_t count = static_cast<uint32_t>((offsets.back() - base) / stride) + 1;
                 ArrayCandidate candidate = create_candidate(base, stride, count, group);
 
+                if (is_weak_single_field_struct_array(candidate, group)) {
+                    continue;
+                }
+
                 candidates.push_back(std::move(candidate));
                 stats_.arrays_found++;
                 stats_.elements_covered += static_cast<int>(offsets.size());
@@ -143,11 +165,16 @@ qvector<ArrayCandidate> ArrayConstraintBuilder::detect_arrays(
                     }
 
                     if (!config_.require_consistent_types || verify_type_consistency(run_group)) {
-                        candidates.push_back(create_candidate(
+                        ArrayCandidate candidate = create_candidate(
                             offsets[run_start],
                             stride,
                             static_cast<uint32_t>(run_len),
-                            run_group));
+                            run_group);
+                        if (is_weak_single_field_struct_array(candidate, run_group)) {
+                            run_start = run_end;
+                            continue;
+                        }
+                        candidates.push_back(std::move(candidate));
                         stats_.arrays_found++;
                         stats_.elements_covered += static_cast<int>(run_len);
                     }
@@ -171,6 +198,10 @@ qvector<ArrayCandidate> ArrayConstraintBuilder::detect_arrays(
             // Create candidate
             ArrayCandidate candidate = create_candidate(
                 base, stride, static_cast<uint32_t>(offsets.size()), group);
+
+            if (is_weak_single_field_struct_array(candidate, group)) {
+                continue;
+            }
 
             candidates.push_back(std::move(candidate));
             stats_.arrays_found++;
@@ -513,7 +544,10 @@ std::optional<ArrayCandidate> ArrayConstraintBuilder::solve_stride_z3(
             uint32_t count = static_cast<uint32_t>((offsets.back() - base) / stride) + 1;
             if (count >= static_cast<uint32_t>(config_.min_elements) &&
                 count <= config_.max_elements) {
-                return create_candidate(base, stride, count, accesses);
+                ArrayCandidate candidate = create_candidate(base, stride, count, accesses);
+                if (!is_weak_single_field_struct_array(candidate, accesses)) {
+                    return candidate;
+                }
             }
         }
     }
@@ -548,7 +582,12 @@ std::optional<ArrayCandidate> ArrayConstraintBuilder::solve_stride_z3(
         return std::nullopt;
     }
 
-    return create_candidate(base, stride, count, accesses);
+    ArrayCandidate candidate = create_candidate(base, stride, count, accesses);
+    if (is_weak_single_field_struct_array(candidate, accesses)) {
+        return std::nullopt;
+    }
+
+    return candidate;
 }
 
 uint32_t ArrayConstraintBuilder::calculate_gcd_stride(const qvector<sval_t>& offsets) const {
