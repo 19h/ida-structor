@@ -557,6 +557,20 @@ void test_out_of_order_accesses() {
     assert(arrays[0].element_count == 5);
 }
 
+/// Test compact byte tail array at non-zero offset
+void test_compact_byte_tail_array() {
+    std::vector<TestAccess> accesses = {
+        {72, 1}, {73, 1}, {74, 1}, {75, 1}
+    };
+
+    auto arrays = detect_arrays(accesses, 3);
+
+    assert(!arrays.empty());
+    assert(arrays[0].base_offset == 72);
+    assert(arrays[0].stride == 1);
+    assert(arrays[0].element_count == 4);
+}
+
 /// Test predefined array test cases
 void test_predefined_cases() {
     auto cases = array_test_cases();
@@ -601,6 +615,7 @@ int main() {
     runner.run("stride_inference", test_stride_inference);
     runner.run("element_struct_creation", test_element_struct_creation);
     runner.run("out_of_order_accesses", test_out_of_order_accesses);
+    runner.run("compact_byte_tail_array", test_compact_byte_tail_array);
     runner.run("predefined_cases", test_predefined_cases);
 
     runner.summary();

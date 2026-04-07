@@ -920,6 +920,68 @@ void test_consistency() {
     }
 }
 
+/// Test compact tail array alongside regular fields
+void test_compact_tail_array() {
+    TestSynthesisPipeline pipeline;
+
+    std::vector<TestAccess> accesses = {
+        TestAccess::read(0, 4, TestTypeCategory::Int32),
+        TestAccess::read(4, 4, TestTypeCategory::Int32),
+        TestAccess::read(8, 8, TestTypeCategory::Int64),
+        TestAccess::read(32, 1, TestTypeCategory::Int8),
+        TestAccess::read(33, 1, TestTypeCategory::Int8),
+        TestAccess::read(34, 1, TestTypeCategory::Int8),
+        TestAccess::read(35, 1, TestTypeCategory::Int8),
+    };
+
+    auto result = pipeline.synthesize(accesses, 36);
+
+    assert(result.is_success());
+
+    bool found_tail = false;
+    for (const auto& f : result.fields) {
+        if (f.offset == 32 && f.is_array && f.array_count >= 4) {
+            found_tail = true;
+            break;
+        }
+    }
+    assert(found_tail);
+}
+
+/// Test callback-style pointer table with metadata
+void test_callback_table_pattern() {
+    TestSynthesisPipeline pipeline;
+
+    std::vector<TestAccess> accesses = {
+        TestAccess::read(0, 4, TestTypeCategory::Int32),
+        TestAccess::read(4, 4, TestTypeCategory::Int32),
+        TestAccess::read(8, 8, TestTypeCategory::Pointer),
+        TestAccess::read(16, 8, TestTypeCategory::Pointer),
+        TestAccess::read(24, 8, TestTypeCategory::Pointer),
+        TestAccess::read(40, 1, TestTypeCategory::Int8),
+        TestAccess::read(41, 1, TestTypeCategory::Int8),
+        TestAccess::read(42, 1, TestTypeCategory::Int8),
+    };
+
+    auto result = pipeline.synthesize(accesses, 48);
+
+    assert(result.is_success());
+
+    bool found_ptr_array = false;
+    bool found_state_tail = false;
+    for (const auto& f : result.fields) {
+        if (f.offset == 8 && f.is_array && f.array_count >= 3) {
+            found_ptr_array = true;
+        }
+        if (f.offset == 40 && f.is_array && f.array_count >= 3) {
+            found_state_tail = true;
+        }
+    }
+
+    assert(found_ptr_array);
+    assert(found_state_tail);
+}
+
 /// Test cross-function test cases
 void test_cross_function_cases() {
     TestSynthesisPipeline pipeline;
@@ -964,6 +1026,8 @@ int main() {
     runner.run("tiered_fallback", test_tiered_fallback);
     runner.run("multiple_observations", test_multiple_observations);
     runner.run("consistency", test_consistency);
+    runner.run("compact_tail_array", test_compact_tail_array);
+    runner.run("callback_table_pattern", test_callback_table_pattern);
     runner.run("cross_function_cases", test_cross_function_cases);
 
     runner.summary();
