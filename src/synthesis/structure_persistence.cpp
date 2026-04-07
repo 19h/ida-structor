@@ -5,6 +5,42 @@
 
 namespace structor {
 
+namespace {
+
+void log_array_element_udt(const qstring& field_name, const tinfo_t& type) {
+    array_type_data_t atd;
+    if (!type.is_array() || !type.get_array_details(&atd)) {
+        return;
+    }
+
+    if (!atd.elem_type.is_struct() && !atd.elem_type.is_union()) {
+        return;
+    }
+
+    qstring elem_name;
+    atd.elem_type.get_type_name(&elem_name);
+    msg("Structor:   Array field '%s' elem_type='%s' nelems=%u elem_size=%zu total_size=%zu\n",
+        field_name.c_str(), elem_name.c_str(), unsigned(atd.nelems),
+        atd.elem_type.get_size(), type.get_size());
+
+    udt_type_data_t udt;
+    if (!atd.elem_type.get_udt_details(&udt)) {
+        return;
+    }
+
+    for (const auto& member : udt) {
+        qstring member_type;
+        member.type.print(&member_type);
+        msg("Structor:     elem member '%s' off=0x%llX size_bits=%llu type=%s\n",
+            member.name.c_str(),
+            static_cast<unsigned long long>(member.offset / 8),
+            static_cast<unsigned long long>(member.size),
+            member_type.c_str());
+    }
+}
+
+} // namespace
+
 tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
     constexpr double kReuseThreshold = 0.85;
 
@@ -140,6 +176,8 @@ tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
                 udm.size = field.size * 8;
             }
         }
+
+        log_array_element_udt(field.name, udm.type);
 
         if (!field.comment.empty()) {
             udm.cmt = field.comment;
