@@ -145,6 +145,8 @@ SynthField field_from_candidate(
     SemanticType semantic = static_cast<SemanticType>(category_to_semantic(candidate.type_category));
     if (candidate.kind == FieldCandidate::Kind::ArrayField) {
         semantic = SemanticType::Array;
+    } else if (candidate.type_category == TypeCategory::Struct) {
+        semantic = SemanticType::NestedStruct;
     }
 
     // Decode type
@@ -175,7 +177,11 @@ SynthField field_from_candidate(
         field.size = candidate.array_stride.value_or(candidate.size) * *candidate.array_element_count;
         field.name.sprnt("arr_%X", static_cast<unsigned>(candidate.offset));
     } else {
-        field.name = generate_field_name(candidate.offset, field.semantic);
+        if (field.semantic == SemanticType::NestedStruct) {
+            field.name.sprnt("sub_%X", static_cast<unsigned>(candidate.offset));
+        } else {
+            field.name = generate_field_name(candidate.offset, field.semantic);
+        }
     }
 
     if (access_list) {

@@ -192,7 +192,9 @@ void TypePropagator::propagate_forward(
         if (!callee_cfunc) continue;
 
         tinfo_t callee_type = type;
-        if (info.by_ref) {
+        if (!info.passed_type.empty()) {
+            callee_type = info.passed_type;
+        } else if (info.by_ref) {
             tinfo_t ptr_type;
             ptr_type.create_ptr(type);
             callee_type = ptr_type;
@@ -410,6 +412,41 @@ void TypePropagator::find_callees_with_arg(
             return nullptr;
         }
 
+        static const cexpr_t* strip_casts_and_refs(const cexpr_t* expr) {
+            while (expr && (expr->op == cot_cast || expr->op == cot_ref)) {
+                expr = expr->x;
+            }
+            return expr;
+        }
+
+        static bool is_plain_var_arg(const cexpr_t* expr, int var_idx) {
+            expr = strip_casts_and_refs(expr);
+            return expr && expr->op == cot_var && expr->v.idx == var_idx;
+        }
+
+        static tinfo_t extract_member_arg_type(const cexpr_t* expr, int var_idx) {
+            const bool by_ref = contains_ref(expr);
+            expr = strip_casts_and_refs(expr);
+            if (!expr) {
+                return tinfo_t();
+            }
+
+            if ((expr->op == cot_memptr || expr->op == cot_memref) && expr->x) {
+                const cexpr_t* base = find_base_var(expr->x);
+                if (base && base->op == cot_var && base->v.idx == var_idx && !expr->type.empty()) {
+                    tinfo_t member_type = expr->type;
+                    if (by_ref) {
+                        tinfo_t ptr_type;
+                        ptr_type.create_ptr(member_type);
+                        return ptr_type;
+                    }
+                    return member_type;
+                }
+            }
+
+            return tinfo_t();
+        }
+
         static bool contains_ref(const cexpr_t* expr) {
             if (!expr) return false;
             if (expr->op == cot_ref) return true;
@@ -453,6 +490,10 @@ void TypePropagator::find_callees_with_arg(
                     info.callee_ea = callee_ea;
                     info.param_idx = static_cast<int>(i);
                     info.by_ref = contains_ref(&arg);
+                    info.passed_type = extract_member_arg_type(&arg, target_var_idx);
+                    if (info.passed_type.empty() && !is_plain_var_arg(&arg, target_var_idx) && !arg.type.empty()) {
+                        info.passed_type = arg.type;
+                    }
                     results.push_back(info);
                     break;
                 }

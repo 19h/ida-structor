@@ -41,6 +41,7 @@ private:
         ea_t callee_ea = BADADDR;
         int param_idx = -1;
         bool by_ref = false;
+        tinfo_t passed_type;
     };
 
     struct CallerArgInfo {

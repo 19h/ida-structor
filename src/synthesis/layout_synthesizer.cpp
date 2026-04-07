@@ -834,6 +834,50 @@ void LayoutSynthesizer::detect_subobjects(
         info.parent_offset = delta;
         info.field_name = sub_field.name;
         result.sub_structs.push_back(std::move(info));
+
+        // Reuse the same recovered child layout for sibling windows of equal
+        // size when they also have concrete accesses. This helps repeated
+        // embedded-child patterns such as left/right operation tables.
+        for (auto& field : result.structure.fields) {
+            if (field.offset == delta || field.is_padding || field.is_array || field.is_union_candidate) {
+                continue;
+            }
+            if (field.size != sub_size || field.semantic == SemanticType::NestedStruct) {
+                continue;
+            }
+
+            bool already_present = false;
+            for (const auto& existing : result.sub_structs) {
+                if (existing.parent_offset == field.offset) {
+                    already_present = true;
+                    break;
+                }
+            }
+            if (already_present) {
+                continue;
+            }
+
+            int covered_accesses = 0;
+            const sval_t sibling_end = field.offset + static_cast<sval_t>(field.size);
+            for (const auto& access : pattern.all_accesses) {
+                const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
+                if (access.offset >= field.offset && access_end <= sibling_end) {
+                    ++covered_accesses;
+                }
+            }
+
+            if (covered_accesses < opts.min_accesses) {
+                continue;
+            }
+
+            field.semantic = SemanticType::NestedStruct;
+            field.name.sprnt("sub_%X", static_cast<unsigned>(field.offset));
+
+            SubStructInfo sibling = result.sub_structs.back();
+            sibling.parent_offset = field.offset;
+            sibling.field_name = field.name;
+            result.sub_structs.push_back(std::move(sibling));
+        }
     }
 
     std::sort(result.structure.fields.begin(), result.structure.fields.end(),
