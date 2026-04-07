@@ -602,6 +602,15 @@ inline TypeFixResult TypeFixer::fix_function_types(cfunc_t* cfunc) {
                 // Get the struct type
                 tinfo_t struct_type;
                 if (struct_type.get_type_by_tid(*struct_tid)) {
+                    qstring struct_name;
+                    struct_type.get_type_name(&struct_name);
+                    if (!struct_name.empty() && struct_name.find("_window") != qstring::npos) {
+                        fix.skip_reason = "Window view kept local";
+                        result.fixes_skipped++;
+                        result.variable_fixes.push_back(std::move(fix));
+                        continue;
+                    }
+
                     // Create pointer to the synthesized struct
                     inferred_type.create_ptr(struct_type);
                 }
@@ -786,7 +795,17 @@ inline bool TypeFixer::apply_fix(
     var.set_lvar_type(applied_type);
     
     // Propagate if requested
-    if (out_propagation && config_.propagate_fixes) {
+    bool allow_propagation = config_.propagate_fixes;
+    if (allow_propagation && applied_type.is_ptr()) {
+        tinfo_t pointed = applied_type.get_pointed_object();
+        qstring pointed_name;
+        pointed.get_type_name(&pointed_name);
+        if (!pointed_name.empty() && pointed_name.find("_window") != qstring::npos) {
+            allow_propagation = false;
+        }
+    }
+
+    if (out_propagation && allow_propagation) {
         SynthOptions opts = Config::instance().options();
         opts.max_propagation_depth = config_.max_propagation_depth;
         TypePropagator propagator(opts);

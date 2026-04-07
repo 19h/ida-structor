@@ -730,6 +730,59 @@ void FieldCandidateGenerator::generate_array_candidates(
         candidates.push_back(std::move(array_candidate));
     }
 
+    // Direct contiguous byte-run detection for compact tails such as
+    // checksum arrays. This prevents larger shifted struct-array candidates
+    // from being the only way to cover a short byte sequence.
+    qvector<sval_t> byte_offsets;
+    for (const auto& access : pattern.all_accesses) {
+        if (access.size == 1) {
+            byte_offsets.push_back(access.offset);
+        }
+    }
+
+    std::sort(byte_offsets.begin(), byte_offsets.end());
+    byte_offsets.erase(std::unique(byte_offsets.begin(), byte_offsets.end()), byte_offsets.end());
+
+    size_t run_start = 0;
+    while (run_start < byte_offsets.size()) {
+        size_t run_end = run_start + 1;
+        while (run_end < byte_offsets.size() && byte_offsets[run_end] == byte_offsets[run_end - 1] + 1) {
+            ++run_end;
+        }
+
+        const size_t run_len = run_end - run_start;
+        if (run_len >= static_cast<size_t>(config_.min_array_elements)) {
+            FieldCandidate byte_array;
+            byte_array.offset = byte_offsets[run_start];
+            byte_array.size = static_cast<uint32_t>(run_len);
+            byte_array.kind = FieldCandidate::Kind::ArrayField;
+            byte_array.type_category = TypeCategory::UInt8;
+            byte_array.array_element_count = static_cast<uint32_t>(run_len);
+            byte_array.array_stride = 1;
+            byte_array.confidence = TypeConfidence::Medium;
+
+            for (size_t i = 0; i < pattern.all_accesses.size(); ++i) {
+                const auto& access = pattern.all_accesses[i];
+                if (access.size == 1 &&
+                    access.offset >= byte_array.offset &&
+                    access.offset < byte_array.offset + static_cast<sval_t>(byte_array.size)) {
+                    byte_array.source_access_indices.push_back(static_cast<int>(i));
+                }
+            }
+
+            bool duplicate = std::any_of(candidates.begin(), candidates.end(), [&](const FieldCandidate& existing) {
+                return existing.kind == FieldCandidate::Kind::ArrayField &&
+                       existing.offset == byte_array.offset &&
+                       existing.size == byte_array.size;
+            });
+            if (!duplicate) {
+                candidates.push_back(std::move(byte_array));
+            }
+        }
+
+        run_start = run_end;
+    }
+
     // Mixed-size repeated-stride detection for arrays of structs.
     if (pattern.all_accesses.size() >= 6) {
         std::unordered_set<uint32_t> stride_candidates;

@@ -48,6 +48,10 @@ enum class TypeCategory : unsigned {
 struct ExtendedTypeInfo {
     TypeCategory category = TypeCategory::Unknown;
 
+    // Preserve the concrete IDA type when available so synthesized unnamed
+    // aggregates can survive candidate extraction and model decoding.
+    tinfo_t concrete_type;
+
     // For Pointer/FuncPtr: pointed-to type (if known)
     std::optional<TypeCategory> pointee_category;
 

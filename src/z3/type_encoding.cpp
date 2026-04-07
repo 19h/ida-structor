@@ -151,6 +151,7 @@ TypeCategory TypeEncoder::categorize(const tinfo_t& type) const {
 ExtendedTypeInfo TypeEncoder::extract_extended_info(const tinfo_t& type) const {
     ExtendedTypeInfo info;
     info.category = categorize(type);
+    info.concrete_type = type;
 
     if (!type.empty()) {
         size_t sz = type.get_size();
@@ -260,6 +261,10 @@ tinfo_t TypeEncoder::decode(
             break;
         }
         case TypeCategory::Array: {
+            if (extended && !extended->concrete_type.empty() && extended->concrete_type.is_array()) {
+                return extended->concrete_type;
+            }
+
             // Create byte array of given size
             tinfo_t elem_type;
             uint32_t elem_count = size;
@@ -279,6 +284,12 @@ tinfo_t TypeEncoder::decode(
         }
         case TypeCategory::Struct:
         case TypeCategory::Union:
+            if (extended && !extended->concrete_type.empty() &&
+                ((category == TypeCategory::Struct && extended->concrete_type.is_struct()) ||
+                 (category == TypeCategory::Union && extended->concrete_type.is_union()))) {
+                return extended->concrete_type;
+            }
+
             // Try to get from extended info
             if (extended && extended->udt_tid) {
                 type.get_type_by_tid(*extended->udt_tid);
