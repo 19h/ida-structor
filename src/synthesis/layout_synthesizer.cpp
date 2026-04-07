@@ -614,7 +614,12 @@ void LayoutSynthesizer::generate_field_names(SynthStruct& result) {
         if (field.is_padding) continue;
         if (!field.name.empty()) continue;
 
-        field.name = generate_field_name(field.offset, field.semantic);
+        if (!field.is_array && !field.is_union_candidate && !field.type.empty() &&
+            (field.type.is_struct() || field.type.is_union() || field.semantic == SemanticType::NestedStruct)) {
+            field.name.sprnt("sub_%X", static_cast<unsigned>(field.offset));
+        } else {
+            field.name = generate_field_name(field.offset, field.semantic);
+        }
 
         // Generate comment if enabled
         if (opts.generate_comments) {
@@ -858,15 +863,19 @@ void LayoutSynthesizer::detect_subobjects(
             }
 
             int covered_accesses = 0;
+            bool has_whole_region_access = false;
             const sval_t sibling_end = field.offset + static_cast<sval_t>(field.size);
             for (const auto& access : pattern.all_accesses) {
                 const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
                 if (access.offset >= field.offset && access_end <= sibling_end) {
                     ++covered_accesses;
+                    if (access.offset == field.offset && access.size == field.size) {
+                        has_whole_region_access = true;
+                    }
                 }
             }
 
-            if (covered_accesses < opts.min_accesses) {
+            if (covered_accesses < opts.min_accesses && !has_whole_region_access) {
                 continue;
             }
 

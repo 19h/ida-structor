@@ -46,6 +46,39 @@ bool make_shifted_window_ptr(const tinfo_t& type, tinfo_t& out_ptr_type) {
     return out_ptr_type.create_ptr(pi);
 }
 
+bool resolve_member_type_from_parent(const tinfo_t& parent_type,
+                                     sval_t member_offset,
+                                     bool by_ref,
+                                     tinfo_t& out_type) {
+    if (member_offset < 0) {
+        return false;
+    }
+
+    tinfo_t parent = parent_type;
+    if (parent.is_ptr()) {
+        parent = parent.get_pointed_object();
+    }
+
+    udt_type_data_t udt;
+    if (!parent.get_udt_details(&udt)) {
+        return false;
+    }
+
+    for (const auto& member : udt) {
+        if (member.offset == static_cast<uint64>(member_offset) * 8 && !member.type.empty()) {
+            out_type = member.type;
+            if (by_ref && !out_type.is_ptr()) {
+                tinfo_t ptr_type;
+                ptr_type.create_ptr(out_type);
+                out_type = ptr_type;
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+
 } // namespace
 
 PropagationResult TypePropagator::propagate(
@@ -192,7 +225,8 @@ void TypePropagator::propagate_forward(
         if (!callee_cfunc) continue;
 
         tinfo_t callee_type = type;
-        if (!info.passed_type.empty()) {
+        if (resolve_member_type_from_parent(type, info.member_offset, info.by_ref, callee_type)) {
+        } else if (!info.passed_type.empty()) {
             callee_type = info.passed_type;
         } else if (info.by_ref) {
             tinfo_t ptr_type;
@@ -447,6 +481,22 @@ void TypePropagator::find_callees_with_arg(
             return tinfo_t();
         }
 
+        static sval_t extract_member_offset(const cexpr_t* expr, int var_idx) {
+            expr = strip_casts_and_refs(expr);
+            if (!expr) {
+                return -1;
+            }
+
+            if ((expr->op == cot_memptr || expr->op == cot_memref) && expr->x) {
+                const cexpr_t* base = find_base_var(expr->x);
+                if (base && base->op == cot_var && base->v.idx == var_idx) {
+                    return static_cast<sval_t>(expr->m);
+                }
+            }
+
+            return -1;
+        }
+
         static bool contains_ref(const cexpr_t* expr) {
             if (!expr) return false;
             if (expr->op == cot_ref) return true;
@@ -490,6 +540,7 @@ void TypePropagator::find_callees_with_arg(
                     info.callee_ea = callee_ea;
                     info.param_idx = static_cast<int>(i);
                     info.by_ref = contains_ref(&arg);
+                    info.member_offset = extract_member_offset(&arg, target_var_idx);
                     info.passed_type = extract_member_arg_type(&arg, target_var_idx);
                     if (info.passed_type.empty() && !is_plain_var_arg(&arg, target_var_idx) && !arg.type.empty()) {
                         info.passed_type = arg.type;

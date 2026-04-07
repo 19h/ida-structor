@@ -42,6 +42,7 @@ private:
         int param_idx = -1;
         bool by_ref = false;
         tinfo_t passed_type;
+        sval_t member_offset = -1;
     };
 
     struct CallerArgInfo {
