@@ -46,6 +46,137 @@ namespace {
         }
     };
 
+    bool build_struct_type_from_groups(
+        const qvector<MixedStrideField>& fields,
+        uint32_t stride,
+        tinfo_t& out_type)
+    {
+        if (fields.size() < 2) {
+            return false;
+        }
+
+        udt_type_data_t udt;
+        udt.is_union = false;
+        udt.total_size = stride;
+
+        for (const auto& field : fields) {
+            udm_t udm;
+            udm.offset = static_cast<uint64>(field.inner_offset) * 8;
+            udm.name = generate_field_name(field.inner_offset);
+            if (!field.type.empty()) {
+                udm.type = field.type;
+                udm.size = field.type.get_size() * 8;
+            } else {
+                tinfo_t byte_type;
+                byte_type.create_simple_type(BT_INT8 | BTMT_USIGNED);
+                if (field.size > 1) {
+                    udm.type.create_array(byte_type, field.size);
+                } else {
+                    udm.type = byte_type;
+                }
+                udm.size = field.size * 8;
+            }
+            udt.push_back(udm);
+        }
+
+        return out_type.create_udt(udt);
+    }
+
+    void augment_struct_array_candidate(ArrayCandidate& array, const UnifiedAccessPattern& pattern) {
+        if (!array.needs_element_struct || array.stride == 0 || array.element_count < 3) {
+            return;
+        }
+
+        struct BestAugmentation {
+            sval_t base = 0;
+            qvector<MixedStrideField> fields;
+            int score = -1;
+        } best;
+
+        for (uint32_t shift = 0; shift < array.stride; ++shift) {
+            const sval_t base = array.base_offset - static_cast<sval_t>(shift);
+            std::unordered_map<MixedStrideKey, MixedStrideField, MixedStrideKeyHash> groups;
+
+            for (size_t i = 0; i < pattern.all_accesses.size(); ++i) {
+                const auto& access = pattern.all_accesses[i];
+                if (access.offset < base) {
+                    continue;
+                }
+                const sval_t rel = access.offset - base;
+                if (rel < 0) {
+                    continue;
+                }
+                uint32_t idx = static_cast<uint32_t>(rel / array.stride);
+                if (idx >= array.element_count) {
+                    continue;
+                }
+                uint32_t inner = static_cast<uint32_t>(rel % array.stride);
+                if (inner + access.size > array.stride) {
+                    continue;
+                }
+
+                MixedStrideKey key{inner, access.size};
+                auto& field = groups[key];
+                field.inner_offset = inner;
+                field.size = access.size;
+                if (field.type.empty() && !access.inferred_type.empty()) {
+                    field.type = access.inferred_type;
+                }
+                field.access_indices.push_back(static_cast<int>(i));
+            }
+
+            qvector<MixedStrideField> repeated;
+            int score = 0;
+            for (auto& [key, field] : groups) {
+                std::unordered_set<uint32_t> indices;
+                for (int idx : field.access_indices) {
+                    const auto& access = pattern.all_accesses[idx];
+                    indices.insert(static_cast<uint32_t>((access.offset - base) / array.stride));
+                }
+                if (indices.size() >= std::min<uint32_t>(3, array.element_count)) {
+                    repeated.push_back(field);
+                    ++score;
+                }
+            }
+
+            if (score < 2) {
+                continue;
+            }
+
+            std::sort(repeated.begin(), repeated.end(), [](const MixedStrideField& a, const MixedStrideField& b) {
+                if (a.inner_offset != b.inner_offset) return a.inner_offset < b.inner_offset;
+                return a.size > b.size;
+            });
+
+            if (score > best.score || (score == best.score && base < best.base)) {
+                best.base = base;
+                best.fields = std::move(repeated);
+                best.score = score;
+            }
+        }
+
+        if (best.score < 2) {
+            return;
+        }
+
+        tinfo_t struct_type;
+        if (!build_struct_type_from_groups(best.fields, array.stride, struct_type)) {
+            return;
+        }
+
+        array.base_offset = best.base;
+        array.element_type = struct_type;
+        array.member_offsets.clear();
+        for (const auto& field : best.fields) {
+            for (uint32_t i = 0; i < array.element_count; ++i) {
+                array.member_offsets.push_back(best.base + field.inner_offset + i * array.stride);
+            }
+        }
+        std::sort(array.member_offsets.begin(), array.member_offsets.end());
+        array.member_offsets.erase(std::unique(array.member_offsets.begin(), array.member_offsets.end()),
+                                   array.member_offsets.end());
+    }
+
     std::optional<FieldCandidate> build_struct_array_candidate(
         Z3Context& ctx,
         const UnifiedAccessPattern& pattern,
@@ -443,7 +574,10 @@ void FieldCandidateGenerator::generate_array_candidates(
         direct_index[key] = static_cast<int>(i);
     }
 
-    for (const auto& array : arrays) {
+    for (const auto& detected_array : arrays) {
+        ArrayCandidate array = detected_array;
+        augment_struct_array_candidate(array, pattern);
+
         if (array.element_count == 0) {
             continue;
         }

@@ -99,6 +99,11 @@ private:
     /// Create raw bytes field type for irreconcilable regions
     [[nodiscard]] static tinfo_t create_raw_bytes_type(uint32_t size);
     [[nodiscard]] static tinfo_t create_bitfield_base_type(uint32_t size);
+    [[nodiscard]] tinfo_t create_bitmask_enum_type(
+        const qstring& base_name,
+        sval_t offset,
+        uint32_t storage_size,
+        const qvector<const SynthField*>& bitfields);
 
     const SynthOptions& options_;
 

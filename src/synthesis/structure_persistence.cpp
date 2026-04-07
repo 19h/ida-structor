@@ -58,6 +58,30 @@ tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
     udt.is_union = false;
     udt.total_size = synth_struct.size;
 
+    std::unordered_map<uint64_t, tinfo_t> bitfield_enums;
+    for (const auto& field : synth_struct.fields) {
+        if (!field.is_bitfield) {
+            continue;
+        }
+
+        uint64_t key = (static_cast<uint64_t>(field.offset) << 32) | field.size;
+        if (bitfield_enums.find(key) != bitfield_enums.end()) {
+            continue;
+        }
+
+        qvector<const SynthField*> group;
+        for (const auto& candidate : synth_struct.fields) {
+            if (candidate.is_bitfield && candidate.offset == field.offset && candidate.size == field.size) {
+                group.push_back(&candidate);
+            }
+        }
+
+        tinfo_t enum_type = create_bitmask_enum_type(name, field.offset, field.size, group);
+        if (!enum_type.empty()) {
+            bitfield_enums.emplace(key, enum_type);
+        }
+    }
+
     // Add fields
     msg("Structor: Creating struct '%s' with %zu fields, total_size=%u\n",
         name.c_str(), synth_struct.fields.size(), synth_struct.size);
@@ -89,7 +113,11 @@ tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
         if (field.is_bitfield) {
             udm.offset = static_cast<uint64>(field.offset) * 8 + field.bit_offset;
             udm.size = field.bit_size > 0 ? field.bit_size : field.size * 8;
-            if (!field.type.empty()) {
+            uint64_t key = (static_cast<uint64_t>(field.offset) << 32) | field.size;
+            auto enum_it = bitfield_enums.find(key);
+            if (enum_it != bitfield_enums.end()) {
+                udm.type = enum_it->second;
+            } else if (!field.type.empty()) {
                 udm.type = field.type;
             } else {
                 udm.type = create_bitfield_base_type(field.size);
@@ -650,6 +678,48 @@ tinfo_t StructurePersistence::create_bitfield_base_type(uint32_t size) {
     }
 
     return type;
+}
+
+tinfo_t StructurePersistence::create_bitmask_enum_type(
+    const qstring& base_name,
+    sval_t offset,
+    uint32_t storage_size,
+    const qvector<const SynthField*>& bitfields)
+{
+    if (bitfields.empty() || storage_size == 0 || storage_size > 8) {
+        return tinfo_t();
+    }
+
+    qstring enum_name;
+    enum_name.sprnt("%s_flags_%llX", base_name.c_str(),
+                    static_cast<unsigned long long>(offset));
+    if (struct_exists(enum_name.c_str())) {
+        enum_name = make_unique_name(enum_name.c_str());
+    }
+
+    enum_type_data_t ei(BTE_ALWAYS | BTE_HEX);
+    for (const auto* field : bitfields) {
+        if (!field || field->bit_size == 0 || field->bit_size >= 64) {
+            continue;
+        }
+
+        uint64 mask = ((uint64{1} << field->bit_size) - 1) << field->bit_offset;
+        ei.push_back(edm_t(field->name.c_str(), mask));
+    }
+
+    if (ei.empty()) {
+        return tinfo_t();
+    }
+
+    tid_t tid = create_enum_type(enum_name.c_str(), ei, static_cast<int>(storage_size),
+                                 type_unsigned, true, "Structor recovered bitmask flags");
+    if (tid == BADADDR) {
+        return tinfo_t();
+    }
+
+    tinfo_t enum_type;
+    enum_type.get_type_by_tid(tid);
+    return enum_type;
 }
 
 SemanticType StructurePersistence::semantic_from_type(const tinfo_t& type) {
