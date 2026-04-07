@@ -752,15 +752,36 @@ void LayoutSynthesizer::detect_subobjects(
     };
 
     std::unordered_map<sval_t, SubGroup> groups;
-    for (const auto& fn_pattern : pattern.per_function_patterns) {
-        auto it = pattern.function_deltas.find(fn_pattern.func_ea);
-        sval_t delta = it != pattern.function_deltas.end() ? it->second : 0;
-        if (delta <= 0) continue;
+    if (!pattern.flow_edges.empty()) {
+        for (const auto& edge : pattern.flow_edges) {
+            if (edge.delta == 0 || edge.callee_param_idx < 0) {
+                continue;
+            }
 
-        auto& group = groups[delta];
-        group.offset = delta;
-        group.patterns.push_back(fn_pattern);
-        group.funcs.insert(fn_pattern.func_ea);
+            for (const auto& fn_pattern : pattern.per_function_patterns) {
+                if (fn_pattern.func_ea != edge.callee_ea || fn_pattern.var_idx != edge.callee_param_idx) {
+                    continue;
+                }
+
+                auto& group = groups[edge.delta];
+                group.offset = edge.delta;
+                group.patterns.push_back(fn_pattern);
+                group.funcs.insert(fn_pattern.func_ea);
+            }
+        }
+    }
+
+    if (groups.empty()) {
+        for (const auto& fn_pattern : pattern.per_function_patterns) {
+            auto it = pattern.function_deltas.find(fn_pattern.func_ea);
+            sval_t delta = it != pattern.function_deltas.end() ? it->second : 0;
+            if (delta <= 0) continue;
+
+            auto& group = groups[delta];
+            group.offset = delta;
+            group.patterns.push_back(fn_pattern);
+            group.funcs.insert(fn_pattern.func_ea);
+        }
     }
 
     if (groups.empty()) return;

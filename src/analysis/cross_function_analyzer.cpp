@@ -233,6 +233,7 @@ UnifiedAccessPattern UnifiedAccessPattern::from_single(AccessPattern&& pattern) 
     result.global_max_offset = pattern.max_offset;
     result.has_vtable = pattern.has_vtable;
     result.vtable_offset = pattern.vtable_offset;
+    result.flow_edges.clear();
 
     // Copy accesses
     result.all_accesses = std::move(pattern.accesses);
@@ -254,6 +255,7 @@ UnifiedAccessPattern UnifiedAccessPattern::merge(
     }
 
     result.function_deltas = deltas;
+    result.flow_edges.clear();
 
     // Initialize bounds
     bool first = true;
@@ -835,6 +837,7 @@ UnifiedAccessPattern CrossFunctionAnalyzer::analyze(
 
     // Build result
     UnifiedAccessPattern result = normalize_and_merge();
+    result.flow_edges = equiv_class_.flow_edges;
 
     // Record statistics
     auto end_time = std::chrono::steady_clock::now();

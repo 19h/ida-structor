@@ -307,6 +307,9 @@ void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr
         walk(ptr_expr);
 
         if (info.has_base && info.index_var >= 0) {
+            msg("Structor:   Symbolic deref candidate in %a base=v%d idx=v%d const=%lld\n",
+                expr->ea, target_var_idx_, info.index_var,
+                static_cast<long long>(info.const_index));
             auto bound_it = local_index_bounds_.find(info.index_var);
             tinfo_t pointed = ptr_expr->type.get_pointed_object();
             size_t stride = pointed.empty() ? 0 : pointed.get_size();
@@ -316,6 +319,8 @@ void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr
 
             if (stride > 0) {
                 if (bound_it != local_index_bounds_.end() && bound_it->second > 0 && bound_it->second <= 32) {
+                    msg("Structor:   Expanding bounded symbolic deref with bound=%u stride=%zu\n",
+                        bound_it->second, stride);
                     for (std::uint32_t idx = 0; idx < bound_it->second; ++idx) {
                         FieldAccess access;
                         access.insn_ea = expr->ea;
@@ -334,6 +339,8 @@ void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr
                     }
                     return;
                 } else {
+                    msg("Structor:   Deferring symbolic deref for idx=v%d stride=%zu\n",
+                        info.index_var, stride);
                     PendingSymbolicAccess pending;
                     pending.insn_ea = expr->ea;
                     pending.base_offset = (info.const_index) * static_cast<sval_t>(stride);

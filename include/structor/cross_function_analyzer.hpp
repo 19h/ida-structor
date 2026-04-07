@@ -134,6 +134,7 @@ struct UnifiedAccessPattern {
     qvector<AccessPattern> per_function_patterns;
     qvector<FieldAccess> all_accesses;  // Merged, deduplicated, delta-normalized
     qvector<ea_t> contributing_functions;
+    qvector<PointerFlowEdge> flow_edges;
 
     // Per-function deltas (how much was subtracted from each function's offsets)
     std::unordered_map<ea_t, sval_t> function_deltas;
