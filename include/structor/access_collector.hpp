@@ -3,6 +3,7 @@
 #include "synth_types.hpp"
 #include "config.hpp"
 #include "utils.hpp"
+#include <unordered_map>
 
 namespace structor {
 
@@ -31,6 +32,7 @@ private:
     void process_memptr_access(cexpr_t* expr);
     void process_call_through_ptr(cexpr_t* call_expr);
     void process_array_access(cexpr_t* expr);
+    void process_assignment(cexpr_t* expr);
 
     void record_bitfield_access(const cexpr_t* expr, sval_t offset, uint32_t size,
                                 const BitfieldInfo& info,
@@ -50,6 +52,7 @@ private:
     cfunc_t* cfunc_;
     int target_var_idx_;
     qvector<FieldAccess> accesses_;
+    std::unordered_map<int, FieldAccess> local_aliases_;
 };
 
 /// Collects all access patterns for a variable in a function

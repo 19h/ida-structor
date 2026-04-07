@@ -23,6 +23,190 @@ namespace {
         va_end(va);
 #endif
     }
+
+    struct MixedStrideField {
+        uint32_t inner_offset = 0;
+        uint32_t size = 0;
+        tinfo_t type;
+        qvector<int> access_indices;
+    };
+
+    struct MixedStrideKey {
+        uint32_t inner_offset = 0;
+        uint32_t size = 0;
+
+        bool operator==(const MixedStrideKey& other) const noexcept {
+            return inner_offset == other.inner_offset && size == other.size;
+        }
+    };
+
+    struct MixedStrideKeyHash {
+        size_t operator()(const MixedStrideKey& key) const noexcept {
+            return (static_cast<size_t>(key.inner_offset) << 16) ^ key.size;
+        }
+    };
+
+    std::optional<FieldCandidate> build_struct_array_candidate(
+        Z3Context& ctx,
+        const UnifiedAccessPattern& pattern,
+        sval_t base,
+        uint32_t stride,
+        uint32_t count)
+    {
+        if (count < 3 || stride == 0) {
+            return std::nullopt;
+        }
+
+        std::unordered_map<MixedStrideKey, MixedStrideField, MixedStrideKeyHash> by_inner;
+        qvector<int> used_indices;
+
+        for (size_t i = 0; i < pattern.all_accesses.size(); ++i) {
+            const auto& access = pattern.all_accesses[i];
+            if (access.offset < base) {
+                continue;
+            }
+            sval_t rel = access.offset - base;
+            if (rel < 0) {
+                continue;
+            }
+            uint32_t idx = static_cast<uint32_t>(rel / stride);
+            if (idx >= count) {
+                continue;
+            }
+            uint32_t inner = static_cast<uint32_t>(rel % stride);
+            if (inner + access.size > stride) {
+                continue;
+            }
+
+            MixedStrideKey key{inner, access.size};
+            auto& field = by_inner[key];
+            field.inner_offset = inner;
+            field.size = access.size;
+            if (field.type.empty() && !access.inferred_type.empty()) {
+                field.type = access.inferred_type;
+            }
+            field.access_indices.push_back(static_cast<int>(i));
+        }
+
+        qvector<MixedStrideField> repeated;
+        for (auto& [key, field] : by_inner) {
+            std::unordered_set<uint32_t> indices;
+            for (int access_idx : field.access_indices) {
+                const auto& access = pattern.all_accesses[access_idx];
+                indices.insert(static_cast<uint32_t>((access.offset - base) / stride));
+            }
+            if (indices.size() >= 3) {
+                repeated.push_back(field);
+            }
+        }
+
+        if (repeated.size() < 2) {
+            return std::nullopt;
+        }
+
+        std::sort(repeated.begin(), repeated.end(), [](const MixedStrideField& a, const MixedStrideField& b) {
+            if (a.access_indices.size() != b.access_indices.size()) {
+                return a.access_indices.size() > b.access_indices.size();
+            }
+            if (a.inner_offset != b.inner_offset) {
+                return a.inner_offset < b.inner_offset;
+            }
+            return a.size > b.size;
+        });
+
+        if (repeated.size() > 4) {
+            repeated.resize(4);
+        }
+
+        uint32_t effective_count = count;
+        for (const auto& field : repeated) {
+            std::unordered_set<uint32_t> indices;
+            for (int access_idx : field.access_indices) {
+                const auto& access = pattern.all_accesses[access_idx];
+                indices.insert(static_cast<uint32_t>((access.offset - base) / stride));
+            }
+            uint32_t contiguous = 0;
+            while (indices.count(contiguous) > 0) {
+                ++contiguous;
+            }
+            effective_count = std::min(effective_count, contiguous);
+        }
+
+        if (effective_count < 3) {
+            return std::nullopt;
+        }
+
+        for (const auto& field : repeated) {
+            for (int access_idx : field.access_indices) {
+                const auto& access = pattern.all_accesses[access_idx];
+                uint32_t idx = static_cast<uint32_t>((access.offset - base) / stride);
+                if (idx < effective_count) {
+                    used_indices.push_back(access_idx);
+                }
+            }
+        }
+
+        std::sort(repeated.begin(), repeated.end(), [](const MixedStrideField& a, const MixedStrideField& b) {
+            return a.inner_offset < b.inner_offset;
+        });
+
+        repeated.erase(std::remove_if(repeated.begin(), repeated.end(), [&](const MixedStrideField& field) {
+            std::unordered_set<uint32_t> indices;
+            for (int access_idx : field.access_indices) {
+                const auto& access = pattern.all_accesses[access_idx];
+                uint32_t idx = static_cast<uint32_t>((access.offset - base) / stride);
+                if (idx < effective_count) {
+                    indices.insert(idx);
+                }
+            }
+            return indices.size() < effective_count;
+        }), repeated.end());
+
+        if (repeated.size() < 2) {
+            return std::nullopt;
+        }
+
+        udt_type_data_t udt;
+        udt.is_union = false;
+        udt.total_size = stride;
+
+        for (const auto& field : repeated) {
+            udm_t udm;
+            udm.offset = static_cast<uint64>(field.inner_offset) * 8;
+            udm.name = generate_field_name(field.inner_offset);
+            if (!field.type.empty()) {
+                udm.type = field.type;
+                udm.size = field.type.get_size() * 8;
+            } else {
+                tinfo_t byte_type;
+                byte_type.create_simple_type(BT_INT8 | BTMT_USIGNED);
+                if (field.size > 1) {
+                    udm.type.create_array(byte_type, field.size);
+                } else {
+                    udm.type = byte_type;
+                }
+                udm.size = field.size * 8;
+            }
+            udt.push_back(udm);
+        }
+
+        tinfo_t elem_type;
+        if (!elem_type.create_udt(udt)) {
+            return std::nullopt;
+        }
+
+        FieldCandidate candidate;
+        candidate.offset = base;
+        candidate.size = stride * effective_count;
+        candidate.kind = FieldCandidate::Kind::ArrayField;
+        candidate.type_category = TypeCategory::Struct;
+        candidate.extended_type = ctx.type_encoder().extract_extended_info(elem_type);
+        candidate.array_element_count = effective_count;
+        candidate.array_stride = stride;
+        candidate.confidence = TypeConfidence::Medium;
+        candidate.source_access_indices = std::move(used_indices);
+        return candidate;
+    }
 }
 
 // ============================================================================
@@ -339,6 +523,59 @@ void FieldCandidateGenerator::generate_array_candidates(
         }
 
         candidates.push_back(std::move(array_candidate));
+    }
+
+    // Mixed-size repeated-stride detection for arrays of structs.
+    if (pattern.all_accesses.size() >= 6) {
+        std::unordered_set<uint32_t> stride_candidates;
+        qvector<sval_t> offsets;
+        offsets.reserve(pattern.all_accesses.size());
+        for (const auto& access : pattern.all_accesses) {
+            offsets.push_back(access.offset);
+        }
+        std::sort(offsets.begin(), offsets.end());
+        for (size_t i = 0; i < offsets.size(); ++i) {
+            for (size_t j = i + 1; j < offsets.size() && j <= i + 6; ++j) {
+                sval_t diff = offsets[j] - offsets[i];
+                if (diff >= 8 && diff <= 64) {
+                    stride_candidates.insert(static_cast<uint32_t>(diff));
+                }
+            }
+        }
+
+        for (uint32_t stride : stride_candidates) {
+            for (const auto& access : pattern.all_accesses) {
+                std::unordered_set<uint32_t> indices;
+                for (const auto& other : pattern.all_accesses) {
+                    if (other.offset < access.offset) {
+                        continue;
+                    }
+                    sval_t rel = other.offset - access.offset;
+                    if (rel >= 0 && rel % stride == 0) {
+                        indices.insert(static_cast<uint32_t>(rel / stride));
+                    }
+                }
+
+                uint32_t count = 0;
+                while (indices.count(count) > 0) {
+                    ++count;
+                }
+
+                auto candidate = build_struct_array_candidate(ctx_, pattern, access.offset, stride, count);
+                if (!candidate.has_value()) {
+                    continue;
+                }
+
+                bool duplicate = std::any_of(candidates.begin(), candidates.end(), [&](const FieldCandidate& existing) {
+                    return existing.kind == FieldCandidate::Kind::ArrayField &&
+                           existing.offset == candidate->offset &&
+                           existing.size == candidate->size;
+                });
+                if (!duplicate) {
+                    candidates.push_back(std::move(*candidate));
+                }
+            }
+        }
     }
 }
 

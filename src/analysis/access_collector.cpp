@@ -34,6 +34,10 @@ int AccessPatternVisitor::visit_expr(cexpr_t* expr) {
             }
             break;
 
+        case cot_asg:
+            process_assignment(expr);
+            break;
+
         case cot_band: {
             const cexpr_t* mask_expr = nullptr;
             const cexpr_t* value_expr = nullptr;
@@ -64,7 +68,18 @@ int AccessPatternVisitor::visit_expr(cexpr_t* expr) {
                 uint32_t size = 0;
                 std::optional<std::uint8_t> base_indirection;
                 BitfieldInfo info;
-                if (extract_access(base_expr, offset, size, &base_indirection) &&
+                bool resolved = extract_access(base_expr, offset, size, &base_indirection);
+                if (!resolved && base_expr && base_expr->op == cot_var) {
+                    auto it = local_aliases_.find(base_expr->v.idx);
+                    if (it != local_aliases_.end()) {
+                        offset = it->second.offset;
+                        size = it->second.size;
+                        base_indirection = it->second.base_indirection;
+                        resolved = true;
+                    }
+                }
+
+                if (resolved &&
                     compute_bitfield(static_cast<std::uint64_t>(mask_expr->numval()),
                                      shift, info.bit_offset, info.bit_size)) {
                     if (static_cast<unsigned>(info.bit_offset + info.bit_size) <= size * 8) {
@@ -85,6 +100,51 @@ int AccessPatternVisitor::visit_expr(cexpr_t* expr) {
     }
 
     return 0;
+}
+
+void AccessPatternVisitor::process_assignment(cexpr_t* expr) {
+    if (!expr || expr->op != cot_asg || !expr->x || !expr->y) {
+        return;
+    }
+
+    cexpr_t* lhs = expr->x;
+    cexpr_t* rhs = expr->y;
+    while (rhs && rhs->op == cot_cast) {
+        rhs = rhs->x;
+    }
+
+    if (!lhs || lhs->op != cot_var || !rhs) {
+        return;
+    }
+
+    FieldAccess alias;
+    bool resolved = false;
+
+    sval_t offset = 0;
+    uint32_t size = 0;
+    std::optional<std::uint8_t> base_indirection;
+    if (extract_access(rhs, offset, size, &base_indirection)) {
+        alias.insn_ea = expr->ea;
+        alias.source_func_ea = cfunc_->entry_ea;
+        alias.offset = offset;
+        alias.size = size;
+        alias.access_type = AccessType::Read;
+        alias.semantic_type = infer_semantic_from_usage(rhs, parent_expr());
+        alias.context_expr = utils::expr_to_string(rhs, cfunc_);
+        alias.inferred_type = rhs->type;
+        alias.base_indirection = base_indirection;
+        resolved = true;
+    } else if (rhs->op == cot_var) {
+        auto it = local_aliases_.find(rhs->v.idx);
+        if (it != local_aliases_.end()) {
+            alias = it->second;
+            resolved = true;
+        }
+    }
+
+    if (resolved) {
+        local_aliases_[lhs->v.idx] = std::move(alias);
+    }
 }
 
 void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr_expr) {

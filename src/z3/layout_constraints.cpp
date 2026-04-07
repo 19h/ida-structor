@@ -14,6 +14,35 @@
 namespace structor::z3 {
 
 namespace {
+
+bool is_redundant_aggregate_access(const UnifiedAccessPattern* pattern, const FieldAccess& access) {
+    if (!pattern || access.inferred_type.empty()) {
+        return false;
+    }
+
+    if ((!access.inferred_type.is_array() && !access.inferred_type.is_struct()) || access.size <= 8) {
+        return false;
+    }
+
+    int nested = 0;
+    const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
+    for (const auto& other : pattern->all_accesses) {
+        if (&other == &access) {
+            continue;
+        }
+        const sval_t other_end = other.offset + static_cast<sval_t>(other.size);
+        if (other.offset >= access.offset && other_end <= access_end &&
+            (other.size < access.size || other.offset != access.offset)) {
+            ++nested;
+        }
+    }
+
+    return nested >= 2;
+}
+
+} // namespace
+
+namespace {
     // Helper for conditional logging
     inline void z3_log(const char* fmt, ...) {
 #ifndef STRUCTOR_TESTING
@@ -298,6 +327,10 @@ void LayoutConstraintBuilder::add_coverage_constraints() {
 
     for (size_t i = 0; i < num_accesses; ++i) {
         const auto& access = pattern_->all_accesses[i];
+
+        if (is_redundant_aggregate_access(pattern_, access)) {
+            continue;
+        }
         
         // Prefetch next access
         if (STRUCTOR_LIKELY(i + 2 < num_accesses)) {
