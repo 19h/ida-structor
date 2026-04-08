@@ -39,6 +39,79 @@ void log_array_element_udt(const qstring& field_name, const tinfo_t& type) {
     }
 }
 
+bool extract_function_type_for_reuse(const tinfo_t& type, tinfo_t& out_func_type) {
+    if (type.empty()) {
+        return false;
+    }
+
+    if (type.is_func()) {
+        out_func_type = type;
+        return true;
+    }
+
+    if (type.is_funcptr()) {
+        tinfo_t pointed = type.get_pointed_object();
+        if (!pointed.empty() && pointed.is_func()) {
+            out_func_type = pointed;
+            return true;
+        }
+    }
+
+    if (type.is_ptr()) {
+        tinfo_t pointed = type.get_pointed_object();
+        if (!pointed.empty() && pointed.is_func()) {
+            out_func_type = pointed;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+const udm_t* find_member_at_offset(const udt_type_data_t& udt, sval_t offset) {
+    for (const auto& member : udt) {
+        if (member.offset == static_cast<uint64>(offset) * 8) {
+            return &member;
+        }
+    }
+
+    return nullptr;
+}
+
+bool reuse_candidate_matches_function_members(const SynthStruct& synth_struct, const tinfo_t& tif) {
+    udt_type_data_t udt;
+    if (!tif.get_udt_details(&udt)) {
+        return false;
+    }
+
+    for (const auto& field : synth_struct.fields) {
+        if (field.type.empty()) {
+            continue;
+        }
+
+        tinfo_t observed_func;
+        if (!extract_function_type_for_reuse(field.type, observed_func)) {
+            continue;
+        }
+
+        const udm_t* member = find_member_at_offset(udt, field.offset);
+        if (!member || member->type.empty()) {
+            return false;
+        }
+
+        tinfo_t candidate_func;
+        if (!extract_function_type_for_reuse(member->type, candidate_func)) {
+            return false;
+        }
+
+        if (!candidate_func.compare_with(observed_func, TCMP_CALL | TCMP_IGNMODS)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 } // namespace
 
 tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
@@ -1099,6 +1172,10 @@ std::optional<std::tuple<tid_t, qstring, double>> StructurePersistence::find_reu
 
         StructSignature sig;
         if (!build_signature_from_tinfo(tif, sig)) {
+            continue;
+        }
+
+        if (!reuse_candidate_matches_function_members(synth_struct, tif)) {
             continue;
         }
 

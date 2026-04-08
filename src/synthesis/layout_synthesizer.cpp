@@ -129,6 +129,80 @@ tinfo_t make_scalar_type_for_access(const FieldAccess& access) {
     return type;
 }
 
+void prune_intermediate_positive_delta_patterns(ea_t source_func,
+                                                UnifiedAccessPattern& unified_pattern) {
+    auto source_it = unified_pattern.function_deltas.find(source_func);
+    if (source_it == unified_pattern.function_deltas.end()) {
+        return;
+    }
+
+    const sval_t source_delta = source_it->second;
+    if (source_delta <= 0) {
+        return;
+    }
+
+    bool has_negative_helper = false;
+    for (const auto& fn_pattern : unified_pattern.per_function_patterns) {
+        if (fn_pattern.func_ea == source_func) {
+            continue;
+        }
+
+        sval_t delta = 0;
+        if (auto it = unified_pattern.function_deltas.find(fn_pattern.func_ea);
+            it != unified_pattern.function_deltas.end()) {
+            delta = it->second;
+        }
+
+        if (delta < 0) {
+            has_negative_helper = true;
+            break;
+        }
+    }
+
+    if (!has_negative_helper) {
+        return;
+    }
+
+    qvector<AccessPattern> kept_patterns;
+    kept_patterns.reserve(unified_pattern.per_function_patterns.size());
+    std::unordered_set<ea_t> kept_funcs;
+    bool changed = false;
+
+    for (auto& fn_pattern : unified_pattern.per_function_patterns) {
+        sval_t delta = 0;
+        if (auto it = unified_pattern.function_deltas.find(fn_pattern.func_ea);
+            it != unified_pattern.function_deltas.end()) {
+            delta = it->second;
+        }
+
+        const bool drop_pattern =
+            fn_pattern.func_ea != source_func && delta >= 0 && delta < source_delta;
+        if (drop_pattern) {
+            changed = true;
+            continue;
+        }
+
+        kept_funcs.insert(fn_pattern.func_ea);
+        kept_patterns.push_back(std::move(fn_pattern));
+    }
+
+    if (!changed) {
+        return;
+    }
+
+    UnifiedAccessPattern pruned = UnifiedAccessPattern::merge(
+        std::move(kept_patterns),
+        unified_pattern.function_deltas);
+
+    for (const auto& edge : unified_pattern.flow_edges) {
+        if (kept_funcs.contains(edge.caller_ea) && kept_funcs.contains(edge.callee_ea)) {
+            pruned.flow_edges.push_back(edge);
+        }
+    }
+
+    unified_pattern = std::move(pruned);
+}
+
 } // namespace
 
 LayoutSynthesizer::LayoutSynthesizer(const LayoutSynthConfig& config)
@@ -187,6 +261,7 @@ SynthesisResult LayoutSynthesizer::synthesize(
         unified_pattern = analyzer.analyze(pattern.func_ea, pattern.var_idx, opts);
         result.functions_analyzed = static_cast<int>(
             analyzer.equivalence_class().variables.size());
+        prune_intermediate_positive_delta_patterns(pattern.func_ea, unified_pattern);
     } else {
         // Single-function mode
         AccessPattern mutable_pattern = pattern;
