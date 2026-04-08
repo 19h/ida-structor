@@ -411,6 +411,238 @@ inline SynthResult StructorAPI::do_synthesis(ea_t func_ea, int var_idx, const Sy
                 struct_type,
                 PropagationDirection::Both);
 
+            auto is_generic_name = [](const qstring& name) {
+                return name.empty() ||
+                       name.find("field_") == 0 ||
+                       name.find("sub_") == 0 ||
+                       name.find("__pad_") == 0 ||
+                       name.find("union_") == 0;
+            };
+
+            auto member_size = [](const udm_t& member) -> size_t {
+                const size_t type_size = member.type.get_size();
+                if (type_size != BADSIZE) {
+                    return type_size;
+                }
+                return member.size / 8;
+            };
+
+            auto adopt_names_from_udt = [&](SynthStruct& target, const tinfo_t& donor_type) {
+                udt_type_data_t udt;
+                if (!donor_type.get_udt_details(&udt)) {
+                    return;
+                }
+
+                for (auto& field : target.fields) {
+                    if (field.is_padding) {
+                        continue;
+                    }
+
+                    for (const auto& member : udt) {
+                        if (member.offset != static_cast<uint64>(field.offset) * 8 || member.name.empty()) {
+                            continue;
+                        }
+                        if (member_size(member) != field.size) {
+                            continue;
+                        }
+
+                        field.name = member.name;
+                        if (field.is_union_candidate && !field.union_members.empty()) {
+                            field.union_members[0].name = member.name;
+                            for (size_t i = 1; i < field.union_members.size(); ++i) {
+                                auto& alt = field.union_members[i];
+                                if (!is_generic_name(alt.name)) {
+                                    continue;
+                                }
+
+                                if (alt.size < field.size && (field.size % alt.size) == 0) {
+                                    alt.name.sprnt("%s_dword", member.name.c_str());
+                                } else if (alt.size < field.size) {
+                                    alt.name.sprnt("%s_part", member.name.c_str());
+                                } else {
+                                    alt.name = member.name;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            };
+
+            auto needs_name_refinement = [&](const SynthStruct& target) {
+                for (const auto& field : target.fields) {
+                    if (field.is_padding) {
+                        continue;
+                    }
+                    if (is_generic_name(field.name)) {
+                        return true;
+                    }
+                    if (!field.is_union_candidate) {
+                        continue;
+                    }
+                    for (const auto& alt : field.union_members) {
+                        if (is_generic_name(alt.name)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            };
+
+            auto extract_semantic_donor = [&](const tinfo_t& candidate, tinfo_t& donor_type) {
+                donor_type = candidate;
+                if (donor_type.is_ptr()) {
+                    donor_type = donor_type.get_pointed_object();
+                }
+                if (!(donor_type.is_struct() || donor_type.is_union())) {
+                    return false;
+                }
+
+                udt_type_data_t udt;
+                if (!donor_type.get_udt_details(&udt) || udt.empty()) {
+                    return false;
+                }
+
+                for (const auto& member : udt) {
+                    if (!member.name.empty() && !is_generic_name(member.name)) {
+                        return true;
+                    }
+                }
+
+                return false;
+            };
+
+            auto matches_donor_layout = [&](const SynthStruct& target, const tinfo_t& donor_type) {
+                udt_type_data_t udt;
+                if (!donor_type.get_udt_details(&udt) || udt.empty()) {
+                    return false;
+                }
+
+                const size_t donor_size = donor_type.get_size();
+                if (donor_size != BADSIZE && donor_size != target.size) {
+                    return false;
+                }
+
+                size_t field_count = 0;
+                for (const auto& field : target.fields) {
+                    if (field.is_padding) {
+                        continue;
+                    }
+
+                    ++field_count;
+                    bool matched = false;
+                    for (const auto& member : udt) {
+                        if (member.offset != static_cast<uint64>(field.offset) * 8) {
+                            continue;
+                        }
+                        if (member_size(member) != field.size) {
+                            continue;
+                        }
+
+                        matched = true;
+                        break;
+                    }
+
+                    if (!matched) {
+                        return false;
+                    }
+                }
+
+                return udt.size() == field_count;
+            };
+
+            if (!sub_structs.empty()) {
+                qvector<tinfo_t> donor_types;
+                for (const auto& site : prop_result.sites) {
+                    if (!site.success) {
+                        continue;
+                    }
+
+                    tinfo_t donor_type;
+                    if (!extract_semantic_donor(site.new_type, donor_type)) {
+                        continue;
+                    }
+
+                    bool duplicate = false;
+                    for (const auto& existing : donor_types) {
+                        if (existing.equals_to(donor_type)) {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+                    if (!duplicate) {
+                        donor_types.push_back(std::move(donor_type));
+                    }
+                }
+
+                bool refined_substructs = false;
+                for (auto& sub : sub_structs) {
+                    if (sub.structure.tid == BADADDR || !needs_name_refinement(sub.structure)) {
+                        continue;
+                    }
+
+                    int match_count = 0;
+                    tinfo_t matched_donor;
+                    for (const auto& donor_type : donor_types) {
+                        if (!matches_donor_layout(sub.structure, donor_type)) {
+                            continue;
+                        }
+
+                        matched_donor = donor_type;
+                        ++match_count;
+                        if (match_count > 1) {
+                            break;
+                        }
+                    }
+
+                    if (match_count != 1) {
+                        continue;
+                    }
+
+                    adopt_names_from_udt(sub.structure, matched_donor);
+                    if (persistence.update_struct(sub.structure.tid, sub.structure)) {
+                        refined_substructs = true;
+                    }
+                }
+
+                if (refined_substructs) {
+                    for (const auto& sub : sub_structs) {
+                        if (sub.structure.tid == BADADDR) {
+                            continue;
+                        }
+
+                        tinfo_t sub_type;
+                        if (!sub_type.get_type_by_tid(sub.structure.tid)) {
+                            continue;
+                        }
+
+                        for (auto& field : synth_struct.fields) {
+                            if (field.offset != sub.parent_offset) {
+                                continue;
+                            }
+                            if (!field.name.empty() && field.name != sub.field_name) {
+                                continue;
+                            }
+
+                            field.type = sub_type;
+                            field.size = sub.structure.size;
+                            field.semantic = SemanticType::NestedStruct;
+                            if (field.name.empty()) {
+                                field.name = sub.field_name;
+                            }
+                            break;
+                        }
+                    }
+
+                    if (persistence.update_struct(struct_tid, synth_struct)) {
+                        tinfo_t refreshed_type;
+                        if (refreshed_type.get_type_by_tid(struct_tid)) {
+                            (void)propagator.apply_type(cfunc, var_idx, refreshed_type);
+                        }
+                    }
+                }
+            }
+
             for (const auto& site : prop_result.sites) {
                 if (site.success) {
                     result.propagated_to.push_back(site.func_ea);

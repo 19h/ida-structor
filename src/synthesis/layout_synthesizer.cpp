@@ -2043,7 +2043,7 @@ z3::TypeApplicationResult LayoutSynthesizer::apply_synthesis_result(
         TypePropagator propagator;
         PropagationResult prop = propagator.propagate(
             cfunc->entry_ea, var_idx, ptr_type, PropagationDirection::Both);
-        
+
         app_result.propagation = prop;
         app_result.propagated_count = prop.success_count;
         

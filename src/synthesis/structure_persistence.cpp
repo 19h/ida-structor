@@ -564,6 +564,25 @@ bool StructurePersistence::update_struct(tid_t tid, const SynthStruct& synth_str
     udt.total_size = synth_struct.size;
 
     for (const auto& field : synth_struct.fields) {
+        if (field.is_union_candidate && !field.union_members.empty()) {
+            qvector<SynthField> members;
+            members.reserve(field.union_members.size());
+            for (const auto& alt : field.union_members) {
+                SynthField member;
+                member.name = alt.name;
+                member.offset = alt.offset;
+                member.size = alt.size;
+                member.type = alt.type;
+                member.comment = alt.comment;
+                members.push_back(std::move(member));
+            }
+
+            qstring union_name = field.name.empty() ? qstring("union") : field.name;
+            if (add_union_field(udt, field.offset, union_name, members) != BADADDR) {
+                continue;
+            }
+        }
+
         udm_t udm;
         udm.name = field.name;
 
@@ -571,7 +590,7 @@ bool StructurePersistence::update_struct(tid_t tid, const SynthStruct& synth_str
             udm.offset = static_cast<uint64>(field.offset) * 8 + field.bit_offset;
             udm.size = field.bit_size > 0 ? field.bit_size : field.size * 8;
             if (!field.type.empty()) {
-                udm.type = field.type;
+                udm.type = materialize_nested_type(name, field, field.type);
             } else {
                 udm.type = create_bitfield_base_type(field.size);
             }
@@ -579,7 +598,7 @@ bool StructurePersistence::update_struct(tid_t tid, const SynthStruct& synth_str
             udm.offset = static_cast<uint64>(field.offset) * 8;
 
             if (!field.type.empty()) {
-                udm.type = field.type;
+                udm.type = materialize_nested_type(name, field, field.type);
                 udm.size = field.type.get_size() * 8;
             } else {
                 tinfo_t byte_type;
