@@ -2,10 +2,19 @@
 /// @brief Type propagation implementation
 
 #include <structor/type_propagator.hpp>
+#include <structor/access_collector.hpp>
+#include <structor/layout_synthesizer.hpp>
+#include <structor/structure_persistence.hpp>
 
 namespace structor {
 
 namespace {
+
+struct CalleeGroup {
+    ea_t callee_ea = BADADDR;
+    int param_idx = -1;
+    qvector<int> info_indices;
+};
 
 bool make_shifted_window_ptr(const tinfo_t& type, tinfo_t& out_ptr_type) {
     qstring type_name;
@@ -77,6 +86,59 @@ bool resolve_member_type_from_parent(const tinfo_t& parent_type,
     }
 
     return false;
+}
+
+bool types_equal(const tinfo_t& a, const tinfo_t& b) {
+    if (a.empty() || b.empty()) {
+        return a.empty() && b.empty();
+    }
+    return a.equals_to(b);
+}
+
+tinfo_t derive_callee_type(const tinfo_t& parent_type,
+                           sval_t member_offset,
+                           bool by_ref,
+                           const tinfo_t& passed_type) {
+    tinfo_t callee_type = parent_type;
+    if (resolve_member_type_from_parent(parent_type, member_offset, by_ref, callee_type)) {
+        return callee_type;
+    }
+    if (!passed_type.empty()) {
+        return passed_type;
+    }
+    if (by_ref) {
+        tinfo_t ptr_type;
+        ptr_type.create_ptr(parent_type);
+        return ptr_type;
+    }
+    return callee_type;
+}
+
+bool synthesize_callee_param_type(ea_t func_ea,
+                                  int var_idx,
+                                  const SynthOptions& opts,
+                                  tinfo_t& out_type) {
+    AccessCollector collector(opts);
+    AccessPattern pattern = collector.collect(func_ea, var_idx);
+    if (pattern.accesses.empty() || static_cast<int>(pattern.access_count()) < opts.min_accesses) {
+        return false;
+    }
+
+    LayoutSynthesizer synthesizer(opts);
+    SynthesisResult synth_result = synthesizer.synthesize(pattern, opts);
+    if (!synth_result.success()) {
+        return false;
+    }
+
+    StructurePersistence persistence(opts);
+    tid_t tid = synth_result.sub_structs.empty()
+        ? persistence.create_struct(synth_result.structure)
+        : persistence.create_struct_with_substructs(synth_result.structure, synth_result.sub_structs);
+    if (tid == BADADDR) {
+        return false;
+    }
+
+    return out_type.get_type_by_tid(tid);
 }
 
 } // namespace
@@ -216,41 +278,82 @@ void TypePropagator::propagate_forward(
     qvector<CalleeArgInfo> callees;
     find_callees_with_arg(cfunc, var_idx, callees);
 
-    for (const auto& info : callees) {
-        auto key = make_visit_key(info.callee_ea, info.param_idx);
+    qvector<CalleeGroup> groups;
+    for (size_t info_index = 0; info_index < callees.size(); ++info_index) {
+        const auto& info = callees[info_index];
+        CalleeGroup* group = nullptr;
+        for (auto& existing : groups) {
+            if (existing.callee_ea == info.callee_ea && existing.param_idx == info.param_idx) {
+                group = &existing;
+                break;
+            }
+        }
+
+        if (!group) {
+            CalleeGroup created;
+            created.callee_ea = info.callee_ea;
+            created.param_idx = info.param_idx;
+            groups.push_back(std::move(created));
+            group = &groups.back();
+        }
+
+        group->info_indices.push_back(static_cast<int>(info_index));
+    }
+
+    for (const auto& group : groups) {
+        auto key = make_visit_key(group.callee_ea, group.param_idx);
         if (visited_.count(key)) continue;
         visited_.insert(key);
 
-        cfuncptr_t callee_cfunc = utils::get_cfunc(info.callee_ea);
+        cfuncptr_t callee_cfunc = utils::get_cfunc(group.callee_ea);
         if (!callee_cfunc) continue;
 
-        tinfo_t callee_type = type;
-        if (resolve_member_type_from_parent(type, info.member_offset, info.by_ref, callee_type)) {
-        } else if (!info.passed_type.empty()) {
-            callee_type = info.passed_type;
-        } else if (info.by_ref) {
-            tinfo_t ptr_type;
-            ptr_type.create_ptr(type);
-            callee_type = ptr_type;
+        qvector<tinfo_t> candidate_types;
+        for (int info_index : group.info_indices) {
+            const auto& info = callees[static_cast<size_t>(info_index)];
+            tinfo_t candidate = derive_callee_type(type,
+                                                   info.member_offset,
+                                                   info.by_ref,
+                                                   info.passed_type);
+            bool duplicate = false;
+            for (const auto& existing : candidate_types) {
+                if (types_equal(existing, candidate)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) {
+                candidate_types.push_back(std::move(candidate));
+            }
+        }
+        tinfo_t callee_type;
+        if (candidate_types.size() == 1) {
+            callee_type = candidate_types.front();
+        } else if (candidate_types.size() > 1) {
+            if (!synthesize_callee_param_type(group.callee_ea, group.param_idx, options_, callee_type)) {
+                callee_type = candidate_types.front();
+            }
+        } else {
+            callee_type = type;
         }
 
         PropagationSite site;
-        site.func_ea = info.callee_ea;
-        site.var_idx = info.param_idx;
+        site.func_ea = group.callee_ea;
+        site.var_idx = group.param_idx;
         site.new_type = callee_type;
         site.direction = PropagationDirection::Forward;
 
         lvars_t& callee_lvars = *callee_cfunc->get_lvars();
-        if (info.param_idx >= 0 && static_cast<size_t>(info.param_idx) < callee_lvars.size()) {
-            site.var_name = callee_lvars[info.param_idx].name;
-            site.old_type = callee_lvars[info.param_idx].type();
+        if (group.param_idx >= 0 && static_cast<size_t>(group.param_idx) < callee_lvars.size()) {
+            site.var_name = callee_lvars[group.param_idx].name;
+            site.old_type = callee_lvars[group.param_idx].type();
         }
 
-        if (apply_type(callee_cfunc, info.param_idx, callee_type)) {
+        if (apply_type(callee_cfunc, group.param_idx, callee_type)) {
             result.add_success(std::move(site));
 
             // Continue propagation
-            propagate_forward(info.callee_ea, info.param_idx, callee_type, depth + 1, result);
+            propagate_forward(group.callee_ea, group.param_idx, callee_type, depth + 1, result);
         } else {
             site.failure_reason = "Failed to apply type";
             result.add_failure(std::move(site));
@@ -447,6 +550,11 @@ void TypePropagator::find_callees_with_arg(
                 case cot_ref:
                 case cot_ptr:
                     return resolve_var_delta(expr->x, var_idx, delta);
+                case cot_call:
+                    if (expr->x && expr->x->op == cot_helper && expr->a && expr->a->size() == 1) {
+                        return resolve_var_delta(&expr->a->at(0), var_idx, delta);
+                    }
+                    return false;
                 case cot_add:
                     if (expr->y && expr->y->op == cot_num && resolve_var_delta(expr->x, var_idx, delta)) {
                         delta += static_cast<sval_t>(expr->y->numval());
@@ -482,6 +590,26 @@ void TypePropagator::find_callees_with_arg(
                 expr = expr->x;
             }
             return expr;
+        }
+
+        static const cexpr_t* find_base_var(const cexpr_t* expr) {
+            while (expr) {
+                if (expr->op == cot_var) return expr;
+                if (expr->op == cot_cast || expr->op == cot_ref || expr->op == cot_ptr) {
+                    expr = expr->x;
+                } else if (expr->op == cot_call && expr->x && expr->x->op == cot_helper && expr->a && expr->a->size() == 1) {
+                    expr = &expr->a->at(0);
+                } else if (expr->op == cot_add || expr->op == cot_sub) {
+                    const cexpr_t* left = find_base_var(expr->x);
+                    if (left) return left;
+                    expr = expr->y;
+                } else if (expr->op == cot_memref || expr->op == cot_memptr || expr->op == cot_idx) {
+                    expr = expr->x;
+                } else {
+                    break;
+                }
+            }
+            return nullptr;
         }
 
         static bool is_plain_var_arg(const cexpr_t* expr, int var_idx) {
@@ -541,6 +669,11 @@ void TypePropagator::find_callees_with_arg(
                 case cot_memptr:
                 case cot_idx:
                     return contains_ref(expr->x);
+                case cot_call:
+                    if (expr->x && expr->x->op == cot_helper && expr->a && expr->a->size() == 1) {
+                        return contains_ref(&expr->a->at(0));
+                    }
+                    return false;
                 case cot_add:
                 case cot_sub:
                     return contains_ref(expr->x) || contains_ref(expr->y);
@@ -580,7 +713,14 @@ void TypePropagator::find_callees_with_arg(
                 int base_var = -1;
                 sval_t delta = 0;
 
-                if (resolve_var_delta(&arg, base_var, delta) && base_var == target_var_idx) {
+                const bool resolved = resolve_var_delta(&arg, base_var, delta);
+                bool matches_target = resolved && base_var == target_var_idx;
+                if (!matches_target) {
+                    const cexpr_t* root = find_base_var(&arg);
+                    matches_target = root && root->op == cot_var && root->v.idx == target_var_idx;
+                }
+
+                if (matches_target) {
                     CalleeArgInfo info;
                     info.callee_ea = callee_ea;
                     info.param_idx = static_cast<int>(i);
@@ -635,6 +775,8 @@ void TypePropagator::find_callers_with_param(
                     if (expr->op == cot_var) return expr;
                     if (expr->op == cot_cast || expr->op == cot_ref || expr->op == cot_ptr) {
                         expr = expr->x;
+                    } else if (expr->op == cot_call && expr->x && expr->x->op == cot_helper && expr->a && expr->a->size() == 1) {
+                        expr = &expr->a->at(0);
                     } else if (expr->op == cot_add || expr->op == cot_sub) {
                         // Try both sides for (ptr + offset) or (offset + ptr)
                         cexpr_t* left = find_base_var(expr->x);
