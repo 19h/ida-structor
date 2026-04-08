@@ -803,7 +803,26 @@ void LayoutSynthesizer::detect_subobjects(
 
     LayoutSynthesizer sub_synth(sub_config);
 
-    auto region_covered_by_other_fields = [&](sval_t start, sval_t end, size_t skip_index) {
+    auto access_covered_by_other_fields = [&](const FieldAccess& access, size_t skip_index) {
+        const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
+        for (size_t i = 0; i < result.structure.fields.size(); ++i) {
+            if (i == skip_index) {
+                continue;
+            }
+
+            const auto& other = result.structure.fields[i];
+            const sval_t other_end = other.offset + static_cast<sval_t>(other.size);
+            if (access.offset >= other.offset && access_end <= other_end) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto region_covered_by_other_fields = [&](sval_t start,
+                                              sval_t end,
+                                              size_t skip_index,
+                                              const qvector<FieldAccess>* extra_accesses = nullptr) {
         if (start >= end) {
             return true;
         }
@@ -835,6 +854,17 @@ void LayoutSynthesizer::detect_subobjects(
                 }
 
                 covered_until = std::max(covered_until, std::min(other_end, end));
+            }
+
+            if (extra_accesses) {
+                for (const auto& access : *extra_accesses) {
+                    const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
+                    if (access.offset > cursor || access_end <= cursor) {
+                        continue;
+                    }
+
+                    covered_until = std::max(covered_until, std::min(access_end, end));
+                }
             }
 
             if (covered_until == cursor) {
@@ -877,6 +907,7 @@ void LayoutSynthesizer::detect_subobjects(
         sval_t sub_end = delta + static_cast<sval_t>(sub_size);
         bool conflict = false;
         qvector<size_t> remove_indices;
+        qvector<SynthField> replacement_fields;
 
         for (size_t i = 0; i < result.structure.fields.size(); ++i) {
             const auto& field = result.structure.fields[i];
@@ -889,19 +920,78 @@ void LayoutSynthesizer::detect_subobjects(
             bool removable = field.offset >= delta && field_end <= sub_end;
 
             if (!removable) {
+                bool mixed_width_sources = false;
+                bool struct_like_source = false;
+                for (const auto& access : field.source_accesses) {
+                    if (access.size < field.size) {
+                        mixed_width_sources = true;
+                    }
+                    if (!access.inferred_type.empty() &&
+                        (access.inferred_type.is_struct() || access.inferred_type.is_array())) {
+                        struct_like_source = true;
+                    }
+                }
+
                 const bool aggregate_like =
                     (!field.type.empty() && (field.type.is_struct() || field.type.is_array())) ||
                     field.semantic == SemanticType::NestedStruct ||
-                    field.source_accesses.size() <= 1;
+                    field.source_accesses.size() <= 1 ||
+                    mixed_width_sources ||
+                    struct_like_source;
 
                 if (aggregate_like) {
+                    qvector<FieldAccess> leftover_accesses;
+                    for (const auto& access : field.source_accesses) {
+                        const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
+                        if (access_end <= delta || access.offset >= sub_end) {
+                            if (!access_covered_by_other_fields(access, i)) {
+                                leftover_accesses.push_back(access);
+                            }
+                        }
+                    }
+
                     const sval_t left_start = field.offset;
                     const sval_t left_end = std::min(field_end, delta);
                     const sval_t right_start = std::max(field.offset, sub_end);
                     const sval_t right_end = field_end;
 
-                    removable = region_covered_by_other_fields(left_start, left_end, i) &&
-                                region_covered_by_other_fields(right_start, right_end, i);
+                    const bool left_ok = region_covered_by_other_fields(left_start, left_end, i, &leftover_accesses);
+                    const bool right_ok = region_covered_by_other_fields(right_start, right_end, i, &leftover_accesses);
+                    removable = left_ok && right_ok;
+
+                    if (removable && !leftover_accesses.empty()) {
+                        std::sort(leftover_accesses.begin(), leftover_accesses.end());
+
+                        size_t pos = 0;
+                        while (pos < leftover_accesses.size()) {
+                            qvector<FieldAccess> group_accesses;
+                            sval_t group_offset = leftover_accesses[pos].offset;
+                            sval_t group_end = leftover_accesses[pos].offset + static_cast<sval_t>(leftover_accesses[pos].size);
+                            group_accesses.push_back(leftover_accesses[pos]);
+                            ++pos;
+
+                            while (pos < leftover_accesses.size()) {
+                                const auto& next = leftover_accesses[pos];
+                                const sval_t next_end = next.offset + static_cast<sval_t>(next.size);
+                                if (next.offset >= group_end) {
+                                    break;
+                                }
+
+                                group_end = std::max(group_end, next_end);
+                                group_accesses.push_back(next);
+                                ++pos;
+                            }
+
+                            SynthField replacement;
+                            replacement.offset = group_offset;
+                            replacement.size = static_cast<std::uint32_t>(group_end - group_offset);
+                            replacement.source_accesses = group_accesses;
+                            replacement.type = select_best_type(group_accesses);
+                            replacement.semantic = select_best_semantic(group_accesses);
+                            replacement.confidence = TypeConfidence::Medium;
+                            replacement_fields.push_back(std::move(replacement));
+                        }
+                    }
                 }
             }
 
@@ -921,6 +1011,10 @@ void LayoutSynthesizer::detect_subobjects(
         for (size_t idx = remove_indices.size(); idx > 0; --idx) {
             size_t remove_idx = remove_indices[idx - 1];
             result.structure.fields.erase(result.structure.fields.begin() + static_cast<sval_t>(remove_idx));
+        }
+
+        for (auto& replacement : replacement_fields) {
+            result.structure.fields.push_back(std::move(replacement));
         }
 
         SynthField sub_field;
