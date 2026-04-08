@@ -142,6 +142,10 @@ static error_t idaapi idc_structor_analyze_function_types(idc_value_t* argv, idc
 
     TypeFixResult result = StructorAPI::instance().analyze_function_types(func_ea);
 
+    for (const auto& warning : result.warnings) {
+        msg("Structor: %s\n", warning.c_str());
+    }
+
     g_last_error = result.errors.empty() ? qstring() : result.errors[0];
     g_last_fix_count = result.analyzed;
     g_last_fix_applied = result.differences_found;

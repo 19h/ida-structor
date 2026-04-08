@@ -47,6 +47,25 @@ target_compile_definitions(structor_tests PRIVATE
 include(GoogleTest)
 gtest_discover_tests(structor_tests)
 
+set(LIVE_TYPE_FIX_DEPS "")
+find_program(IDUMP_EXECUTABLE NAMES idump)
+if(IDUMP_EXECUTABLE
+   AND APPLE
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64"
+   AND EXISTS "$ENV{HOME}/.idapro/ida.reg")
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(
+        NAME type_fixer_regressions_live
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/integration_tests/check_type_fixer_regressions.py
+                --repo-root ${CMAKE_SOURCE_DIR}
+                --plugin ${CMAKE_BINARY_DIR}/structor${PLUGIN_EXT}
+                --idump ${IDUMP_EXECUTABLE}
+    )
+    set_tests_properties(type_fixer_regressions_live PROPERTIES TIMEOUT 240)
+    set(LIVE_TYPE_FIX_DEPS structor${IDA_SUFFIX})
+endif()
+
 # ============================================================================
 # Z3-specific tests (standalone, no IDA dependency)
 # ============================================================================
@@ -127,6 +146,7 @@ add_test(NAME type_lattice COMMAND test_type_lattice)
 add_custom_target(check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
     DEPENDS structor_tests
+            ${LIVE_TYPE_FIX_DEPS}
             test_z3_context
             test_z3_type_encoding
             test_z3_array_detection

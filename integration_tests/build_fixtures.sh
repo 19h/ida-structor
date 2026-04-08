@@ -35,6 +35,33 @@ build_missing_regarg() {
     "$cc" $cflags -o "$out" "$main_src" "$obj"
 }
 
+build_named() {
+    name="$1"
+
+    case "$name" in
+        missing_regarg|test_missing_regarg)
+            build_missing_regarg
+            ;;
+        *)
+            if [ -f "$root/$name.c" ]; then
+                build_c "$root/$name.c"
+            elif [ -f "$root/$name.cpp" ]; then
+                build_cxx "$root/$name.cpp"
+            else
+                printf 'Unknown fixture: %s\n' "$name" >&2
+                exit 1
+            fi
+            ;;
+    esac
+}
+
+if [ "$#" -gt 0 ]; then
+    for name in "$@"; do
+        build_named "$name"
+    done
+    exit 0
+fi
+
 build_c "$root/test_simple_struct.c"
 build_c "$root/test_function_ptr.c"
 build_c "$root/test_linked_list.c"
