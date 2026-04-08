@@ -414,56 +414,131 @@ void adopt_field_names_from_original_type(SynthStruct& structure, const tinfo_t&
     if (renamed) {
         return;
     }
+}
 
-    til_t* til = get_idati();
-    if (!til) {
-        return;
+bool is_generic_generated_name(const qstring& name) {
+    return name.empty() ||
+           name.find("field_") == 0 ||
+           name.find("sub_") == 0 ||
+           name.find("__pad_") == 0 ||
+           name.find("union_") == 0;
+}
+
+qstring extract_member_name_from_expr(const qstring& expr) {
+    const char* text = expr.c_str();
+    const size_t len = expr.length();
+
+    for (size_t i = len; i > 0; --i) {
+        if (i >= 2 && text[i - 2] == '-' && text[i - 1] == '>') {
+            size_t start = i;
+            size_t end = start;
+            while (end < len && (qisalnum(text[end]) || text[end] == '_')) {
+                ++end;
+            }
+            if (end > start) {
+                return qstring(text + start, end - start);
+            }
+        }
+
+        if (text[i - 1] == '.') {
+            size_t start = i;
+            size_t end = start;
+            while (end < len && (qisalnum(text[end]) || text[end] == '_')) {
+                ++end;
+            }
+            if (end > start) {
+                return qstring(text + start, end - start);
+            }
+        }
     }
 
-    const uint32_t ordinal_limit = get_ordinal_limit(til);
-    int best_score = 0;
-    udt_type_data_t best_udt;
+    return qstring();
+}
 
-    for (uint32_t ord = 1; ord < ordinal_limit; ++ord) {
-        tinfo_t tif;
-        if (!tif.get_numbered_type(til, ord) || !tif.is_struct()) {
+void adopt_field_names_from_access_contexts(SynthStruct& structure,
+                                            const qvector<FieldAccess>& accesses) {
+    for (auto& field : structure.fields) {
+        if (field.is_padding || !is_generic_generated_name(field.name)) {
             continue;
         }
 
-        const size_t tif_size = tif.get_size();
-        if (tif_size == BADSIZE || tif_size != structure.size) {
-            continue;
-        }
-
-        udt_type_data_t candidate_udt;
-        if (!tif.get_udt_details(&candidate_udt)) {
-            continue;
-        }
-
-        int score = 0;
-        for (const auto& field : structure.fields) {
-            if (field.is_padding) {
+        qstring candidate_name;
+        for (const auto& access : accesses) {
+            if (access.offset != field.offset || access.size != field.size) {
                 continue;
             }
 
-            for (const auto& member : candidate_udt) {
-                if (member.offset == static_cast<uint64>(field.offset) * 8 &&
-                    member_size(member) == field.size) {
-                    ++score;
-                    break;
+            qstring member_name = extract_member_name_from_expr(access.context_expr);
+            if (is_generic_generated_name(member_name)) {
+                continue;
+            }
+
+            candidate_name = member_name;
+            break;
+        }
+
+        if (!candidate_name.empty()) {
+            field.name = candidate_name;
+            if (field.is_union_candidate && !field.union_members.empty()) {
+                field.union_members[0].name = candidate_name;
+            }
+        }
+    }
+
+    for (auto& field : structure.fields) {
+        if (!field.is_union_candidate || field.union_members.size() < 2) {
+            continue;
+        }
+
+        for (size_t i = 1; i < field.union_members.size(); ++i) {
+            auto& member = field.union_members[i];
+            qstring candidate_name;
+
+            for (const auto& access : accesses) {
+                if (access.offset != field.offset + member.offset || access.size != member.size) {
+                    continue;
+                }
+
+                qstring member_name = extract_member_name_from_expr(access.context_expr);
+                if (is_generic_generated_name(member_name)) {
+                    continue;
+                }
+
+                candidate_name = member_name;
+                break;
+            }
+
+            if (!candidate_name.empty()) {
+                if (member.size < field.size) {
+                    member.name.sprnt("%s_dword", candidate_name.c_str());
+                } else {
+                    member.name = candidate_name;
                 }
             }
         }
+    }
+}
 
-        if (score > best_score) {
-            best_score = score;
-            best_udt = candidate_udt;
-        }
+bool type_has_named_udt_details(const tinfo_t& type) {
+    if (type.empty()) {
+        return false;
     }
 
-    if (best_score > 0) {
-        (void)adopt_from_udt(best_udt);
+    tinfo_t udt_type = type;
+    if (udt_type.is_ptr()) {
+        udt_type = udt_type.get_pointed_object();
     }
+
+    if (!(udt_type.is_struct() || udt_type.is_union())) {
+        return false;
+    }
+
+    udt_type_data_t udt;
+    if (!udt_type.get_udt_details(&udt) || udt.empty()) {
+        return false;
+    }
+
+    return true;
 }
 
 } // namespace
@@ -1340,12 +1415,13 @@ void LayoutSynthesizer::detect_subobjects(
         sub_pattern.func_ea = group.patterns.front().func_ea;
         sub_pattern.var_name.sprnt("sub_%llX", static_cast<unsigned long long>(delta));
         for (const auto& fn_pattern : group.patterns) {
-            if (!fn_pattern.original_type.empty()) {
+            if (type_has_named_udt_details(fn_pattern.original_type)) {
                 sub_pattern.original_type = fn_pattern.original_type;
                 break;
             }
         }
-        if (sub_pattern.original_type.empty()) {
+        if (!type_has_named_udt_details(sub_pattern.original_type)) {
+            sub_pattern.original_type.clear();
             cfuncptr_t helper_cfunc = utils::get_cfunc(sub_pattern.func_ea);
             if (helper_cfunc) {
                 lvars_t* helper_lvars = helper_cfunc->get_lvars();
@@ -1357,7 +1433,7 @@ void LayoutSynthesizer::detect_subobjects(
                         }
 
                         tinfo_t helper_type = helper_lvars->at(fn_pattern.var_idx).type();
-                        if (!helper_type.empty()) {
+                        if (type_has_named_udt_details(helper_type)) {
                             sub_pattern.original_type = helper_type;
                             break;
                         }
@@ -1381,6 +1457,7 @@ void LayoutSynthesizer::detect_subobjects(
         if (!sub_result.success()) continue;
 
         adopt_field_names_from_original_type(sub_result.structure, sub_pattern.original_type);
+        adopt_field_names_from_access_contexts(sub_result.structure, sub_pattern.accesses);
 
         qvector<FieldAccess> overlay_accesses;
         for (const auto& access : pattern.all_accesses) {
@@ -1395,6 +1472,7 @@ void LayoutSynthesizer::detect_subobjects(
         }
         if (!overlay_accesses.empty()) {
             apply_inner_scalar_overlay_recovery(sub_result.structure, overlay_accesses);
+            adopt_field_names_from_access_contexts(sub_result.structure, overlay_accesses);
         }
 
         std::uint32_t sub_size = sub_result.structure.size;
