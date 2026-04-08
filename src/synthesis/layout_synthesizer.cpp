@@ -21,18 +21,27 @@ void rebase_negative_offsets(SynthStruct& structure, qvector<SubStructInfo>* sub
 
     const sval_t delta = -min_offset;
     for (auto& field : structure.fields) {
+        const sval_t old_offset = field.offset;
         field.offset += delta;
         for (auto& access : field.source_accesses) {
             access.offset += delta;
         }
-        if (field.name.empty() || field.name.find("neg_") != qstring::npos) {
+
+        if (field.semantic == SemanticType::NestedStruct && field.name.find("sub_") == 0) {
+            field.name.sprnt("sub_%llX", static_cast<unsigned long long>(field.offset));
+        } else if (field.name.empty() || field.name.find("neg_") != qstring::npos || old_offset < 0) {
             field.name = generate_field_name(field.offset, field.semantic);
         }
     }
 
     if (sub_structs) {
         for (auto& sub : *sub_structs) {
+            const sval_t old_parent_offset = sub.parent_offset;
             sub.parent_offset += delta;
+            if (sub.field_name.find("sub_") == 0 || old_parent_offset < 0) {
+                sub.field_name.sprnt("sub_%llX",
+                                     static_cast<unsigned long long>(sub.parent_offset));
+            }
             rebase_negative_offsets(sub.structure, nullptr);
         }
     }
@@ -876,6 +885,17 @@ void LayoutSynthesizer::detect_subobjects(
         return true;
     };
 
+    auto field_covers_access = [&](const FieldAccess& access) {
+        const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
+        for (const auto& field : result.structure.fields) {
+            const sval_t field_end = field.offset + static_cast<sval_t>(field.size);
+            if (access.offset >= field.offset && access_end <= field_end) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     for (sval_t delta : ordered_deltas) {
         auto group_it = groups.find(delta);
         if (group_it == groups.end()) {
@@ -1089,6 +1109,71 @@ void LayoutSynthesizer::detect_subobjects(
             sibling.parent_offset = field.offset;
             sibling.field_name = field.name;
             result.sub_structs.push_back(std::move(sibling));
+        }
+    }
+
+    if (!result.structure.fields.empty()) {
+        const AccessPattern* source_pattern = nullptr;
+        for (const auto& fn_pattern : pattern.per_function_patterns) {
+            if (fn_pattern.func_ea == result.structure.source_func) {
+                source_pattern = &fn_pattern;
+                break;
+            }
+        }
+
+        if (source_pattern) {
+            sval_t first_field_offset = result.structure.fields.front().offset;
+            for (const auto& field : result.structure.fields) {
+                first_field_offset = std::min(first_field_offset, field.offset);
+            }
+
+            qvector<FieldAccess> prefix_accesses;
+            for (const auto& access : source_pattern->accesses) {
+                const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
+                if (access_end > first_field_offset) {
+                    continue;
+                }
+                if (!field_covers_access(access)) {
+                    prefix_accesses.push_back(access);
+                }
+            }
+
+            if (!prefix_accesses.empty()) {
+                std::sort(prefix_accesses.begin(), prefix_accesses.end());
+
+                size_t pos = 0;
+                while (pos < prefix_accesses.size()) {
+                    qvector<FieldAccess> group_accesses;
+                    sval_t group_offset = prefix_accesses[pos].offset;
+                    sval_t group_end = prefix_accesses[pos].offset +
+                        static_cast<sval_t>(prefix_accesses[pos].size);
+                    group_accesses.push_back(prefix_accesses[pos]);
+                    ++pos;
+
+                    while (pos < prefix_accesses.size()) {
+                        const auto& next = prefix_accesses[pos];
+                        if (next.offset > group_end) {
+                            break;
+                        }
+
+                        group_end = std::max(group_end,
+                                             next.offset + static_cast<sval_t>(next.size));
+                        group_accesses.push_back(next);
+                        ++pos;
+                    }
+
+                    SynthField prefix_field;
+                    prefix_field.offset = group_offset;
+                    prefix_field.size = static_cast<std::uint32_t>(group_end - group_offset);
+                    prefix_field.source_accesses = group_accesses;
+                    prefix_field.type = select_best_type(group_accesses);
+                    prefix_field.semantic = select_best_semantic(group_accesses);
+                    prefix_field.confidence = TypeConfidence::Medium;
+                    prefix_field.name = generate_field_name(prefix_field.offset,
+                                                           prefix_field.semantic);
+                    result.structure.fields.push_back(std::move(prefix_field));
+                }
+            }
         }
     }
 
