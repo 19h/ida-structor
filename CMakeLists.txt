@@ -243,6 +243,7 @@ set(STRUCTOR_SOURCES
     src/analysis/vtable_detector.cpp
     
     # Synthesis module
+    src/synthesis/naming.cpp
     src/synthesis/layout_synthesizer.cpp
     src/synthesis/structure_persistence.cpp
     src/synthesis/type_propagator.cpp

@@ -21,6 +21,7 @@ set(TEST_SOURCES
     test_access_patterns.cpp
     test_vtable_detection.cpp
     test_config.cpp
+    ${CMAKE_SOURCE_DIR}/src/synthesis/naming.cpp
     mock_ida.cpp
 )
 

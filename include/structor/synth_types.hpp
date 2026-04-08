@@ -512,9 +512,9 @@ struct VTableSlot {
     qstring         signature_hint; // Recovered signature hint
 
     VTableSlot()
-        : naming{GeneratedNameKind::VTableSlot, NameOrigin::Unknown, NameConfidence::Low, false}
-        , index(0)
-        , offset(0) {}
+        : index(0)
+        , offset(0)
+        , naming{GeneratedNameKind::VTableSlot, NameOrigin::Unknown, NameConfidence::Low, false} {}
 };
 
 /// A synthesized vtable structure

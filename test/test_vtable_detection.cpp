@@ -83,8 +83,8 @@ TEST_F(VTableDetectionTest, SynthVTableSlotCount) {
 TEST_F(VTableDetectionTest, VTableNameGeneration) {
     qstring name = generate_vtable_name(0x401000, 0);
 
-    EXPECT_TRUE(name.c_str()[0] == 's');  // synth_vtbl_...
-    EXPECT_TRUE(strstr(name.c_str(), "401000") != nullptr);
+    EXPECT_TRUE(strstr(name.c_str(), "auto_") == name.c_str());
+    EXPECT_TRUE(strstr(name.c_str(), "vtbl") != nullptr);
 }
 
 TEST_F(VTableDetectionTest, VTableNameUniqueness) {

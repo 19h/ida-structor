@@ -20,6 +20,7 @@
 #define __XREF_HPP
 
 #include <structor/synth_types.hpp>
+#include <structor/naming.hpp>
 
 namespace structor {
 namespace test {
@@ -212,18 +213,100 @@ TEST_F(SynthTypesTest, AlignOffset) {
 
 TEST_F(SynthTypesTest, GenerateStructName) {
     qstring name = generate_struct_name(0x401000, 0);
-    EXPECT_TRUE(name.c_str()[0] == 's');  // Starts with synth_
+    EXPECT_TRUE(strstr(name.c_str(), "auto_") == name.c_str());
 }
 
 TEST_F(SynthTypesTest, GenerateFieldName) {
     qstring name = generate_field_name(0x10);
-    EXPECT_STREQ(name.c_str(), "field_10");
+    EXPECT_STREQ(name.c_str(), "u32_10");
 
     qstring vtbl_name = generate_field_name(0, SemanticType::VTablePointer);
     EXPECT_STREQ(vtbl_name.c_str(), "vtbl_0");
 
     qstring ptr_name = generate_field_name(0x20, SemanticType::Pointer);
     EXPECT_STREQ(ptr_name.c_str(), "ptr_20");
+
+    qstring fn_name = generate_field_name(0x28, SemanticType::FunctionPointer);
+    EXPECT_STREQ(fn_name.c_str(), "fn_28");
+}
+
+TEST_F(SynthTypesTest, ArrayAndSubobjectFallbackNames) {
+    tinfo_t empty_type;
+
+    EXPECT_STREQ(make_substruct_field_name(0x18).c_str(), "part_18");
+    EXPECT_STREQ(make_array_field_name(0x10, empty_type, SemanticType::Unknown, 4).c_str(), "u32s_10");
+    EXPECT_STREQ(make_array_element_type_name("auto_anchor", "entries_10", 0x10).c_str(),
+                 "auto_anchor_entry_10");
+}
+
+TEST_F(SynthTypesTest, OverlayMemberNames) {
+    EXPECT_STREQ(make_overlay_member_name("value", 8, 0, 4).c_str(), "value_lo");
+    EXPECT_STREQ(make_overlay_member_name("value", 8, 4, 4).c_str(), "value_hi");
+    EXPECT_STREQ(make_overlay_member_name("value", 8, 2, 2).c_str(), "value_u16");
+}
+
+TEST_F(SynthTypesTest, GeneratedNameDetectionAndAdoptionPrecedence) {
+    EXPECT_TRUE(is_generated_name("u32_10"));
+    EXPECT_TRUE(is_generated_name("u64_8_hi"));
+    EXPECT_FALSE(is_generated_name("value_hi"));
+
+    qstring current = "u32_10";
+    NameMetadata current_meta{GeneratedNameKind::Field, NameOrigin::GeneratedFallback,
+                              NameConfidence::Medium, false};
+    NameMetadata adopted_meta{GeneratedNameKind::Field, NameOrigin::OriginalType,
+                              NameConfidence::High, false};
+
+    EXPECT_TRUE(adopt_preferred_name(current, current_meta, "count", adopted_meta));
+    EXPECT_STREQ(current.c_str(), "count");
+
+    NameMetadata weak_meta{GeneratedNameKind::Field, NameOrigin::GeneratedFallback,
+                           NameConfidence::Low, false};
+    EXPECT_FALSE(adopt_preferred_name(current, current_meta, "u32_10", weak_meta));
+    EXPECT_STREQ(current.c_str(), "count");
+}
+
+TEST_F(SynthTypesTest, ApplyRoleBasedFieldNames) {
+    SynthStruct structure;
+
+    SynthField callback;
+    callback.name = "fn_8";
+    callback.naming = {GeneratedNameKind::Field, NameOrigin::GeneratedFallback,
+                       NameConfidence::Medium, false};
+    callback.offset = 8;
+    callback.size = 8;
+    callback.semantic = SemanticType::FunctionPointer;
+    FieldAccess call_access;
+    call_access.access_type = AccessType::Call;
+    callback.source_accesses.push_back(call_access);
+    structure.fields.push_back(callback);
+
+    SynthField vtable;
+    vtable.name = "vtbl_0";
+    vtable.naming = {GeneratedNameKind::Field, NameOrigin::GeneratedFallback,
+                     NameConfidence::Medium, false};
+    vtable.offset = 0;
+    vtable.size = 8;
+    vtable.semantic = SemanticType::VTablePointer;
+    structure.fields.push_back(vtable);
+
+    SynthField kind;
+    kind.name = "u32_4";
+    kind.naming = {GeneratedNameKind::Field, NameOrigin::GeneratedFallback,
+                   NameConfidence::Medium, false};
+    kind.offset = 4;
+    kind.size = 4;
+    kind.semantic = SemanticType::UnsignedInteger;
+    FieldAccess cmp_access;
+    cmp_access.observed_constants.push_back(1);
+    cmp_access.observed_constants.push_back(2);
+    kind.source_accesses.push_back(cmp_access);
+    structure.fields.push_back(kind);
+
+    apply_role_based_field_names(structure);
+
+    EXPECT_STREQ(structure.fields[0].name.c_str(), "callback");
+    EXPECT_STREQ(structure.fields[1].name.c_str(), "vtable");
+    EXPECT_STREQ(structure.fields[2].name.c_str(), "kind_4");
 }
 
 TEST_F(SynthTypesTest, ErrorStringConversion) {

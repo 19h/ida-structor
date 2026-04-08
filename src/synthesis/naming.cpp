@@ -1,6 +1,10 @@
 /// @file naming.cpp
 /// @brief Shared naming policy helpers
 
+#ifdef STRUCTOR_TESTING
+#include "../../test/mock_ida.hpp"
+#endif
+
 #include <structor/naming.hpp>
 
 #include <structor/utils.hpp>
@@ -15,7 +19,23 @@ namespace structor {
 namespace {
 
 bool starts_with(const qstring& value, const char* prefix) noexcept {
-    return value.find(prefix) == 0;
+    const size_t prefix_len = strlen(prefix);
+    return strncmp(value.c_str(), prefix, prefix_len) == 0;
+}
+
+qstring make_qstring_slice(const char* text, size_t len) {
+    std::string tmp(text, len);
+    qstring out;
+    out = tmp.c_str();
+    return out;
+}
+
+qstring erase_qstring_range(const qstring& value, size_t pos, size_t len) {
+    std::string tmp = value.c_str();
+    tmp.erase(pos, len);
+    qstring out;
+    out = tmp.c_str();
+    return out;
 }
 
 bool ends_with(const qstring& value, const char* suffix) noexcept {
@@ -107,13 +127,13 @@ bool is_generated_overlay_name(const qstring& name) noexcept {
         }
 
         qstring base(name);
-        base.remove(base.length() - strlen(suffix), strlen(suffix));
+        base = erase_qstring_range(base, base.length() - strlen(suffix), strlen(suffix));
         return is_generated_name(base, nullptr);
     }
 
     if (ends_with(name, "_bytes")) {
         qstring base(name);
-        base.remove(base.length() - 6, 6);
+        base = erase_qstring_range(base, base.length() - 6, 6);
         return is_generated_name(base, nullptr);
     }
 
@@ -248,10 +268,10 @@ qstring sanitize_identifier(const qstring& raw, const char* fallback) {
     }
 
     while (!cleaned.empty() && cleaned[0] == '_') {
-        cleaned.remove(0, 1);
+        cleaned = erase_qstring_range(cleaned, 0, 1);
     }
     while (!cleaned.empty() && cleaned[cleaned.length() - 1] == '_') {
-        cleaned.remove(cleaned.length() - 1, 1);
+        cleaned = erase_qstring_range(cleaned, cleaned.length() - 1, 1);
     }
 
     if (cleaned.empty()) {
@@ -284,7 +304,7 @@ bool is_placeholder_identifier(const qstring& name) noexcept {
     }
 
     auto is_prefix_number = [&](const char* prefix) {
-        if (normalized.find(prefix) != 0) {
+        if (!starts_with(normalized, prefix)) {
             return false;
         }
         const char* suffix = normalized.c_str() + strlen(prefix);
@@ -312,13 +332,13 @@ qstring singularize_identifier(const qstring& name) {
     const qstring normalized = sanitize_identifier(name, "item");
     if (normalized.length() > 3 && ends_with(normalized, "ies")) {
         qstring result(normalized);
-        result.remove(result.length() - 3, 3);
+        result = erase_qstring_range(result, result.length() - 3, 3);
         result.append("y");
         return result;
     }
     if (normalized.length() > 1 && ends_with(normalized, "s") && !ends_with(normalized, "ss")) {
         qstring result(normalized);
-        result.remove(result.length() - 1, 1);
+        result = erase_qstring_range(result, result.length() - 1, 1);
         return result;
     }
     return normalized;
@@ -328,7 +348,7 @@ qstring pluralize_identifier(const qstring& name) {
     const qstring normalized = sanitize_identifier(name, "items");
     if (ends_with(normalized, "y") && normalized.length() > 1) {
         qstring result(normalized);
-        result.remove(result.length() - 1, 1);
+        result = erase_qstring_range(result, result.length() - 1, 1);
         result.append("ies");
         return result;
     }
@@ -364,7 +384,7 @@ qstring strip_trailing_offset_suffix(const qstring& name) {
         return name;
     }
 
-    return qstring(text, static_cast<size_t>(last - text));
+    return make_qstring_slice(text, static_cast<size_t>(last - text));
 }
 
 qstring choose_root_type_stem(ea_t func_ea, const qstring& source_var) {
@@ -517,7 +537,7 @@ qstring rebase_textual_generated_name(const qstring& name, sval_t offset) {
         return generate_field_name(offset, SemanticType::Unknown);
     }
 
-    if (name.find("sub_") == 0 || name.find("part_") == 0) {
+    if (starts_with(name, "sub_") || starts_with(name, "part_")) {
         return make_substruct_field_name(offset);
     }
 
@@ -531,7 +551,7 @@ qstring rebase_textual_generated_name(const qstring& name, sval_t offset) {
     for (const char* prefix : kPluralPrefixes) {
         qstring marker;
         marker.sprnt("%s_", prefix);
-        if (name.find(marker) == 0) {
+        if (starts_with(name, marker.c_str())) {
             qstring rebased;
             rebased.sprnt("%s_%s", prefix, make_offset_suffix(offset).c_str());
             return rebased;
@@ -541,14 +561,14 @@ qstring rebase_textual_generated_name(const qstring& name, sval_t offset) {
     for (const char* prefix : kScalarPrefixes) {
         qstring marker;
         marker.sprnt("%s_", prefix);
-        if (name.find(marker) == 0) {
+        if (starts_with(name, marker.c_str())) {
             qstring rebased;
             rebased.sprnt("%s_%s", prefix, make_offset_suffix(offset).c_str());
             return rebased;
         }
     }
 
-    if (name.find("__pad_") == 0) {
+    if (starts_with(name, "__pad_")) {
         qstring rebased;
         rebased.sprnt("__pad_%s", make_offset_suffix(offset).c_str());
         return rebased;
@@ -559,6 +579,7 @@ qstring rebase_textual_generated_name(const qstring& name, sval_t offset) {
 
 namespace {
 
+#ifndef STRUCTOR_TESTING
 size_t udt_member_size(const udm_t& member) {
     const size_t type_size = member.type.get_size();
     if (type_size != BADSIZE) {
@@ -566,6 +587,7 @@ size_t udt_member_size(const udm_t& member) {
     }
     return member.size / 8;
 }
+#endif
 
 GeneratedNameKind field_name_kind(const SynthField& field) {
     if (field.naming.kind != GeneratedNameKind::Unknown) {
@@ -594,22 +616,22 @@ qstring extract_member_name_from_expr_text(const qstring& expr) {
         if (i >= 2 && text[i - 2] == '-' && text[i - 1] == '>') {
             size_t start = i;
             size_t end = start;
-            while (end < len && (qisalnum(text[end]) || text[end] == '_')) {
+            while (end < len && (std::isalnum(static_cast<unsigned char>(text[end])) || text[end] == '_')) {
                 ++end;
             }
             if (end > start) {
-                return qstring(text + start, end - start);
+                return make_qstring_slice(text + start, end - start);
             }
         }
 
         if (text[i - 1] == '.') {
             size_t start = i;
             size_t end = start;
-            while (end < len && (qisalnum(text[end]) || text[end] == '_')) {
+            while (end < len && (std::isalnum(static_cast<unsigned char>(text[end])) || text[end] == '_')) {
                 ++end;
             }
             if (end > start) {
-                return qstring(text + start, end - start);
+                return make_qstring_slice(text + start, end - start);
             }
         }
     }
@@ -643,6 +665,12 @@ bool struct_needs_name_refinement(const SynthStruct& structure) {
 bool refine_struct_names_from_udt(SynthStruct& structure,
                                   const tinfo_t& donor_type,
                                   NameOrigin origin) {
+#ifdef STRUCTOR_TESTING
+    (void)structure;
+    (void)donor_type;
+    (void)origin;
+    return false;
+#else
     udt_type_data_t udt;
     if (!donor_type.get_udt_details(&udt) || udt.empty()) {
         return false;
@@ -690,6 +718,7 @@ bool refine_struct_names_from_udt(SynthStruct& structure,
     }
 
     return renamed;
+#endif
 }
 
 bool refine_struct_names_from_accesses(SynthStruct& structure,
