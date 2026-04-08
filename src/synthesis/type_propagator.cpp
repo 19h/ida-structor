@@ -16,6 +16,181 @@ struct CalleeGroup {
     qvector<int> info_indices;
 };
 
+std::size_t effective_member_size(const udm_t& member) {
+    if (!member.type.empty()) {
+        const std::size_t type_size = member.type.get_size();
+        if (type_size != BADSIZE && type_size > 0) {
+            return type_size;
+        }
+    }
+
+    return static_cast<std::size_t>(member.size / 8);
+}
+
+tinfo_t make_scalar_or_bytes_type(std::size_t size) {
+    tinfo_t type;
+    switch (size) {
+        case 1:
+            type.create_simple_type(BT_INT8 | BTMT_USIGNED);
+            break;
+        case 2:
+            type.create_simple_type(BT_INT16 | BTMT_USIGNED);
+            break;
+        case 4:
+            type.create_simple_type(BT_INT32 | BTMT_USIGNED);
+            break;
+        case 8:
+            type.create_simple_type(BT_INT64 | BTMT_USIGNED);
+            break;
+        default: {
+            tinfo_t byte_type;
+            byte_type.create_simple_type(BT_INT8 | BTMT_USIGNED);
+            type.create_array(byte_type, size);
+            break;
+        }
+    }
+
+    return type;
+}
+
+qstring rebase_window_member_name(const qstring& name, sval_t offset) {
+    if (name.empty()) {
+        return generate_field_name(offset, SemanticType::Unknown);
+    }
+
+    qstring rebased = name;
+    if (name.find("sub_") == 0) {
+        rebased.sprnt("sub_%llX", static_cast<unsigned long long>(offset));
+    } else if (name.find("field_") == 0) {
+        rebased.sprnt("field_%llX", static_cast<unsigned long long>(offset));
+    } else if (name.find("__pad_") == 0) {
+        rebased.sprnt("__pad_%llX", static_cast<unsigned long long>(offset));
+    }
+
+    return rebased;
+}
+
+bool build_shifted_tail_udt(const tinfo_t& parent_type,
+                            sval_t delta,
+                            udt_type_data_t& out_udt) {
+    if (delta < 0) {
+        return false;
+    }
+
+    tinfo_t parent = parent_type;
+    if (parent.is_ptr()) {
+        parent = parent.get_pointed_object();
+    }
+
+    udt_type_data_t udt;
+    if (!parent.get_udt_details(&udt) || udt.empty()) {
+        return false;
+    }
+
+    const std::size_t parent_size = parent.get_size();
+    if (parent_size == BADSIZE || delta >= static_cast<sval_t>(parent_size)) {
+        return false;
+    }
+
+    out_udt.is_union = false;
+    out_udt.total_size = parent_size - static_cast<std::size_t>(delta);
+
+    bool added = false;
+    for (const auto& member : udt) {
+        const sval_t member_offset = static_cast<sval_t>(member.offset / 8);
+        const std::size_t member_size = effective_member_size(member);
+        if (member_size == 0) {
+            continue;
+        }
+
+        const sval_t member_end = member_offset + static_cast<sval_t>(member_size);
+        if (member_end <= delta) {
+            continue;
+        }
+
+        if (member_offset >= delta) {
+            udm_t shifted = member;
+            const sval_t rebased_offset = member_offset - delta;
+            shifted.offset = static_cast<uint64>(rebased_offset) * 8;
+            shifted.name = rebase_window_member_name(member.name, rebased_offset);
+            out_udt.push_back(std::move(shifted));
+            added = true;
+            continue;
+        }
+
+        const std::size_t inner_delta = static_cast<std::size_t>(delta - member_offset);
+        if (!member.type.empty() && member.type.is_struct()) {
+            udt_type_data_t nested_tail;
+            if (build_shifted_tail_udt(member.type, static_cast<sval_t>(inner_delta), nested_tail)) {
+                for (auto nested : nested_tail) {
+                    nested.name = rebase_window_member_name(
+                        nested.name, static_cast<sval_t>(nested.offset / 8));
+                    out_udt.push_back(std::move(nested));
+                }
+                added = true;
+                continue;
+            }
+        }
+
+        const std::size_t fragment_size = static_cast<std::size_t>(member_end - delta);
+        udm_t fragment;
+        fragment.name = generate_field_name(0, SemanticType::Unknown);
+        fragment.offset = 0;
+        fragment.type = make_scalar_or_bytes_type(fragment_size);
+        fragment.size = fragment_size * 8;
+        out_udt.push_back(std::move(fragment));
+        added = true;
+    }
+
+    if (!added) {
+        return false;
+    }
+
+    std::sort(out_udt.begin(), out_udt.end(), [](const udm_t& a, const udm_t& b) {
+        if (a.offset != b.offset) {
+            return a.offset < b.offset;
+        }
+        return a.name < b.name;
+    });
+
+    return true;
+}
+
+bool build_shifted_object_type(const tinfo_t& parent_type,
+                               const qstring& parent_name,
+                               sval_t delta,
+                               tinfo_t& out_type) {
+    udt_type_data_t tail_udt;
+    if (!build_shifted_tail_udt(parent_type, delta, tail_udt)) {
+        return false;
+    }
+
+    tinfo_t tail_type;
+    if (!tail_type.create_udt(tail_udt)) {
+        return false;
+    }
+
+    tail_type.set_udt_pack(1);
+    tail_type.set_udt_alignment(1);
+
+    if (!parent_name.empty()) {
+        qstring tail_name;
+        tail_name.sprnt("%s_at_%llX", parent_name.c_str(),
+                        static_cast<unsigned long long>(delta));
+        if (tail_type.set_named_type(nullptr, tail_name.c_str(), NTF_TYPE | NTF_REPLACE) == TERR_OK) {
+            tinfo_t named_type;
+            tid_t tail_tid = get_named_type_tid(tail_name.c_str());
+            if (tail_tid != BADADDR && named_type.get_type_by_tid(tail_tid)) {
+                out_type = named_type;
+                return true;
+            }
+        }
+    }
+
+    out_type = tail_type;
+    return true;
+}
+
 bool make_shifted_window_ptr(const tinfo_t& type, tinfo_t& out_ptr_type) {
     qstring type_name;
     type.get_type_name(&type_name);
@@ -35,13 +210,27 @@ bool make_shifted_window_ptr(const tinfo_t& type, tinfo_t& out_ptr_type) {
     }
 
     tinfo_t object_type;
+    tinfo_t exact_object_type;
+    bool exact_is_aggregate = false;
     udt_type_data_t udt;
     if (type.get_udt_details(&udt)) {
         for (const auto& member : udt) {
             if (member.offset == static_cast<uint64>(delta) * 8 && !member.type.empty()) {
-                object_type = member.type;
+                exact_object_type = member.type;
+                exact_is_aggregate = member.type.is_struct() ||
+                                     member.type.is_union() ||
+                                     member.type.is_array();
                 break;
             }
+        }
+    }
+
+    if (exact_is_aggregate) {
+        object_type = exact_object_type;
+    } else {
+        build_shifted_object_type(type, type_name, static_cast<sval_t>(delta), object_type);
+        if (object_type.empty()) {
+            object_type = exact_object_type;
         }
     }
 
