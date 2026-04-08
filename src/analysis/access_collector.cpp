@@ -748,7 +748,7 @@ tinfo_t AccessPatternVisitor::build_funcptr_type(const cexpr_t* call_expr) const
     } else {
         ftd.rettype.create_simple_type(BTF_VOID);
     }
-    ftd.set_cc(CM_CC_UNKNOWN);
+    ftd.set_cc(CM_CC_FASTCALL);
 
     if (call_expr->a) {
         for (const auto& arg : *call_expr->a) {

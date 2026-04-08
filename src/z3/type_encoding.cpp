@@ -251,6 +251,13 @@ tinfo_t TypeEncoder::decode(
             break;
         }
         case TypeCategory::FuncPtr: {
+            if (extended && !extended->concrete_type.empty()) {
+                if (extended->concrete_type.is_funcptr() ||
+                    (extended->concrete_type.is_ptr() && extended->concrete_type.get_pointed_object().is_func())) {
+                    return extended->concrete_type;
+                }
+            }
+
             // Create generic function pointer: void (*)()
             func_type_data_t ftd;
             ftd.rettype.create_simple_type(BTF_VOID);

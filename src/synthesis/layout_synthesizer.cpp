@@ -79,6 +79,56 @@ void rebase_negative_offsets(SynthStruct& structure, qvector<SubStructInfo>* sub
     structure.name.cat_sprnt("_window_%llX", static_cast<unsigned long long>(delta));
 }
 
+tinfo_t make_scalar_type_for_access(const FieldAccess& access) {
+    tinfo_t type;
+
+    switch (access.semantic_type) {
+        case SemanticType::Double:
+            if (access.size == 8) {
+                type.create_simple_type(BTF_DOUBLE);
+                return type;
+            }
+            break;
+        case SemanticType::Float:
+            if (access.size == 4) {
+                type.create_simple_type(BTF_FLOAT);
+                return type;
+            }
+            break;
+        case SemanticType::Pointer:
+        case SemanticType::FunctionPointer:
+        case SemanticType::VTablePointer:
+            if (access.size == get_ptr_size()) {
+                tinfo_t void_type;
+                void_type.create_simple_type(BTF_VOID);
+                type.create_ptr(void_type);
+                return type;
+            }
+            break;
+        default:
+            break;
+    }
+
+    switch (access.size) {
+        case 1:
+            type.create_simple_type(BT_INT8 | BTMT_USIGNED);
+            break;
+        case 2:
+            type.create_simple_type(BT_INT16 | BTMT_USIGNED);
+            break;
+        case 4:
+            type.create_simple_type(BT_INT32 | BTMT_USIGNED);
+            break;
+        case 8:
+            type.create_simple_type(BT_INT64 | BTMT_USIGNED);
+            break;
+        default:
+            break;
+    }
+
+    return type;
+}
+
 } // namespace
 
 LayoutSynthesizer::LayoutSynthesizer(const LayoutSynthConfig& config)
@@ -1233,8 +1283,15 @@ void LayoutSynthesizer::detect_subobjects(
 
 tinfo_t LayoutSynthesizer::select_best_type(const qvector<FieldAccess>& accesses) {
     tinfo_t best;
+    uint32_t widest_size = 0;
+    const FieldAccess* widest_access = nullptr;
 
     for (const auto& access : accesses) {
+        if (access.size > widest_size) {
+            widest_size = access.size;
+            widest_access = &access;
+        }
+
         if (access.inferred_type.empty()) continue;
 
         if (best.empty()) {
@@ -1243,6 +1300,22 @@ tinfo_t LayoutSynthesizer::select_best_type(const qvector<FieldAccess>& accesses
         }
 
         best = resolve_type_conflict(best, access.inferred_type);
+    }
+
+    if (!best.empty()) {
+        const size_t best_size = best.get_size();
+        const bool scalar_like =
+            !best.is_array() && !best.is_struct() && !best.is_union() && !best.is_func();
+        if (scalar_like && best_size != BADSIZE && widest_size > 0 && best_size < widest_size && widest_access) {
+            tinfo_t widened = make_scalar_type_for_access(*widest_access);
+            if (!widened.empty()) {
+                best = widened;
+            }
+        }
+    }
+
+    if (best.empty() && widest_access) {
+        best = make_scalar_type_for_access(*widest_access);
     }
 
     return best;
