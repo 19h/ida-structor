@@ -7,6 +7,40 @@ namespace structor {
 
 namespace {
 
+bool is_generated_padding_name(const qstring& name) {
+    return name.find("__pad_") == 0;
+}
+
+bool should_rebase_generated_name(const SynthField& field, sval_t old_offset) {
+    if (field.name.empty()) {
+        return true;
+    }
+
+    if (field.name == generate_field_name(old_offset, field.semantic)) {
+        return true;
+    }
+
+    return field.is_padding && is_generated_padding_name(field.name);
+}
+
+void rebase_field_name(SynthField& field, sval_t old_offset) {
+    if (field.semantic == SemanticType::NestedStruct && field.name.find("sub_") == 0) {
+        field.name.sprnt("sub_%llX", static_cast<unsigned long long>(field.offset));
+        return;
+    }
+
+    if (!should_rebase_generated_name(field, old_offset)) {
+        return;
+    }
+
+    if (field.is_padding && is_generated_padding_name(field.name)) {
+        field.name.sprnt("__pad_%llX", static_cast<unsigned long long>(field.offset));
+        return;
+    }
+
+    field.name = generate_field_name(field.offset, field.semantic);
+}
+
 void rebase_negative_offsets(SynthStruct& structure, qvector<SubStructInfo>* sub_structs) {
     sval_t min_offset = 0;
     bool found = false;
@@ -27,11 +61,7 @@ void rebase_negative_offsets(SynthStruct& structure, qvector<SubStructInfo>* sub
             access.offset += delta;
         }
 
-        if (field.semantic == SemanticType::NestedStruct && field.name.find("sub_") == 0) {
-            field.name.sprnt("sub_%llX", static_cast<unsigned long long>(field.offset));
-        } else if (field.name.empty() || field.name.find("neg_") != qstring::npos || old_offset < 0) {
-            field.name = generate_field_name(field.offset, field.semantic);
-        }
+        rebase_field_name(field, old_offset);
     }
 
     if (sub_structs) {
@@ -123,11 +153,21 @@ SynthesisResult LayoutSynthesizer::synthesize(
     synth_result.structure.name = generate_struct_name(pattern.func_ea);
     synth_result.functions_analyzed = result.functions_analyzed;
 
+    sval_t source_delta = 0;
+    if (auto it = unified_pattern.function_deltas.find(pattern.func_ea);
+        it != unified_pattern.function_deltas.end()) {
+        source_delta = it->second;
+    }
+
     if (config_.emit_substructs) {
         detect_subobjects(unified_pattern, opts, synth_result);
     }
     apply_bitfield_recovery(unified_pattern, synth_result.structure);
     rebase_negative_offsets(synth_result.structure, &synth_result.sub_structs);
+    if (source_delta > 0 && synth_result.structure.name.find("_window_") == qstring::npos) {
+        synth_result.structure.name.cat_sprnt("_window_%llX",
+                                              static_cast<unsigned long long>(source_delta));
+    }
     compute_struct_size(synth_result.structure);
 
     auto end_time = std::chrono::steady_clock::now();
@@ -786,6 +826,10 @@ void LayoutSynthesizer::detect_subobjects(
 
     if (groups.empty()) {
         for (const auto& fn_pattern : pattern.per_function_patterns) {
+            if (fn_pattern.func_ea == result.structure.source_func) {
+                continue;
+            }
+
             auto it = pattern.function_deltas.find(fn_pattern.func_ea);
             sval_t delta = it != pattern.function_deltas.end() ? it->second : 0;
             if (delta <= 0) continue;
