@@ -78,6 +78,122 @@ const udm_t* find_member_at_offset(const udt_type_data_t& udt, sval_t offset) {
     return nullptr;
 }
 
+bool synth_has_nontrivial_unions(const SynthStruct& synth_struct) {
+    for (const auto& field : synth_struct.fields) {
+        if (field.is_union_candidate && !field.union_members.empty()) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool union_has_relative_members(const qvector<SynthField>& members) {
+    for (const auto& member : members) {
+        if (member.offset != 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+qstring anonymous_type_name(const qstring& base_name) {
+    qstring name;
+    name.sprnt("$%s", base_name.c_str());
+    return name;
+}
+
+qstring anonymous_member_name(const qstring& base_name) {
+    qstring name;
+    name.sprnt("__%s", base_name.c_str());
+    return name;
+}
+
+tinfo_t make_member_storage_type(const SynthField& member) {
+    if (!member.type.empty()) {
+        return member.type;
+    }
+
+    tinfo_t byte_type;
+    byte_type.create_simple_type(BT_INT8 | BTMT_CHAR);
+
+    tinfo_t storage_type;
+    if (member.size > 1) {
+        storage_type.create_array(byte_type, member.size);
+    } else {
+        storage_type = byte_type;
+    }
+
+    return storage_type;
+}
+
+tinfo_t create_overlay_view_type(const qstring& union_name,
+                                 const SynthField& member,
+                                 uint32_t union_size) {
+    qstring type_name;
+    type_name.sprnt("$%s_%s_%llX_view",
+                    union_name.c_str(),
+                    member.name.c_str(),
+                    static_cast<unsigned long long>(member.offset));
+
+    tinfo_t existing;
+    tid_t existing_tid = get_named_type_tid(type_name.c_str());
+    if (existing_tid != BADADDR && existing.get_type_by_tid(existing_tid)) {
+        return existing;
+    }
+
+    udt_type_data_t udt;
+    udt.is_union = false;
+    udt.total_size = union_size;
+
+    udm_t udm;
+    udm.name = member.name;
+    udm.offset = static_cast<uint64>(member.offset) * 8;
+    udm.type = make_member_storage_type(member);
+    const size_t type_size = udm.type.get_size();
+    udm.size = type_size != BADSIZE ? type_size * 8 : member.size * 8;
+    udt.push_back(udm);
+
+    tinfo_t view_type;
+    if (!view_type.create_udt(udt)) {
+        return tinfo_t();
+    }
+
+    view_type.set_udt_pack(1);
+    view_type.set_udt_alignment(1);
+    if (view_type.set_named_type(nullptr, type_name.c_str(), NTF_TYPE | NTF_REPLACE) != TERR_OK) {
+        return tinfo_t();
+    }
+
+    tinfo_t named_type;
+    tid_t tid = get_named_type_tid(type_name.c_str());
+    if (tid != BADADDR && named_type.get_type_by_tid(tid)) {
+        return named_type;
+    }
+
+    return view_type;
+}
+
+tinfo_t create_overlay_array_type(const SynthField& member, uint32_t union_size) {
+    if (member.size == 0 || member.offset < 0 || union_size == 0 || (union_size % member.size) != 0) {
+        return tinfo_t();
+    }
+
+    tinfo_t element_type = make_member_storage_type(member);
+    const size_t elem_size = element_type.get_size();
+    if (elem_size == BADSIZE || elem_size != member.size) {
+        return tinfo_t();
+    }
+
+    tinfo_t array_type;
+    if (!array_type.create_array(element_type, union_size / member.size)) {
+        return tinfo_t();
+    }
+
+    return array_type;
+}
+
 bool reuse_candidate_matches_function_members(const SynthStruct& synth_struct, const tinfo_t& tif) {
     udt_type_data_t udt;
     if (!tif.get_udt_details(&udt)) {
@@ -117,7 +233,8 @@ bool reuse_candidate_matches_function_members(const SynthStruct& synth_struct, c
 tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
     constexpr double kReuseThreshold = 0.85;
 
-    if (!synth_struct.fields.empty() && synth_struct.size > 0) {
+    if (!synth_has_nontrivial_unions(synth_struct) &&
+        !synth_struct.fields.empty() && synth_struct.size > 0) {
         auto reuse_candidate = find_reuse_candidate(synth_struct, kReuseThreshold);
         if (reuse_candidate.has_value()) {
             auto [reuse_tid, reuse_name, score] = *reuse_candidate;
@@ -209,6 +326,7 @@ tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
             for (const auto& alt : field.union_members) {
                 SynthField member;
                 member.name = alt.name;
+                member.offset = alt.offset;
                 member.size = alt.size;
                 member.type = alt.type;
                 member.comment = alt.comment;
@@ -645,7 +763,9 @@ tid_t StructurePersistence::create_union(
     }
 
     // Generate unique name if needed
-    qstring union_name = name;
+    const bool overlay_union = union_has_relative_members(members);
+
+    qstring union_name = overlay_union ? anonymous_type_name(name) : name;
     if (struct_exists(union_name.c_str())) {
         union_name = make_unique_union_name(union_name.c_str());
     }
@@ -655,6 +775,7 @@ tid_t StructurePersistence::create_union(
     udt_type_data_t udt;
     udt.is_union = true;
     udt.total_size = compute_union_size(members);
+    const uint32_t union_size = udt.total_size;
 
     // Add all members at offset 0 (union semantics)
     for (const auto& member : members) {
@@ -662,7 +783,21 @@ tid_t StructurePersistence::create_union(
         udm.name = member.name;
         udm.offset = 0;  // All union members start at offset 0
 
-        if (!member.type.empty()) {
+        if (overlay_union && member.offset != 0) {
+            udm.type = create_overlay_array_type(member, union_size);
+            if (udm.type.empty()) {
+                udm.name = anonymous_member_name(member.name);
+                udm.type = create_overlay_view_type(union_name, member, union_size);
+            }
+            if (!udm.type.empty()) {
+                const size_t view_size = udm.type.get_size();
+                udm.size = view_size != BADSIZE ? view_size * 8 : union_size * 8;
+            } else {
+                udm.type = make_member_storage_type(member);
+                const size_t type_size = udm.type.get_size();
+                udm.size = type_size != BADSIZE ? type_size * 8 : member.size * 8;
+            }
+        } else if (!member.type.empty()) {
             udm.type = member.type;
             udm.size = member.type.get_size() * 8;  // Convert to bits
         } else {
@@ -711,6 +846,8 @@ tid_t StructurePersistence::add_union_field(
         return BADADDR;
     }
 
+    const bool overlay_union = union_has_relative_members(union_members);
+
     // First, create the union type as a separate named type
     tid_t union_tid = create_union(union_name, union_members);
     if (union_tid == BADADDR) {
@@ -725,7 +862,7 @@ tid_t StructurePersistence::add_union_field(
 
     // Add a field referencing the union type to the parent struct
     udm_t udm;
-    udm.name = union_name;
+    udm.name = overlay_union ? anonymous_member_name(union_name) : union_name;
     udm.offset = static_cast<uint64>(outer_offset) * 8;  // Convert to bits
     udm.type = union_type;
     udm.size = compute_union_size(union_members) * 8;

@@ -316,6 +316,7 @@ enum class TypeConfidence : std::uint8_t {
 struct SynthField {
     struct UnionMember {
         qstring name;
+        sval_t offset = 0;
         std::uint32_t size = 0;
         tinfo_t type;
         qstring comment;

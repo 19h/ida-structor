@@ -284,6 +284,188 @@ void reanchor_source_window_accesses(ea_t source_func,
     recompute_unified_bounds(unified_pattern);
 }
 
+bool field_already_covers_exact_access(const SynthStruct& structure,
+                                       const FieldAccess& access) {
+    for (const auto& field : structure.fields) {
+        if (field.offset == access.offset && field.size == access.size) {
+            return true;
+        }
+
+        if (field.is_union_candidate) {
+            for (const auto& member : field.union_members) {
+                if (field.offset + member.offset == access.offset && member.size == access.size) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+void apply_inner_scalar_overlay_recovery(SynthStruct& structure,
+                                         const qvector<FieldAccess>& accesses) {
+    for (const auto& access : accesses) {
+        if (access.size == 0 || field_already_covers_exact_access(structure, access)) {
+            continue;
+        }
+
+        const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
+        for (auto& field : structure.fields) {
+            if (field.is_padding || field.is_bitfield || field.is_array ||
+                field.semantic == SemanticType::NestedStruct) {
+                continue;
+            }
+
+            const sval_t field_end = field.offset + static_cast<sval_t>(field.size);
+            if (access.offset <= field.offset || access_end > field_end) {
+                continue;
+            }
+
+            const sval_t rel_offset = access.offset - field.offset;
+            bool duplicate = false;
+            for (const auto& member : field.union_members) {
+                if (member.offset == rel_offset && member.size == access.size) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) {
+                break;
+            }
+
+            if (!field.is_union_candidate) {
+                SynthField::UnionMember base;
+                base.name = field.name;
+                base.offset = 0;
+                base.size = field.size;
+                base.type = field.type;
+                base.comment = field.comment;
+                field.union_members.push_back(std::move(base));
+                field.is_union_candidate = true;
+            }
+
+            SynthField::UnionMember overlay;
+            if (!field.name.empty() && access.size < field.size && (field.size % access.size) == 0) {
+                overlay.name.sprnt("%s_dword", field.name.c_str());
+            } else if (!field.name.empty()) {
+                overlay.name.sprnt("%s_part", field.name.c_str());
+            } else {
+                overlay.name = generate_field_name(access.offset, access.semantic_type);
+            }
+            overlay.offset = rel_offset;
+            overlay.size = access.size;
+            overlay.type = !access.inferred_type.empty()
+                ? access.inferred_type
+                : make_scalar_type_for_access(access);
+            field.union_members.push_back(std::move(overlay));
+            break;
+        }
+    }
+}
+
+void adopt_field_names_from_original_type(SynthStruct& structure, const tinfo_t& original_type) {
+    auto member_size = [](const udm_t& member) -> size_t {
+        size_t size = member.type.get_size();
+        if (size != BADSIZE) {
+            return size;
+        }
+        return member.size / 8;
+    };
+
+    auto adopt_from_udt = [&](const udt_type_data_t& udt) -> bool {
+        bool renamed = false;
+        for (auto& field : structure.fields) {
+            if (field.is_padding) {
+                continue;
+            }
+
+            for (const auto& member : udt) {
+                if (member.offset != static_cast<uint64>(field.offset) * 8 || member.name.empty()) {
+                    continue;
+                }
+
+                if (member_size(member) != field.size) {
+                    continue;
+                }
+
+                field.name = member.name;
+                if (field.is_union_candidate && !field.union_members.empty()) {
+                    field.union_members[0].name = member.name;
+                }
+                renamed = true;
+                break;
+            }
+        }
+        return renamed;
+    };
+
+    tinfo_t udt_type = original_type;
+    if (udt_type.is_ptr()) {
+        udt_type = udt_type.get_pointed_object();
+    }
+
+    udt_type_data_t udt;
+    bool renamed = false;
+    if (udt_type.get_udt_details(&udt)) {
+        renamed = adopt_from_udt(udt);
+    }
+
+    if (renamed) {
+        return;
+    }
+
+    til_t* til = get_idati();
+    if (!til) {
+        return;
+    }
+
+    const uint32_t ordinal_limit = get_ordinal_limit(til);
+    int best_score = 0;
+    udt_type_data_t best_udt;
+
+    for (uint32_t ord = 1; ord < ordinal_limit; ++ord) {
+        tinfo_t tif;
+        if (!tif.get_numbered_type(til, ord) || !tif.is_struct()) {
+            continue;
+        }
+
+        const size_t tif_size = tif.get_size();
+        if (tif_size == BADSIZE || tif_size != structure.size) {
+            continue;
+        }
+
+        udt_type_data_t candidate_udt;
+        if (!tif.get_udt_details(&candidate_udt)) {
+            continue;
+        }
+
+        int score = 0;
+        for (const auto& field : structure.fields) {
+            if (field.is_padding) {
+                continue;
+            }
+
+            for (const auto& member : candidate_udt) {
+                if (member.offset == static_cast<uint64>(field.offset) * 8 &&
+                    member_size(member) == field.size) {
+                    ++score;
+                    break;
+                }
+            }
+        }
+
+        if (score > best_score) {
+            best_score = score;
+            best_udt = candidate_udt;
+        }
+    }
+
+    if (best_score > 0) {
+        (void)adopt_from_udt(best_udt);
+    }
+}
+
 } // namespace
 
 LayoutSynthesizer::LayoutSynthesizer(const LayoutSynthConfig& config)
@@ -1157,6 +1339,32 @@ void LayoutSynthesizer::detect_subobjects(
         AccessPattern sub_pattern;
         sub_pattern.func_ea = group.patterns.front().func_ea;
         sub_pattern.var_name.sprnt("sub_%llX", static_cast<unsigned long long>(delta));
+        for (const auto& fn_pattern : group.patterns) {
+            if (!fn_pattern.original_type.empty()) {
+                sub_pattern.original_type = fn_pattern.original_type;
+                break;
+            }
+        }
+        if (sub_pattern.original_type.empty()) {
+            cfuncptr_t helper_cfunc = utils::get_cfunc(sub_pattern.func_ea);
+            if (helper_cfunc) {
+                lvars_t* helper_lvars = helper_cfunc->get_lvars();
+                if (helper_lvars) {
+                    for (const auto& fn_pattern : group.patterns) {
+                        if (fn_pattern.var_idx < 0 ||
+                            static_cast<size_t>(fn_pattern.var_idx) >= helper_lvars->size()) {
+                            continue;
+                        }
+
+                        tinfo_t helper_type = helper_lvars->at(fn_pattern.var_idx).type();
+                        if (!helper_type.empty()) {
+                            sub_pattern.original_type = helper_type;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
 
         for (const auto& fn_pattern : group.patterns) {
             for (const auto& access : fn_pattern.accesses) {
@@ -1171,6 +1379,23 @@ void LayoutSynthesizer::detect_subobjects(
 
         SynthesisResult sub_result = sub_synth.synthesize(sub_pattern, opts);
         if (!sub_result.success()) continue;
+
+        adopt_field_names_from_original_type(sub_result.structure, sub_pattern.original_type);
+
+        qvector<FieldAccess> overlay_accesses;
+        for (const auto& access : pattern.all_accesses) {
+            const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
+            if (access.offset < delta || access_end > delta + static_cast<sval_t>(sub_result.structure.size)) {
+                continue;
+            }
+
+            FieldAccess rebased = access;
+            rebased.offset -= delta;
+            overlay_accesses.push_back(std::move(rebased));
+        }
+        if (!overlay_accesses.empty()) {
+            apply_inner_scalar_overlay_recovery(sub_result.structure, overlay_accesses);
+        }
 
         std::uint32_t sub_size = sub_result.structure.size;
         if (sub_size == 0) continue;
