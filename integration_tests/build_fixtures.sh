@@ -20,6 +20,21 @@ build_cxx() {
     "$cxx" $cxxflags -o "$out" "$src"
 }
 
+build_missing_regarg() {
+    arch=$(uname -m)
+    if [ "$arch" != "arm64" ] && [ "$arch" != "aarch64" ]; then
+        return
+    fi
+
+    asm_src="$root/test_missing_regarg_arm64.S"
+    main_src="$root/test_missing_regarg_main.c"
+    obj="$root/test_missing_regarg_arm64.o"
+    out="$root/test_missing_regarg"
+
+    "$cc" $cflags -c "$asm_src" -o "$obj"
+    "$cc" $cflags -o "$out" "$main_src" "$obj"
+}
+
 build_c "$root/test_simple_struct.c"
 build_c "$root/test_function_ptr.c"
 build_c "$root/test_linked_list.c"
@@ -46,5 +61,6 @@ build_c "$root/test_shifted_siblings.c"
 build_c "$root/test_tree_struct.c"
 build_c "$root/test_partial_overlap.c"
 build_c "$root/test_vtable_direct.c"
+build_missing_regarg
 build_cxx "$root/test_vtable.cpp"
 build_cxx "$root/test_vtable_positive.cpp"

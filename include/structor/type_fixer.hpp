@@ -645,6 +645,188 @@ namespace detail {
     return indices;
 }
 
+struct RegisterHandoffSummary {
+    tinfo_t type;
+    TypeConfidence confidence = TypeConfidence::Low;
+    int support = 0;
+    int typed_support = 0;
+    int conflicts = 0;
+};
+
+[[nodiscard]] inline tinfo_t make_width_fallback_type(int width) {
+    tinfo_t type;
+    switch (width) {
+        case 1: type.create_simple_type(BTF_INT8); break;
+        case 2: type.create_simple_type(BTF_INT16); break;
+        case 4: type.create_simple_type(BTF_INT32); break;
+        case 8: type.create_simple_type(BTF_INT64); break;
+        default: break;
+    }
+    return type;
+}
+
+[[nodiscard]] inline std::string operand_reg_family(const op_t& op, int fallback_width = 0) {
+#ifndef STRUCTOR_TESTING
+    if (op.type != o_reg) {
+        return std::string();
+    }
+
+    qstring reg_name;
+    size_t width = get_dtype_size(op.dtype);
+    if (width == 0 && fallback_width > 0) {
+        width = static_cast<size_t>(fallback_width);
+    }
+    if (width == 0) {
+        width = 1;
+    }
+
+    if (get_reg_name(&reg_name, op.reg, width) <= 0 || reg_name.empty()) {
+        return std::string();
+    }
+
+    return normalize_register_family(reg_name);
+#else
+    (void) op;
+    (void) fallback_width;
+    return std::string();
+#endif
+}
+
+[[nodiscard]] inline RegisterHandoffSummary collect_register_handoff_summary(
+    cfunc_t* callee_cfunc,
+    const lvar_t& callee_var)
+{
+    RegisterHandoffSummary summary;
+
+#ifndef STRUCTOR_TESTING
+    if (callee_cfunc == nullptr || !callee_var.is_reg_var()) {
+        return summary;
+    }
+
+    qstring callee_reg_name = describe_lvar_location(callee_var);
+    std::string target_family = normalize_register_family(callee_reg_name);
+    if (target_family.empty()) {
+        return summary;
+    }
+
+    xrefblk_t xref;
+    for (bool ok = xref.first_to(callee_cfunc->entry_ea, XREF_ALL); ok; ok = xref.next_to()) {
+        if (!xref.iscode || (xref.type != fl_CF && xref.type != fl_CN)) {
+            continue;
+        }
+
+        ea_t call_ea = xref.from;
+        func_t* caller_func = get_func(call_ea);
+        if (caller_func == nullptr) {
+            continue;
+        }
+
+        cfuncptr_t caller_cfunc = utils::get_cfunc(caller_func->start_ea);
+        if (!caller_cfunc) {
+            continue;
+        }
+
+        lvars_t* caller_lvars = caller_cfunc->get_lvars();
+        if (caller_lvars == nullptr) {
+            continue;
+        }
+
+        ea_t scan_ea = call_ea;
+        bool found_write = false;
+
+        for (int step = 0; step < 12; ++step) {
+            insn_t insn;
+            ea_t prev_ea = decode_prev_insn(&insn, scan_ea);
+            if (prev_ea == BADADDR || prev_ea < caller_func->start_ea) {
+                break;
+            }
+            scan_ea = prev_ea;
+
+            uint32 feature = insn.get_canon_feature(PH);
+            if ((feature & CF_CHG1) == 0 || insn.Op1.type != o_reg) {
+                if ((feature & CF_STOP) != 0) {
+                    break;
+                }
+                continue;
+            }
+
+            std::string dst_family = operand_reg_family(insn.Op1, callee_var.width);
+            if (dst_family != target_family) {
+                if ((feature & CF_STOP) != 0) {
+                    break;
+                }
+                continue;
+            }
+
+            found_write = true;
+            ++summary.support;
+
+            tinfo_t candidate_type;
+            TypeConfidence candidate_confidence = TypeConfidence::Low;
+
+            if ((feature & CF_USE2) != 0) {
+                const op_t& src = insn.Op2;
+                if (src.type == o_reg) {
+                    int src_width = static_cast<int>(get_dtype_size(src.dtype));
+                    if (src_width <= 0) {
+                        src_width = callee_var.width;
+                    }
+
+                    int input_idx = caller_lvars->find_input_reg(reg2mreg(src.reg), std::max(src_width, 1));
+                    if (input_idx >= 0 && static_cast<size_t>(input_idx) < caller_lvars->size()) {
+                        const lvar_t& input_var = caller_lvars->at(static_cast<size_t>(input_idx));
+                        if (!input_var.type().empty()) {
+                            candidate_type = input_var.type();
+                            candidate_confidence = input_var.has_user_type()
+                                ? TypeConfidence::High
+                                : TypeConfidence::Medium;
+                        }
+                    }
+
+                    if (candidate_type.empty()) {
+                        candidate_type = make_width_fallback_type(src_width);
+                        candidate_confidence = TypeConfidence::Low;
+                    }
+                } else if (src.type == o_imm) {
+                    candidate_type = make_width_fallback_type(callee_var.width);
+                    candidate_confidence = TypeConfidence::Medium;
+                }
+            }
+
+            if (candidate_type.empty()) {
+                candidate_type = make_width_fallback_type(callee_var.width);
+                candidate_confidence = TypeConfidence::Low;
+            }
+
+            if (!candidate_type.empty()) {
+                if (summary.type.empty()) {
+                    summary.type = candidate_type;
+                    summary.confidence = candidate_confidence;
+                    ++summary.typed_support;
+                } else if (types_are_compatible_for_recovery(summary.type, candidate_type)) {
+                    summary.type = resolve_type_conflict(summary.type, candidate_type);
+                    summary.confidence = std::max(summary.confidence, candidate_confidence);
+                    ++summary.typed_support;
+                } else {
+                    ++summary.conflicts;
+                }
+            }
+
+            break;
+        }
+
+        if (!found_write) {
+            continue;
+        }
+    }
+#else
+    (void) callee_cfunc;
+    (void) callee_var;
+#endif
+
+    return summary;
+}
+
 [[nodiscard]] inline bool is_var_assigned_in_function(cfunc_t* cfunc, int var_idx) {
 #ifndef STRUCTOR_TESTING
     if (!cfunc || var_idx < 0) {
@@ -1216,7 +1398,7 @@ inline qvector<qstring> TypeFixer::collect_missing_argument_warnings(cfunc_t* cf
         if (var.is_result_var() || var.is_fake_var() || var.is_spoiled_var() || var.has_regname()) {
             continue;
         }
-        if (var.is_dummy_arg() || var.is_notarg()) {
+        if (var.is_dummy_arg()) {
             continue;
         }
         if (detail::is_var_assigned_in_function(cfunc, static_cast<int>(i))) {
@@ -1225,21 +1407,50 @@ inline qvector<qstring> TypeFixer::collect_missing_argument_warnings(cfunc_t* cf
 
         qstring reg_display = detail::describe_lvar_location(var);
         std::string reg_family = detail::normalize_register_family(reg_display);
-        qvector<int> candidate_param_indices = detail::candidate_param_indices_for_register(reg_family);
-        if (candidate_param_indices.empty()) {
-            continue;
-        }
 
         TypeConfidence local_confidence = TypeConfidence::Low;
         tinfo_t local_type = infer_variable_type_direct(cfunc, static_cast<int>(i), local_confidence);
-        if (!local_type.empty() && is_default_type(local_type)) {
-            local_type.clear();
-            local_confidence = TypeConfidence::Low;
+        if (local_type.empty() && !var.type().empty()) {
+            local_type = var.type();
         }
+        if (local_type.empty()) {
+            local_type = detail::make_width_fallback_type(var.width);
+        }
+
+        detail::RegisterHandoffSummary reg_handoff =
+            detail::collect_register_handoff_summary(cfunc, var);
+        bool best_is_register_handoff = false;
+
+        qvector<int> candidate_param_indices = detail::candidate_param_indices_for_register(reg_family);
 
         int best_param_idx = -1;
         int best_score = 0;
         CallerTypeSummary best_summary;
+
+        if (reg_handoff.support > 0) {
+            if (!local_type.empty()) {
+                if (reg_handoff.type.empty()) {
+                    reg_handoff.type = local_type;
+                    reg_handoff.confidence = std::max(reg_handoff.confidence, local_confidence);
+                } else if (detail::types_are_compatible_for_recovery(reg_handoff.type, local_type)) {
+                    reg_handoff.type = resolve_type_conflict(reg_handoff.type, local_type);
+                    reg_handoff.confidence = std::max(reg_handoff.confidence, local_confidence);
+                } else {
+                    ++reg_handoff.conflicts;
+                }
+            }
+
+            best_summary.type = reg_handoff.type;
+            best_summary.confidence = reg_handoff.confidence;
+            best_summary.support = reg_handoff.support;
+            best_summary.typed_callers = reg_handoff.typed_support;
+            best_summary.conflicts = reg_handoff.conflicts;
+            best_score = reg_handoff.support * 140
+                      + reg_handoff.typed_support * 40
+                      + static_cast<int>(reg_handoff.confidence) * 20
+                      - reg_handoff.conflicts * 60;
+            best_is_register_handoff = true;
+        }
 
         for (int param_idx : candidate_param_indices) {
             auto callers = analyzer.find_callers_with_param(cfunc->entry_ea, param_idx);
@@ -1334,10 +1545,11 @@ inline qvector<qstring> TypeFixer::collect_missing_argument_warnings(cfunc_t* cf
                 best_score = score;
                 best_param_idx = param_idx;
                 best_summary = summary;
+                best_is_register_handoff = false;
             }
         }
 
-        if (best_param_idx < 0 || best_summary.type.empty()) {
+        if (best_summary.type.empty() || (!best_is_register_handoff && best_param_idx < 0)) {
             continue;
         }
 
@@ -1345,15 +1557,26 @@ inline qvector<qstring> TypeFixer::collect_missing_argument_warnings(cfunc_t* cf
         best_summary.type.print(&type_str);
 
         qstring warning;
-        warning.sprnt(
-            "possible missing argument in %s: %s (%s) looks like parameter #%d with type %s from %d caller%s",
-            func_name.c_str(),
-            var.name.c_str(),
-            reg_display.c_str(),
-            best_param_idx + 1,
-            type_str.c_str(),
-            best_summary.support,
-            best_summary.support == 1 ? "" : "s");
+        if (best_is_register_handoff) {
+            warning.sprnt(
+                "possible missing argument in %s: %s (%s) is populated by %d caller%s before the call; inferred type %s",
+                func_name.c_str(),
+                var.name.c_str(),
+                reg_display.c_str(),
+                best_summary.support,
+                best_summary.support == 1 ? "" : "s",
+                type_str.c_str());
+        } else {
+            warning.sprnt(
+                "possible missing argument in %s: %s (%s) looks like parameter #%d with type %s from %d caller%s",
+                func_name.c_str(),
+                var.name.c_str(),
+                reg_display.c_str(),
+                best_param_idx + 1,
+                type_str.c_str(),
+                best_summary.support,
+                best_summary.support == 1 ? "" : "s");
+        }
         if (best_summary.conflicts > 0) {
             warning.cat_sprnt(
                 " (%d conflicting caller inference%s)",
