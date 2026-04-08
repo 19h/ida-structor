@@ -203,6 +203,87 @@ void prune_intermediate_positive_delta_patterns(ea_t source_func,
     unified_pattern = std::move(pruned);
 }
 
+void recompute_unified_bounds(UnifiedAccessPattern& unified_pattern) {
+    if (unified_pattern.all_accesses.empty()) {
+        unified_pattern.global_min_offset = 0;
+        unified_pattern.global_max_offset = 0;
+        return;
+    }
+
+    bool first = true;
+    for (const auto& access : unified_pattern.all_accesses) {
+        const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
+        if (first) {
+            unified_pattern.global_min_offset = access.offset;
+            unified_pattern.global_max_offset = access_end;
+            first = false;
+            continue;
+        }
+
+        unified_pattern.global_min_offset = std::min(unified_pattern.global_min_offset, access.offset);
+        unified_pattern.global_max_offset = std::max(unified_pattern.global_max_offset, access_end);
+    }
+}
+
+void reanchor_source_window_accesses(ea_t source_func,
+                                     UnifiedAccessPattern& unified_pattern) {
+    auto source_it = unified_pattern.function_deltas.find(source_func);
+    if (source_it == unified_pattern.function_deltas.end()) {
+        return;
+    }
+
+    const sval_t source_delta = source_it->second;
+    if (source_delta <= 0) {
+        return;
+    }
+
+    bool has_negative_helper = false;
+    for (const auto& fn_pattern : unified_pattern.per_function_patterns) {
+        if (fn_pattern.func_ea == source_func) {
+            continue;
+        }
+
+        sval_t delta = 0;
+        if (auto it = unified_pattern.function_deltas.find(fn_pattern.func_ea);
+            it != unified_pattern.function_deltas.end()) {
+            delta = it->second;
+        }
+
+        if (delta < 0) {
+            has_negative_helper = true;
+            break;
+        }
+    }
+
+    if (!has_negative_helper) {
+        return;
+    }
+
+    bool changed = false;
+    for (auto& access : unified_pattern.all_accesses) {
+        if (access.source_func_ea != source_func) {
+            continue;
+        }
+
+        access.offset -= source_delta;
+        changed = true;
+    }
+
+    if (!changed) {
+        return;
+    }
+
+    std::sort(unified_pattern.all_accesses.begin(), unified_pattern.all_accesses.end(),
+              [](const FieldAccess& a, const FieldAccess& b) {
+                  if (a.offset != b.offset) return a.offset < b.offset;
+                  if (a.size != b.size) return a.size < b.size;
+                  if (a.source_func_ea != b.source_func_ea) return a.source_func_ea < b.source_func_ea;
+                  return a.insn_ea < b.insn_ea;
+              });
+
+    recompute_unified_bounds(unified_pattern);
+}
+
 } // namespace
 
 LayoutSynthesizer::LayoutSynthesizer(const LayoutSynthConfig& config)
@@ -262,6 +343,7 @@ SynthesisResult LayoutSynthesizer::synthesize(
         result.functions_analyzed = static_cast<int>(
             analyzer.equivalence_class().variables.size());
         prune_intermediate_positive_delta_patterns(pattern.func_ea, unified_pattern);
+        reanchor_source_window_accesses(pattern.func_ea, unified_pattern);
     } else {
         // Single-function mode
         AccessPattern mutable_pattern = pattern;
