@@ -1,6 +1,7 @@
 #pragma once
 
 #include "synth_types.hpp"
+#include "naming.hpp"
 #include "config.hpp"
 #include "access_collector.hpp"
 #include "layout_synthesizer.hpp"
@@ -322,8 +323,9 @@ inline SynthResult StructorAPI::do_synthesis(ea_t func_ea, int var_idx, const Sy
     current_struct.get_type_name(&current_name);
     qstring current_decl;
     current_type.print(&current_decl);
-    if ((!current_name.empty() && current_name.find("synth_struct_") == 0) ||
-        (!current_decl.empty() && current_decl.find("synth_struct_") != qstring::npos)) {
+    if ((!current_name.empty() && (current_name.find("synth_struct_") == 0 || current_name.find("auto_") == 0)) ||
+        (!current_decl.empty() &&
+         (current_decl.find("synth_struct_") != qstring::npos || current_decl.find("auto_") != qstring::npos))) {
         tid_t existing_tid = current_struct.get_tid();
         if (existing_tid != BADADDR) {
             result.struct_tid = existing_tid;
@@ -411,82 +413,12 @@ inline SynthResult StructorAPI::do_synthesis(ea_t func_ea, int var_idx, const Sy
                 struct_type,
                 PropagationDirection::Both);
 
-            auto is_generic_name = [](const qstring& name) {
-                return name.empty() ||
-                       name.find("field_") == 0 ||
-                       name.find("sub_") == 0 ||
-                       name.find("__pad_") == 0 ||
-                       name.find("union_") == 0;
-            };
-
             auto member_size = [](const udm_t& member) -> size_t {
                 const size_t type_size = member.type.get_size();
                 if (type_size != BADSIZE) {
                     return type_size;
                 }
                 return member.size / 8;
-            };
-
-            auto adopt_names_from_udt = [&](SynthStruct& target, const tinfo_t& donor_type) {
-                udt_type_data_t udt;
-                if (!donor_type.get_udt_details(&udt)) {
-                    return;
-                }
-
-                for (auto& field : target.fields) {
-                    if (field.is_padding) {
-                        continue;
-                    }
-
-                    for (const auto& member : udt) {
-                        if (member.offset != static_cast<uint64>(field.offset) * 8 || member.name.empty()) {
-                            continue;
-                        }
-                        if (member_size(member) != field.size) {
-                            continue;
-                        }
-
-                        field.name = member.name;
-                        if (field.is_union_candidate && !field.union_members.empty()) {
-                            field.union_members[0].name = member.name;
-                            for (size_t i = 1; i < field.union_members.size(); ++i) {
-                                auto& alt = field.union_members[i];
-                                if (!is_generic_name(alt.name)) {
-                                    continue;
-                                }
-
-                                if (alt.size < field.size && (field.size % alt.size) == 0) {
-                                    alt.name.sprnt("%s_dword", member.name.c_str());
-                                } else if (alt.size < field.size) {
-                                    alt.name.sprnt("%s_part", member.name.c_str());
-                                } else {
-                                    alt.name = member.name;
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
-            };
-
-            auto needs_name_refinement = [&](const SynthStruct& target) {
-                for (const auto& field : target.fields) {
-                    if (field.is_padding) {
-                        continue;
-                    }
-                    if (is_generic_name(field.name)) {
-                        return true;
-                    }
-                    if (!field.is_union_candidate) {
-                        continue;
-                    }
-                    for (const auto& alt : field.union_members) {
-                        if (is_generic_name(alt.name)) {
-                            return true;
-                        }
-                    }
-                }
-                return false;
             };
 
             auto extract_semantic_donor = [&](const tinfo_t& candidate, tinfo_t& donor_type) {
@@ -504,7 +436,7 @@ inline SynthResult StructorAPI::do_synthesis(ea_t func_ea, int var_idx, const Sy
                 }
 
                 for (const auto& member : udt) {
-                    if (!member.name.empty() && !is_generic_name(member.name)) {
+                    if (!member.name.empty() && !structor::is_generated_name(member.name)) {
                         return true;
                     }
                 }
@@ -577,7 +509,7 @@ inline SynthResult StructorAPI::do_synthesis(ea_t func_ea, int var_idx, const Sy
 
                 bool refined_substructs = false;
                 for (auto& sub : sub_structs) {
-                    if (sub.structure.tid == BADADDR || !needs_name_refinement(sub.structure)) {
+                    if (sub.structure.tid == BADADDR || !struct_needs_name_refinement(sub.structure)) {
                         continue;
                     }
 
@@ -599,7 +531,9 @@ inline SynthResult StructorAPI::do_synthesis(ea_t func_ea, int var_idx, const Sy
                         continue;
                     }
 
-                    adopt_names_from_udt(sub.structure, matched_donor);
+                    (void)refine_struct_names_from_udt(sub.structure,
+                                                       matched_donor,
+                                                       NameOrigin::PropagatedDonor);
                     if (persistence.update_struct(sub.structure.tid, sub.structure)) {
                         refined_substructs = true;
                     }

@@ -1,4 +1,5 @@
 #include "structor/z3/layout_constraints.hpp"
+#include "structor/naming.hpp"
 #include "structor/optimized_algorithms.hpp"
 #include "structor/optimized_containers.hpp"
 #include "structor/simd.hpp"
@@ -168,6 +169,8 @@ SynthField field_from_candidate(
     // Handle arrays
     if (candidate.kind == FieldCandidate::Kind::ArrayField &&
         candidate.array_element_count.has_value()) {
+        const tinfo_t elem_type = field.type;
+        const size_t elem_size = elem_type.get_size();
         tinfo_t array_type;
         array_type.create_array(field.type, *candidate.array_element_count);
         field.type = array_type;
@@ -175,12 +178,24 @@ SynthField field_from_candidate(
         field.array_count = *candidate.array_element_count;
         field.semantic = SemanticType::Array;
         field.size = candidate.array_stride.value_or(candidate.size) * *candidate.array_element_count;
-        field.name.sprnt("arr_%X", static_cast<unsigned>(candidate.offset));
+        field.name = make_array_field_name(candidate.offset,
+                                           elem_type,
+                                           semantic,
+                                           static_cast<std::uint32_t>(elem_size == BADSIZE ? candidate.size : elem_size));
+        field.naming.kind = GeneratedNameKind::ArrayField;
+        field.naming.origin = NameOrigin::GeneratedFallback;
+        field.naming.confidence = NameConfidence::Medium;
     } else {
         if (field.semantic == SemanticType::NestedStruct) {
-            field.name.sprnt("sub_%X", static_cast<unsigned>(candidate.offset));
+            field.name = make_substruct_field_name(candidate.offset);
+            field.naming.kind = GeneratedNameKind::SubStructField;
+            field.naming.origin = NameOrigin::GeneratedFallback;
+            field.naming.confidence = NameConfidence::Medium;
         } else {
-            field.name = generate_field_name(candidate.offset, field.semantic);
+            field.name = generate_field_name(candidate.offset, field.semantic, candidate.size);
+            field.naming.kind = GeneratedNameKind::Field;
+            field.naming.origin = NameOrigin::GeneratedFallback;
+            field.naming.confidence = NameConfidence::Medium;
         }
     }
 

@@ -4,6 +4,7 @@
 #include <structor/type_propagator.hpp>
 #include <structor/access_collector.hpp>
 #include <structor/layout_synthesizer.hpp>
+#include <structor/naming.hpp>
 #include <structor/structure_persistence.hpp>
 
 namespace structor {
@@ -54,20 +55,7 @@ tinfo_t make_scalar_or_bytes_type(std::size_t size) {
 }
 
 qstring rebase_window_member_name(const qstring& name, sval_t offset) {
-    if (name.empty()) {
-        return generate_field_name(offset, SemanticType::Unknown);
-    }
-
-    qstring rebased = name;
-    if (name.find("sub_") == 0) {
-        rebased.sprnt("sub_%llX", static_cast<unsigned long long>(offset));
-    } else if (name.find("field_") == 0) {
-        rebased.sprnt("field_%llX", static_cast<unsigned long long>(offset));
-    } else if (name.find("__pad_") == 0) {
-        rebased.sprnt("__pad_%llX", static_cast<unsigned long long>(offset));
-    }
-
-    return rebased;
+    return rebase_textual_generated_name(name, offset);
 }
 
 bool build_shifted_tail_udt(const tinfo_t& parent_type,
@@ -134,7 +122,7 @@ bool build_shifted_tail_udt(const tinfo_t& parent_type,
 
         const std::size_t fragment_size = static_cast<std::size_t>(member_end - delta);
         udm_t fragment;
-        fragment.name = generate_field_name(0, SemanticType::Unknown);
+        fragment.name = generate_field_name(0, SemanticType::Unknown, static_cast<std::uint32_t>(fragment_size));
         fragment.offset = 0;
         fragment.type = make_scalar_or_bytes_type(fragment_size);
         fragment.size = fragment_size * 8;
@@ -174,9 +162,7 @@ bool build_shifted_object_type(const tinfo_t& parent_type,
     tail_type.set_udt_alignment(1);
 
     if (!parent_name.empty()) {
-        qstring tail_name;
-        tail_name.sprnt("%s_at_%llX", parent_name.c_str(),
-                        static_cast<unsigned long long>(delta));
+        qstring tail_name = make_shifted_tail_type_name(parent_name, delta);
         if (tail_type.set_named_type(nullptr, tail_name.c_str(), NTF_TYPE | NTF_REPLACE) == TERR_OK) {
             tinfo_t named_type;
             tid_t tail_tid = get_named_type_tid(tail_name.c_str());
@@ -198,16 +184,12 @@ bool make_shifted_window_ptr(const tinfo_t& type, tinfo_t& out_ptr_type) {
         return false;
     }
 
-    const char* marker = strstr(type_name.c_str(), "_window_");
-    if (!marker) {
+    const std::optional<sval_t> parsed_delta = extract_shifted_view_delta(type_name);
+    if (!parsed_delta.has_value() || *parsed_delta <= 0) {
         return false;
     }
 
-    char* endptr = nullptr;
-    long long delta = strtoll(marker + 8, &endptr, 16);
-    if (endptr == marker + 8 || delta <= 0) {
-        return false;
-    }
+    const sval_t delta = *parsed_delta;
 
     tinfo_t object_type;
     tinfo_t exact_object_type;

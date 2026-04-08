@@ -2,6 +2,7 @@
 /// @brief Structure persistence implementation
 
 #include <structor/structure_persistence.hpp>
+#include <structor/naming.hpp>
 
 namespace structor {
 
@@ -98,18 +99,6 @@ bool union_has_relative_members(const qvector<SynthField>& members) {
     return false;
 }
 
-qstring anonymous_type_name(const qstring& base_name) {
-    qstring name;
-    name.sprnt("$%s", base_name.c_str());
-    return name;
-}
-
-qstring anonymous_member_name(const qstring& base_name) {
-    qstring name;
-    name.sprnt("__%s", base_name.c_str());
-    return name;
-}
-
 tinfo_t make_member_storage_type(const SynthField& member) {
     if (!member.type.empty()) {
         return member.type;
@@ -131,11 +120,9 @@ tinfo_t make_member_storage_type(const SynthField& member) {
 tinfo_t create_overlay_view_type(const qstring& union_name,
                                  const SynthField& member,
                                  uint32_t union_size) {
-    qstring type_name;
-    type_name.sprnt("$%s_%s_%llX_view",
-                    union_name.c_str(),
-                    member.name.c_str(),
-                    static_cast<unsigned long long>(member.offset));
+    qstring type_name = make_internal_overlay_view_type_name(union_name,
+                                                             member.name,
+                                                             member.offset);
 
     tinfo_t existing;
     tid_t existing_tid = get_named_type_tid(type_name.c_str());
@@ -226,6 +213,46 @@ bool reuse_candidate_matches_function_members(const SynthStruct& synth_struct, c
     }
 
     return true;
+}
+
+bool is_functionish_type(const tinfo_t& type) {
+    if (type.empty()) {
+        return false;
+    }
+    if (type.is_func() || type.is_funcptr()) {
+        return true;
+    }
+    if (!type.is_ptr()) {
+        return false;
+    }
+    tinfo_t pointed = type.get_pointed_object();
+    return !pointed.empty() && pointed.is_func();
+}
+
+void apply_array_element_role_names(udt_type_data_t& udt) {
+    int func_members = 0;
+    for (const auto& member : udt) {
+        if (is_functionish_type(member.type)) {
+            ++func_members;
+        }
+    }
+
+    if (func_members == 0) {
+        return;
+    }
+
+    for (auto& member : udt) {
+        if (!is_functionish_type(member.type) || !is_generated_name(member.name)) {
+            continue;
+        }
+
+        if (func_members == 1) {
+            member.name = "callback";
+        } else {
+            member.name.sprnt("callback_%llX",
+                              static_cast<unsigned long long>(member.offset / 8));
+        }
+    }
 }
 
 } // namespace
@@ -784,7 +811,7 @@ tid_t StructurePersistence::create_union(
     // Generate unique name if needed
     const bool overlay_union = union_has_relative_members(members);
 
-    qstring union_name = overlay_union ? anonymous_type_name(name) : name;
+    qstring union_name = overlay_union ? make_internal_overlay_type_name(name) : name;
     if (struct_exists(union_name.c_str())) {
         union_name = make_unique_union_name(union_name.c_str());
     }
@@ -805,7 +832,7 @@ tid_t StructurePersistence::create_union(
         if (overlay_union && member.offset != 0) {
             udm.type = create_overlay_array_type(member, union_size);
             if (udm.type.empty()) {
-                udm.name = anonymous_member_name(member.name);
+                udm.name = member.name;
                 udm.type = create_overlay_view_type(union_name, member, union_size);
             }
             if (!udm.type.empty()) {
@@ -881,7 +908,7 @@ tid_t StructurePersistence::add_union_field(
 
     // Add a field referencing the union type to the parent struct
     udm_t udm;
-    udm.name = overlay_union ? anonymous_member_name(union_name) : union_name;
+    udm.name = union_name;
     udm.offset = static_cast<uint64>(outer_offset) * 8;  // Convert to bits
     udm.type = union_type;
     udm.size = compute_union_size(union_members) * 8;
@@ -1087,13 +1114,19 @@ tinfo_t StructurePersistence::materialize_nested_type(
             qstring elem_name;
             atd.elem_type.get_type_name(&elem_name);
             if (elem_name.empty() || atd.elem_type.is_anonymous_udt()) {
-                qstring nested_name;
-                nested_name.sprnt("%s_%s_elem", parent_name.c_str(), field.name.c_str());
+                qstring nested_name = make_array_element_type_name(parent_name,
+                                                                   field.name,
+                                                                   field.offset);
                 if (struct_exists(nested_name.c_str())) {
                     nested_name = make_unique_name(nested_name.c_str());
                 }
 
                 tinfo_t elem_type = atd.elem_type;
+                udt_type_data_t elem_udt;
+                if (elem_type.get_udt_details(&elem_udt)) {
+                    apply_array_element_role_names(elem_udt);
+                    (void)elem_type.create_udt(elem_udt);
+                }
                 elem_type.set_udt_pack(1);
                 elem_type.set_udt_alignment(1);
                 if (elem_type.set_named_type(nullptr, nested_name.c_str(), NTF_TYPE | NTF_REPLACE) == TERR_OK) {

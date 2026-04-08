@@ -1,5 +1,6 @@
 #include "structor/z3/field_candidates.hpp"
 #include "structor/z3/array_constraints.hpp"
+#include "structor/naming.hpp"
 #include "structor/optimized_algorithms.hpp"
 #include "structor/optimized_containers.hpp"
 #include <algorithm>
@@ -109,7 +110,7 @@ namespace {
 
             udm_t gap;
             gap.offset = static_cast<uint64>(offset) * 8;
-            gap.name = generate_field_name(offset);
+            gap.name = generate_field_name(offset, SemanticType::Unknown, size);
 
             if (size == 4) {
                 gap.type.create_simple_type(BT_INT32 | BTMT_UNSIGNED);
@@ -129,6 +130,30 @@ namespace {
         };
 
         uint32_t cursor = 0;
+
+        auto is_function_pointer_type = [](const tinfo_t& type) {
+            if (type.empty()) {
+                return false;
+            }
+            if (type.is_func()) {
+                return true;
+            }
+            if (type.is_funcptr()) {
+                return true;
+            }
+            if (!type.is_ptr()) {
+                return false;
+            }
+            tinfo_t pointed = type.get_pointed_object();
+            return !pointed.empty() && pointed.is_func();
+        };
+
+        int func_field_count = 0;
+        for (const auto& field : fields) {
+            if (is_function_pointer_type(field.type)) {
+                ++func_field_count;
+            }
+        }
 
         auto is_array_mergeable = [](const MixedStrideField& a, const MixedStrideField& b) {
             if (a.inner_offset + a.size != b.inner_offset) {
@@ -172,9 +197,20 @@ namespace {
             udm_t udm;
             udm.offset = static_cast<uint64>(merged.inner_offset) * 8;
             if (merged_count > 1) {
-                udm.name.sprnt("arr_%X", merged.inner_offset);
+                udm.name = make_array_field_name(merged.inner_offset,
+                                                 merged.type,
+                                                 SemanticType::Unknown,
+                                                 fields[i].size);
+            } else if (is_function_pointer_type(merged.type)) {
+                if (func_field_count == 1) {
+                    udm.name = "callback";
+                } else {
+                    udm.name.sprnt("callback_%X", merged.inner_offset);
+                }
             } else {
-                udm.name = generate_field_name(merged.inner_offset);
+                udm.name = generate_field_name(merged.inner_offset,
+                                               SemanticType::Unknown,
+                                               merged.size);
             }
 
             if (merged_count > 1) {

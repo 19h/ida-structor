@@ -2,6 +2,7 @@
 /// @brief Structure layout synthesis implementation
 
 #include <structor/layout_synthesizer.hpp>
+#include <structor/naming.hpp>
 
 namespace structor {
 
@@ -16,7 +17,7 @@ bool should_rebase_generated_name(const SynthField& field, sval_t old_offset) {
         return true;
     }
 
-    if (field.name == generate_field_name(old_offset, field.semantic)) {
+    if (field.naming.is_generated() || is_generated_name(field.name, &field.naming)) {
         return true;
     }
 
@@ -24,21 +25,48 @@ bool should_rebase_generated_name(const SynthField& field, sval_t old_offset) {
 }
 
 void rebase_field_name(SynthField& field, sval_t old_offset) {
-    if (field.semantic == SemanticType::NestedStruct && field.name.find("sub_") == 0) {
-        field.name.sprnt("sub_%llX", static_cast<unsigned long long>(field.offset));
-        return;
-    }
-
     if (!should_rebase_generated_name(field, old_offset)) {
         return;
     }
 
     if (field.is_padding && is_generated_padding_name(field.name)) {
-        field.name.sprnt("__pad_%llX", static_cast<unsigned long long>(field.offset));
+        field.name.sprnt("__pad_%s", make_offset_suffix(field.offset).c_str());
         return;
     }
 
-    field.name = generate_field_name(field.offset, field.semantic);
+    if (field.naming.kind == GeneratedNameKind::SubStructField ||
+        field.semantic == SemanticType::NestedStruct) {
+        set_generated_name(field.name,
+                           field.naming,
+                           make_substruct_field_name(field.offset),
+                           GeneratedNameKind::SubStructField,
+                           field.naming.confidence);
+        return;
+    }
+
+    if (field.is_array || field.naming.kind == GeneratedNameKind::ArrayField) {
+        tinfo_t elem_type = field.type;
+        array_type_data_t atd;
+        if (elem_type.is_array() && elem_type.get_array_details(&atd)) {
+            elem_type = atd.elem_type;
+        }
+        const size_t elem_size = elem_type.get_size();
+        set_generated_name(field.name,
+                           field.naming,
+                           make_array_field_name(field.offset,
+                                                 elem_type,
+                                                 field.semantic,
+                                                 static_cast<std::uint32_t>(elem_size == BADSIZE ? 0 : elem_size)),
+                           GeneratedNameKind::ArrayField,
+                           field.naming.confidence);
+        return;
+    }
+
+    set_generated_name(field.name,
+                       field.naming,
+                       generate_field_name(field.offset, field.semantic, field.size),
+                       field.naming.kind == GeneratedNameKind::Unknown ? GeneratedNameKind::Field : field.naming.kind,
+                       field.naming.confidence);
 }
 
 void rebase_negative_offsets(SynthStruct& structure, qvector<SubStructInfo>* sub_structs) {
@@ -68,15 +96,23 @@ void rebase_negative_offsets(SynthStruct& structure, qvector<SubStructInfo>* sub
         for (auto& sub : *sub_structs) {
             const sval_t old_parent_offset = sub.parent_offset;
             sub.parent_offset += delta;
-            if (sub.field_name.find("sub_") == 0 || old_parent_offset < 0) {
-                sub.field_name.sprnt("sub_%llX",
-                                     static_cast<unsigned long long>(sub.parent_offset));
+            if (is_generated_name(sub.field_name, &sub.field_naming) || old_parent_offset < 0) {
+                if (sub.field_naming.kind == GeneratedNameKind::SubStructField ||
+                    sub.field_naming.kind == GeneratedNameKind::Unknown) {
+                    sub.field_name = make_substruct_field_name(sub.parent_offset);
+                    sub.field_naming.kind = GeneratedNameKind::SubStructField;
+                    sub.field_naming.origin = NameOrigin::GeneratedFallback;
+                } else {
+                    sub.field_name = rebase_textual_generated_name(sub.field_name, sub.parent_offset);
+                }
             }
             rebase_negative_offsets(sub.structure, nullptr);
         }
     }
 
-    structure.name.cat_sprnt("_window_%llX", static_cast<unsigned long long>(delta));
+    if (!extract_shifted_view_delta(structure.name).has_value()) {
+        structure.name = make_shifted_view_type_name(structure.name, delta);
+    }
 }
 
 tinfo_t make_scalar_type_for_access(const FieldAccess& access) {
@@ -346,13 +382,17 @@ void apply_inner_scalar_overlay_recovery(SynthStruct& structure,
             }
 
             SynthField::UnionMember overlay;
-            if (!field.name.empty() && access.size < field.size && (field.size % access.size) == 0) {
-                overlay.name.sprnt("%s_dword", field.name.c_str());
-            } else if (!field.name.empty()) {
-                overlay.name.sprnt("%s_part", field.name.c_str());
+            if (!field.name.empty()) {
+                overlay.name = make_overlay_member_name(field.name,
+                                                        field.size,
+                                                        rel_offset,
+                                                        access.size);
             } else {
-                overlay.name = generate_field_name(access.offset, access.semantic_type);
+                overlay.name = generate_field_name(access.offset, access.semantic_type, access.size);
             }
+            overlay.naming.kind = GeneratedNameKind::UnionAlternative;
+            overlay.naming.origin = field.naming.origin;
+            overlay.naming.confidence = field.naming.confidence;
             overlay.offset = rel_offset;
             overlay.size = access.size;
             overlay.type = !access.inferred_type.empty()
@@ -365,158 +405,17 @@ void apply_inner_scalar_overlay_recovery(SynthStruct& structure,
 }
 
 void adopt_field_names_from_original_type(SynthStruct& structure, const tinfo_t& original_type) {
-    auto member_size = [](const udm_t& member) -> size_t {
-        size_t size = member.type.get_size();
-        if (size != BADSIZE) {
-            return size;
-        }
-        return member.size / 8;
-    };
-
-    auto adopt_from_udt = [&](const udt_type_data_t& udt) -> bool {
-        bool renamed = false;
-        for (auto& field : structure.fields) {
-            if (field.is_padding) {
-                continue;
-            }
-
-            for (const auto& member : udt) {
-                if (member.offset != static_cast<uint64>(field.offset) * 8 || member.name.empty()) {
-                    continue;
-                }
-
-                if (member_size(member) != field.size) {
-                    continue;
-                }
-
-                field.name = member.name;
-                if (field.is_union_candidate && !field.union_members.empty()) {
-                    field.union_members[0].name = member.name;
-                }
-                renamed = true;
-                break;
-            }
-        }
-        return renamed;
-    };
-
     tinfo_t udt_type = original_type;
     if (udt_type.is_ptr()) {
         udt_type = udt_type.get_pointed_object();
     }
 
-    udt_type_data_t udt;
-    bool renamed = false;
-    if (udt_type.get_udt_details(&udt)) {
-        renamed = adopt_from_udt(udt);
-    }
-
-    if (renamed) {
-        return;
-    }
-}
-
-bool is_generic_generated_name(const qstring& name) {
-    return name.empty() ||
-           name.find("field_") == 0 ||
-           name.find("sub_") == 0 ||
-           name.find("__pad_") == 0 ||
-           name.find("union_") == 0;
-}
-
-qstring extract_member_name_from_expr(const qstring& expr) {
-    const char* text = expr.c_str();
-    const size_t len = expr.length();
-
-    for (size_t i = len; i > 0; --i) {
-        if (i >= 2 && text[i - 2] == '-' && text[i - 1] == '>') {
-            size_t start = i;
-            size_t end = start;
-            while (end < len && (qisalnum(text[end]) || text[end] == '_')) {
-                ++end;
-            }
-            if (end > start) {
-                return qstring(text + start, end - start);
-            }
-        }
-
-        if (text[i - 1] == '.') {
-            size_t start = i;
-            size_t end = start;
-            while (end < len && (qisalnum(text[end]) || text[end] == '_')) {
-                ++end;
-            }
-            if (end > start) {
-                return qstring(text + start, end - start);
-            }
-        }
-    }
-
-    return qstring();
+    (void)refine_struct_names_from_udt(structure, udt_type, NameOrigin::OriginalType);
 }
 
 void adopt_field_names_from_access_contexts(SynthStruct& structure,
                                             const qvector<FieldAccess>& accesses) {
-    for (auto& field : structure.fields) {
-        if (field.is_padding || !is_generic_generated_name(field.name)) {
-            continue;
-        }
-
-        qstring candidate_name;
-        for (const auto& access : accesses) {
-            if (access.offset != field.offset || access.size != field.size) {
-                continue;
-            }
-
-            qstring member_name = extract_member_name_from_expr(access.context_expr);
-            if (is_generic_generated_name(member_name)) {
-                continue;
-            }
-
-            candidate_name = member_name;
-            break;
-        }
-
-        if (!candidate_name.empty()) {
-            field.name = candidate_name;
-            if (field.is_union_candidate && !field.union_members.empty()) {
-                field.union_members[0].name = candidate_name;
-            }
-        }
-    }
-
-    for (auto& field : structure.fields) {
-        if (!field.is_union_candidate || field.union_members.size() < 2) {
-            continue;
-        }
-
-        for (size_t i = 1; i < field.union_members.size(); ++i) {
-            auto& member = field.union_members[i];
-            qstring candidate_name;
-
-            for (const auto& access : accesses) {
-                if (access.offset != field.offset + member.offset || access.size != member.size) {
-                    continue;
-                }
-
-                qstring member_name = extract_member_name_from_expr(access.context_expr);
-                if (is_generic_generated_name(member_name)) {
-                    continue;
-                }
-
-                candidate_name = member_name;
-                break;
-            }
-
-            if (!candidate_name.empty()) {
-                if (member.size < field.size) {
-                    member.name.sprnt("%s_dword", candidate_name.c_str());
-                } else {
-                    member.name = candidate_name;
-                }
-            }
-        }
-    }
+    (void)refine_struct_names_from_accesses(structure, accesses, NameOrigin::AccessContext);
 }
 
 bool type_has_named_udt_details(const tinfo_t& type) {
@@ -577,7 +476,11 @@ SynthesisResult LayoutSynthesizer::synthesize(
     result.structure.source_func = pattern.func_ea;
     result.structure.source_var = pattern.var_name;
     result.structure.alignment = config_.default_alignment;
-    result.structure.name = generate_struct_name(pattern.func_ea);
+    set_generated_name(result.structure.name,
+                       result.structure.naming,
+                       make_auto_root_type_name(pattern.func_ea, pattern.var_name),
+                       GeneratedNameKind::RootStruct,
+                       NameConfidence::Medium);
     result.structure.add_provenance(pattern.func_ea);
 
     if (pattern.accesses.empty()) {
@@ -614,7 +517,11 @@ SynthesisResult LayoutSynthesizer::synthesize(
     // Copy metadata
     synth_result.structure.source_func = pattern.func_ea;
     synth_result.structure.source_var = pattern.var_name;
-    synth_result.structure.name = generate_struct_name(pattern.func_ea);
+    set_generated_name(synth_result.structure.name,
+                       synth_result.structure.naming,
+                       make_auto_root_type_name(pattern.func_ea, pattern.var_name),
+                       GeneratedNameKind::RootStruct,
+                       NameConfidence::Medium);
     synth_result.functions_analyzed = result.functions_analyzed;
 
     sval_t source_delta = 0;
@@ -628,9 +535,9 @@ SynthesisResult LayoutSynthesizer::synthesize(
     }
     apply_bitfield_recovery(unified_pattern, synth_result.structure);
     rebase_negative_offsets(synth_result.structure, &synth_result.sub_structs);
-    if (source_delta > 0 && synth_result.structure.name.find("_window_") == qstring::npos) {
-        synth_result.structure.name.cat_sprnt("_window_%llX",
-                                              static_cast<unsigned long long>(source_delta));
+    if (source_delta > 0 && !extract_shifted_view_delta(synth_result.structure.name).has_value()) {
+        synth_result.structure.name = make_shifted_view_type_name(synth_result.structure.name,
+                                                                  source_delta);
     }
     compute_struct_size(synth_result.structure);
 
@@ -1129,27 +1036,60 @@ void LayoutSynthesizer::generate_field_names(SynthStruct& result) {
 
         if (!field.is_array && !field.is_union_candidate && !field.type.empty() &&
             (field.type.is_struct() || field.type.is_union() || field.semantic == SemanticType::NestedStruct)) {
-            field.name.sprnt("sub_%X", static_cast<unsigned>(field.offset));
+            set_generated_name(field.name,
+                               field.naming,
+                               make_substruct_field_name(field.offset),
+                               GeneratedNameKind::SubStructField,
+                               NameConfidence::Medium);
+        } else if (field.is_array) {
+            tinfo_t elem_type = field.type;
+            array_type_data_t atd;
+            if (elem_type.is_array() && elem_type.get_array_details(&atd)) {
+                elem_type = atd.elem_type;
+            }
+            const size_t elem_size = elem_type.get_size();
+            set_generated_name(field.name,
+                               field.naming,
+                               make_array_field_name(field.offset,
+                                                     elem_type,
+                                                     field.semantic,
+                                                     static_cast<std::uint32_t>(elem_size == BADSIZE ? 0 : elem_size)),
+                               GeneratedNameKind::ArrayField,
+                               NameConfidence::Medium);
         } else {
-            field.name = generate_field_name(field.offset, field.semantic);
+            set_generated_name(field.name,
+                               field.naming,
+                               generate_field_name(field.offset, field.semantic, field.size),
+                               field.is_array ? GeneratedNameKind::ArrayField : GeneratedNameKind::Field,
+                               NameConfidence::Medium);
         }
 
-        // Generate comment if enabled
-        if (opts.generate_comments) {
-            qstring comment;
-            comment.sprnt("size: %u, accesses: %zu", field.size, field.source_accesses.size());
+    }
 
-            if (!field.source_accesses.empty()) {
-                const auto& first_access = field.source_accesses[0];
-                comment.cat_sprnt(", %s", access_type_str(first_access.access_type));
-            }
+    apply_role_based_field_names(result);
 
-            if (field.is_union_candidate) {
-                comment.append(" [union candidate]");
-            }
+    if (!opts.generate_comments) {
+        return;
+    }
 
-            field.comment = std::move(comment);
+    for (auto& field : result.fields) {
+        if (field.is_padding) {
+            continue;
         }
+
+        qstring comment;
+        comment.sprnt("size: %u, accesses: %zu", field.size, field.source_accesses.size());
+
+        if (!field.source_accesses.empty()) {
+            const auto& first_access = field.source_accesses[0];
+            comment.cat_sprnt(", %s", access_type_str(first_access.access_type));
+        }
+
+        if (field.is_union_candidate) {
+            comment.append(" [union candidate]");
+        }
+
+        field.comment = std::move(comment);
     }
 }
 
@@ -1413,7 +1353,7 @@ void LayoutSynthesizer::detect_subobjects(
 
         AccessPattern sub_pattern;
         sub_pattern.func_ea = group.patterns.front().func_ea;
-        sub_pattern.var_name.sprnt("sub_%llX", static_cast<unsigned long long>(delta));
+        sub_pattern.var_name = make_substruct_field_name(delta);
         for (const auto& fn_pattern : group.patterns) {
             if (type_has_named_udt_details(fn_pattern.original_type)) {
                 sub_pattern.original_type = fn_pattern.original_type;
@@ -1596,7 +1536,11 @@ void LayoutSynthesizer::detect_subobjects(
         sub_field.size = sub_size;
         sub_field.semantic = SemanticType::NestedStruct;
         sub_field.confidence = TypeConfidence::Medium;
-        sub_field.name.sprnt("sub_%X", static_cast<unsigned>(delta));
+        set_generated_name(sub_field.name,
+                           sub_field.naming,
+                           make_substruct_field_name(delta),
+                           GeneratedNameKind::SubStructField,
+                           NameConfidence::Medium);
 
         result.structure.fields.push_back(sub_field);
 
@@ -1604,6 +1548,7 @@ void LayoutSynthesizer::detect_subobjects(
         info.structure = std::move(sub_result.structure);
         info.parent_offset = delta;
         info.field_name = sub_field.name;
+        info.field_naming = sub_field.naming;
         result.sub_structs.push_back(std::move(info));
     }
 
@@ -1657,11 +1602,16 @@ void LayoutSynthesizer::detect_subobjects(
             }
 
             field.semantic = SemanticType::NestedStruct;
-            field.name.sprnt("sub_%X", static_cast<unsigned>(field.offset));
+            set_generated_name(field.name,
+                               field.naming,
+                               make_substruct_field_name(field.offset),
+                               GeneratedNameKind::SubStructField,
+                               NameConfidence::Medium);
 
             SubStructInfo sibling = existing_sub;
             sibling.parent_offset = field.offset;
             sibling.field_name = field.name;
+            sibling.field_naming = field.naming;
             result.sub_structs.push_back(std::move(sibling));
         }
     }
@@ -1723,8 +1673,13 @@ void LayoutSynthesizer::detect_subobjects(
                     prefix_field.type = select_best_type(group_accesses);
                     prefix_field.semantic = select_best_semantic(group_accesses);
                     prefix_field.confidence = TypeConfidence::Medium;
-                    prefix_field.name = generate_field_name(prefix_field.offset,
-                                                           prefix_field.semantic);
+                    set_generated_name(prefix_field.name,
+                                       prefix_field.naming,
+                                       generate_field_name(prefix_field.offset,
+                                                           prefix_field.semantic,
+                                                           prefix_field.size),
+                                       GeneratedNameKind::Field,
+                                       NameConfidence::Medium);
                     result.structure.fields.push_back(std::move(prefix_field));
                 }
             }

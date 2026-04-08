@@ -82,6 +82,65 @@ enum class SemanticType : std::uint8_t {
     Padding
 };
 
+/// How a generated name should be interpreted by the naming pipeline
+enum class GeneratedNameKind : std::uint8_t {
+    Unknown,
+    RootStruct,
+    Field,
+    ArrayField,
+    ArrayElementType,
+    SubStructField,
+    UnionField,
+    UnionAlternative,
+    Bitfield,
+    Padding,
+    RawBytes,
+    VTable,
+    VTableSlot,
+    ShiftedView,
+    TailView,
+};
+
+/// Where a name came from. Higher-priority origins can replace lower-priority ones.
+enum class NameOrigin : std::uint8_t {
+    Unknown,
+    GeneratedFallback,
+    HeuristicRole,
+    AccessContext,
+    OriginalType,
+    PropagatedDonor,
+    ReusedType,
+    UserProvided,
+};
+
+/// Confidence in a generated/adopted name.
+enum class NameConfidence : std::uint8_t {
+    Low,
+    Medium,
+    High,
+    Certain,
+};
+
+struct NameMetadata {
+    GeneratedNameKind kind = GeneratedNameKind::Unknown;
+    NameOrigin origin = NameOrigin::Unknown;
+    NameConfidence confidence = NameConfidence::Low;
+    bool locked = false;
+
+    [[nodiscard]] bool is_generated() const noexcept {
+        return origin == NameOrigin::GeneratedFallback ||
+               origin == NameOrigin::HeuristicRole;
+    }
+
+    [[nodiscard]] bool is_semantic() const noexcept {
+        return origin == NameOrigin::AccessContext ||
+               origin == NameOrigin::OriginalType ||
+               origin == NameOrigin::PropagatedDonor ||
+               origin == NameOrigin::ReusedType ||
+               origin == NameOrigin::UserProvided;
+    }
+};
+
 /// Bitfield access information
 struct BitfieldInfo {
     std::uint16_t bit_offset = 0;
@@ -316,6 +375,7 @@ enum class TypeConfidence : std::uint8_t {
 struct SynthField {
     struct UnionMember {
         qstring name;
+        NameMetadata naming;
         sval_t offset = 0;
         std::uint32_t size = 0;
         tinfo_t type;
@@ -323,6 +383,7 @@ struct SynthField {
     };
 
     qstring         name;           // Field name (e.g., "field_10")
+    NameMetadata    naming;         // Name provenance and strength
     sval_t          offset;         // Byte offset in structure
     std::uint32_t   size;           // Field size
     tinfo_t         type;           // Field type
@@ -340,7 +401,8 @@ struct SynthField {
     qvector<UnionMember> union_members;    // Alternatives when this field is a union
 
     SynthField()
-        : offset(0)
+        : naming{GeneratedNameKind::Field, NameOrigin::Unknown, NameConfidence::Low, false}
+        , offset(0)
         , size(0)
         , semantic(SemanticType::Unknown)
         , is_padding(false)
@@ -355,6 +417,9 @@ struct SynthField {
     static SynthField create_padding(sval_t off, std::uint32_t sz) {
         SynthField f;
         f.name.sprnt("__pad_%X", static_cast<unsigned>(off));
+        f.naming.kind = GeneratedNameKind::Padding;
+        f.naming.origin = NameOrigin::GeneratedFallback;
+        f.naming.confidence = NameConfidence::High;
         f.offset = off;
         f.size = sz;
         f.semantic = SemanticType::Padding;
@@ -372,6 +437,9 @@ struct SynthField {
     static SynthField create_raw_bytes(sval_t off, std::uint32_t sz) {
         SynthField f;
         f.name.sprnt("__raw_%X", static_cast<unsigned>(off));
+        f.naming.kind = GeneratedNameKind::RawBytes;
+        f.naming.origin = NameOrigin::GeneratedFallback;
+        f.naming.confidence = NameConfidence::Medium;
         f.offset = off;
         f.size = sz;
         f.semantic = SemanticType::Unknown;
@@ -390,6 +458,9 @@ struct SynthField {
     static SynthField create_array(sval_t off, const tinfo_t& elem_type, std::uint32_t count) {
         SynthField f;
         f.offset = off;
+        f.naming.kind = GeneratedNameKind::ArrayField;
+        f.naming.origin = NameOrigin::GeneratedFallback;
+        f.naming.confidence = NameConfidence::Medium;
         f.is_array = true;
         f.array_count = count;
 
@@ -416,6 +487,9 @@ struct SynthField {
                                       std::uint16_t bit_off, std::uint16_t bit_sz) {
         SynthField f;
         f.offset = off;
+        f.naming.kind = GeneratedNameKind::Bitfield;
+        f.naming.origin = NameOrigin::GeneratedFallback;
+        f.naming.confidence = NameConfidence::Medium;
         f.size = storage_size;
         f.is_bitfield = true;
         f.bit_offset = bit_off;
@@ -433,24 +507,28 @@ struct VTableSlot {
     sval_t          offset;         // Byte offset in vtable
     tinfo_t         func_type;      // Function pointer type
     qstring         name;           // Slot name
+    NameMetadata    naming;         // Slot name provenance
     qvector<ea_t>   call_sites;     // Where this slot is called
     qstring         signature_hint; // Recovered signature hint
 
     VTableSlot()
-        : index(0)
+        : naming{GeneratedNameKind::VTableSlot, NameOrigin::Unknown, NameConfidence::Low, false}
+        , index(0)
         , offset(0) {}
 };
 
 /// A synthesized vtable structure
 struct SynthVTable {
     qstring                 name;           // VTable structure name
+    NameMetadata            naming;         // Type name provenance
     tid_t                   tid;            // Type ID in IDB
     qvector<VTableSlot>     slots;          // Function pointer slots
     ea_t                    source_func;    // Function where vtable was detected
     sval_t                  parent_offset;  // Offset in parent struct (usually 0)
 
     SynthVTable()
-        : tid(BADADDR)
+        : naming{GeneratedNameKind::VTable, NameOrigin::Unknown, NameConfidence::Low, false}
+        , tid(BADADDR)
         , source_func(BADADDR)
         , parent_offset(0) {}
 
@@ -462,6 +540,7 @@ struct SynthVTable {
 /// A complete synthesized structure
 struct SynthStruct {
     qstring                 name;           // Structure name
+    NameMetadata            naming;         // Type name provenance
     tid_t                   tid;            // Type ID in IDB
     qvector<SynthField>     fields;         // All fields
     std::uint32_t           size;           // Total size
@@ -472,7 +551,8 @@ struct SynthStruct {
     qvector<ea_t>           provenance;     // All functions contributing to this type
 
     SynthStruct()
-        : tid(BADADDR)
+        : naming{GeneratedNameKind::RootStruct, NameOrigin::Unknown, NameConfidence::Low, false}
+        , tid(BADADDR)
         , size(0)
         , alignment(8)
         , source_func(BADADDR) {}
@@ -497,6 +577,7 @@ struct SubStructInfo {
     SynthStruct     structure;
     sval_t          parent_offset = 0;
     qstring         field_name;
+    NameMetadata    field_naming;
 };
 
 // ============================================================================
@@ -918,40 +999,14 @@ struct RewriteResult {
 }
 
 /// Generate unique structure name
-[[nodiscard]] inline qstring generate_struct_name(ea_t func_ea, int index = 0) {
-    qstring name;
-    name.sprnt("synth_struct_%llX_%d", static_cast<unsigned long long>(func_ea), index);
-    return name;
-}
+[[nodiscard]] qstring generate_struct_name(ea_t func_ea, int index = 0);
 
 /// Generate unique vtable name
-[[nodiscard]] inline qstring generate_vtable_name(ea_t func_ea, int index = 0) {
-    qstring name;
-    name.sprnt("synth_vtbl_%llX_%d", static_cast<unsigned long long>(func_ea), index);
-    return name;
-}
+[[nodiscard]] qstring generate_vtable_name(ea_t func_ea, int index = 0);
 
 /// Generate field name from offset
-[[nodiscard]] inline qstring generate_field_name(sval_t offset, SemanticType semantic = SemanticType::Unknown) {
-    qstring name;
-    const char* prefix = "field";
-
-    switch (semantic) {
-        case SemanticType::VTablePointer:   prefix = "vtbl"; break;
-        case SemanticType::FunctionPointer: prefix = "func"; break;
-        case SemanticType::Pointer:         prefix = "ptr"; break;
-        default: break;
-    }
-
-    const int64_t signed_offset = static_cast<int64_t>(offset);
-    if (signed_offset < 0) {
-        name.sprnt("%s_neg_%llX", prefix,
-                   static_cast<unsigned long long>(-signed_offset));
-    } else {
-        name.sprnt("%s_%llX", prefix,
-                   static_cast<unsigned long long>(signed_offset));
-    }
-    return name;
-}
+[[nodiscard]] qstring generate_field_name(sval_t offset,
+                                          SemanticType semantic = SemanticType::Unknown,
+                                          std::uint32_t size = 0);
 
 } // namespace structor

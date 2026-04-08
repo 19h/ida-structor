@@ -1,5 +1,6 @@
 #pragma once
 
+#include "naming.hpp"
 #include "synth_types.hpp"
 #include "config.hpp"
 #include "utils.hpp"
@@ -113,7 +114,11 @@ inline std::optional<SynthVTable> VTableDetector::detect(const AccessPattern& pa
     }
 
     SynthVTable vtable;
-    vtable.name = generate_vtable_name(pattern.func_ea);
+    set_generated_name(vtable.name,
+                       vtable.naming,
+                       generate_vtable_name(pattern.func_ea),
+                       GeneratedNameKind::VTable,
+                       NameConfidence::Medium);
     vtable.source_func = pattern.func_ea;
     vtable.parent_offset = pattern.vtable_offset;
 
@@ -332,6 +337,9 @@ inline void VTableDetector::generate_slot_names(SynthVTable& vtable) {
     for (auto& slot : vtable.slots) {
         if (slot.name.empty()) {
             slot.name.sprnt("slot_%u", slot.index);
+            slot.naming.kind = GeneratedNameKind::VTableSlot;
+            slot.naming.origin = NameOrigin::GeneratedFallback;
+            slot.naming.confidence = NameConfidence::Medium;
         }
     }
 }
