@@ -11,7 +11,11 @@
 #include <hexrays.hpp>
 #endif
 
+#include <algorithm>
+#include <cctype>
 #include <functional>
+#include <string>
+#include <unordered_map>
 
 namespace structor {
 
@@ -442,6 +446,285 @@ struct TypeFixResult {
     return false;
 }
 
+namespace detail {
+
+[[nodiscard]] inline bool types_are_compatible_for_recovery(
+    const tinfo_t& lhs,
+    const tinfo_t& rhs)
+{
+    if (lhs.empty() || rhs.empty()) {
+        return false;
+    }
+    if (lhs.equals_to(rhs)) {
+        return true;
+    }
+
+    TypeComparisonResult cmp = compare_types(lhs, rhs, TypeConfidence::Low);
+    if (cmp.difference <= TypeDifference::Moderate) {
+        return true;
+    }
+
+    return cmp.primary_reason == DifferenceReason::VoidPointerToTyped
+        || cmp.primary_reason == DifferenceReason::StructureDetected
+        || cmp.primary_reason == DifferenceReason::GenericToFuncPtr;
+}
+
+[[nodiscard]] inline bool type_matches_lvar_width(const tinfo_t& type, const lvar_t& var) {
+#ifndef STRUCTOR_TESTING
+    if (type.empty()) {
+        return false;
+    }
+
+    if (var.width <= 0) {
+        return true;
+    }
+
+    size_t size = type.get_size();
+    return size != BADSIZE && size == static_cast<size_t>(var.width);
+#else
+    (void) type;
+    (void) var;
+    return false;
+#endif
+}
+
+[[nodiscard]] inline bool lvars_share_exact_storage(const lvar_t& lhs, const lvar_t& rhs) {
+#ifndef STRUCTOR_TESTING
+    if (lhs.width <= 0 || rhs.width <= 0 || lhs.width != rhs.width) {
+        return false;
+    }
+
+    if (lhs.is_stk_var() && rhs.is_stk_var()) {
+        return lhs.get_stkoff() == rhs.get_stkoff();
+    }
+
+    if (lhs.is_reg1() && rhs.is_reg1()) {
+        return lhs.get_reg1() == rhs.get_reg1();
+    }
+
+    if (lhs.is_reg2() && rhs.is_reg2()) {
+        return lhs.get_reg1() == rhs.get_reg1()
+            && lhs.get_reg2() == rhs.get_reg2();
+    }
+
+    return false;
+#else
+    (void) lhs;
+    (void) rhs;
+    return false;
+#endif
+}
+
+[[nodiscard]] inline qstring describe_lvar_location(const lvar_t& var) {
+    qstring loc;
+
+#ifndef STRUCTOR_TESTING
+    if (var.is_reg_var()) {
+        if (get_mreg_name(&loc, var.get_reg1(), std::max(var.width, 1), nullptr) > 0 && !loc.empty()) {
+            return loc;
+        }
+    } else if (var.is_stk_var()) {
+        loc.sprnt("stack+0x%llX", static_cast<unsigned long long>(var.get_stkoff()));
+        return loc;
+    }
+
+    print_vdloc(&loc, var.location, std::max(var.width, 1));
+#else
+    loc = "<unknown>";
+    (void) var;
+#endif
+
+    return loc;
+}
+
+[[nodiscard]] inline std::string normalize_register_family(const qstring& reg_name) {
+    std::string normalized;
+    normalized.reserve(reg_name.length());
+    for (size_t i = 0; i < reg_name.length(); ++i) {
+        unsigned char ch = static_cast<unsigned char>(reg_name[i]);
+        if (std::isalnum(ch)) {
+            normalized.push_back(static_cast<char>(std::tolower(ch)));
+        }
+    }
+
+#ifndef STRUCTOR_TESTING
+    const bool is_64bit_db = inf_is_64bit();
+#else
+    const bool is_64bit_db = true;
+#endif
+
+    auto is_numbered_family = [](const std::string& s, char prefix) -> bool {
+        return s.size() >= 2
+            && s[0] == prefix
+            && std::all_of(s.begin() + 1, s.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
+    };
+
+    if (is_64bit_db) {
+        if (normalized == "rdi" || normalized == "edi" || normalized == "di" || normalized == "dil") return "rdi";
+        if (normalized == "rsi" || normalized == "esi" || normalized == "si" || normalized == "sil") return "rsi";
+        if (normalized == "rcx" || normalized == "ecx" || normalized == "cx" || normalized == "cl" || normalized == "ch") return "rcx";
+        if (normalized == "rdx" || normalized == "edx" || normalized == "dx" || normalized == "dl" || normalized == "dh") return "rdx";
+        if (normalized.rfind("r8", 0) == 0) return "r8";
+        if (normalized.rfind("r9", 0) == 0) return "r9";
+    } else {
+        if (normalized == "ecx" || normalized == "cx" || normalized == "cl" || normalized == "ch") return "ecx";
+        if (normalized == "edx" || normalized == "dx" || normalized == "dl" || normalized == "dh") return "edx";
+    }
+
+    if (normalized.rfind("xmm", 0) == 0) {
+        return normalized;
+    }
+
+    if (is_numbered_family(normalized, 'x') || is_numbered_family(normalized, 'r')) {
+        return normalized;
+    }
+
+    if (is_numbered_family(normalized, 'w')) {
+        return std::string("x") + normalized.substr(1);
+    }
+
+    if (is_numbered_family(normalized, 's')
+     || is_numbered_family(normalized, 'd')
+     || is_numbered_family(normalized, 'q')
+     || is_numbered_family(normalized, 'v')) {
+        return std::string("v") + normalized.substr(1);
+    }
+
+    return normalized;
+}
+
+[[nodiscard]] inline qvector<int> candidate_param_indices_for_register(const std::string& reg_family) {
+    qvector<int> indices;
+
+    auto push = [&indices](int idx) {
+        if (idx < 0) {
+            return;
+        }
+        if (std::find(indices.begin(), indices.end(), idx) == indices.end()) {
+            indices.push_back(idx);
+        }
+    };
+
+    if (reg_family == "rdi") {
+        push(0);
+    } else if (reg_family == "rsi") {
+        push(1);
+    } else if (reg_family == "rcx") {
+        push(0);
+        push(3);
+    } else if (reg_family == "rdx") {
+        push(1);
+        push(2);
+    } else if (reg_family == "r8") {
+        push(2);
+        push(4);
+    } else if (reg_family == "r9") {
+        push(3);
+        push(5);
+    } else if (reg_family == "ecx") {
+        push(0);
+    } else if (reg_family == "edx") {
+        push(1);
+    } else if (reg_family.rfind("xmm", 0) == 0) {
+        int idx = std::atoi(reg_family.c_str() + 3);
+        if (idx >= 0 && idx <= 7) {
+            push(idx);
+        }
+    } else if (reg_family.rfind('x', 0) == 0 || reg_family.rfind('v', 0) == 0) {
+        int idx = std::atoi(reg_family.c_str() + 1);
+        if (idx >= 0 && idx <= 7) {
+            push(idx);
+        }
+    } else if (reg_family.rfind('r', 0) == 0) {
+        int idx = std::atoi(reg_family.c_str() + 1);
+        if (idx >= 0 && idx <= 3) {
+            push(idx);
+        }
+    }
+
+    return indices;
+}
+
+[[nodiscard]] inline bool is_var_assigned_in_function(cfunc_t* cfunc, int var_idx) {
+#ifndef STRUCTOR_TESTING
+    if (!cfunc || var_idx < 0) {
+        return false;
+    }
+
+    struct AssignmentFinder : public ctree_visitor_t {
+        int target_var_idx;
+        bool assigned = false;
+
+        explicit AssignmentFinder(int target)
+            : ctree_visitor_t(CV_FAST)
+            , target_var_idx(target) {}
+
+        static cexpr_t* peel(cexpr_t* expr) {
+            while (expr != nullptr && (expr->op == cot_cast || expr->op == cot_ref)) {
+                expr = expr->x;
+            }
+            return expr;
+        }
+
+        bool is_target(cexpr_t* expr) const {
+            expr = peel(expr);
+            return expr != nullptr && expr->op == cot_var && expr->v.idx == target_var_idx;
+        }
+
+        int idaapi visit_expr(cexpr_t* expr) override {
+            if (expr == nullptr || assigned) {
+                return 0;
+            }
+
+            switch (expr->op) {
+                case cot_asg:
+                case cot_asgbor:
+                case cot_asgxor:
+                case cot_asgband:
+                case cot_asgadd:
+                case cot_asgsub:
+                case cot_asgmul:
+                case cot_asgsshr:
+                case cot_asgushr:
+                case cot_asgshl:
+                case cot_asgsdiv:
+                case cot_asgudiv:
+                case cot_asgsmod:
+                case cot_asgumod:
+                    if (is_target(expr->x)) {
+                        assigned = true;
+                        return 1;
+                    }
+                    break;
+                case cot_postinc:
+                case cot_postdec:
+                case cot_preinc:
+                case cot_predec:
+                    if (is_target(expr->x)) {
+                        assigned = true;
+                        return 1;
+                    }
+                    break;
+                default:
+                    break;
+            }
+
+            return 0;
+        }
+    };
+
+    AssignmentFinder finder(var_idx);
+    finder.apply_to(&cfunc->body, nullptr);
+    return finder.assigned;
+#else
+    (void) cfunc;
+    (void) var_idx;
+    return false;
+#endif
+}
+
+} // namespace detail
+
 // ============================================================================
 // Type Fixer Class
 // ============================================================================
@@ -479,6 +762,15 @@ private:
     
     /// Infer type for a variable by analyzing access patterns
     [[nodiscard]] tinfo_t infer_variable_type(cfunc_t* cfunc, int var_idx, TypeConfidence& out_confidence);
+
+    /// Directly infer a variable type from its own usage only
+    [[nodiscard]] tinfo_t infer_variable_type_direct(cfunc_t* cfunc, int var_idx, TypeConfidence& out_confidence);
+
+    /// Recover type for overlapped locals by borrowing from exact-storage peers
+    [[nodiscard]] tinfo_t infer_overlapped_variable_type(cfunc_t* cfunc, int var_idx, TypeConfidence& out_confidence);
+
+    /// Report likely missing register-backed arguments that callers already treat as parameters
+    [[nodiscard]] qvector<qstring> collect_missing_argument_warnings(cfunc_t* cfunc);
     
     /// Check if variable should be analyzed based on config
     [[nodiscard]] bool should_analyze(cfunc_t* cfunc, int var_idx);
@@ -639,6 +931,11 @@ inline TypeFixResult TypeFixer::fix_function_types(cfunc_t* cfunc) {
         
         result.variable_fixes.push_back(std::move(fix));
     }
+
+    qvector<qstring> missing_arg_warnings = collect_missing_argument_warnings(cfunc);
+    for (auto& warning : missing_arg_warnings) {
+        result.warnings.push_back(std::move(warning));
+    }
     
     return result;
 }
@@ -672,6 +969,33 @@ inline TypeComparisonResult TypeFixer::analyze_variable(
 }
 
 inline tinfo_t TypeFixer::infer_variable_type(cfunc_t* cfunc, int var_idx, TypeConfidence& out_confidence) {
+    tinfo_t direct = infer_variable_type_direct(cfunc, var_idx, out_confidence);
+
+#ifndef STRUCTOR_TESTING
+    TypeConfidence overlap_confidence = TypeConfidence::Low;
+    tinfo_t overlap = infer_overlapped_variable_type(cfunc, var_idx, overlap_confidence);
+
+    if (overlap.empty()) {
+        return direct;
+    }
+
+    if (direct.empty() || is_default_type(direct)) {
+        out_confidence = overlap_confidence;
+        return overlap;
+    }
+
+    if (!is_default_type(overlap)
+     && overlap_confidence >= out_confidence
+     && type_priority_score(overlap) > type_priority_score(direct)) {
+        out_confidence = overlap_confidence;
+        return overlap;
+    }
+#endif
+
+    return direct;
+}
+
+inline tinfo_t TypeFixer::infer_variable_type_direct(cfunc_t* cfunc, int var_idx, TypeConfidence& out_confidence) {
     tinfo_t result;
     out_confidence = TypeConfidence::Low;
     
@@ -692,7 +1016,6 @@ inline tinfo_t TypeFixer::infer_variable_type(cfunc_t* cfunc, int var_idx, TypeC
     bool has_pointer_access = false;
     bool has_struct_access = false;
     bool has_vtable_access = false;
-    bool has_funcptr_access = false;
     
     tinfo_t best_type;
     int best_priority = 0;
@@ -704,11 +1027,6 @@ inline tinfo_t TypeFixer::infer_variable_type(cfunc_t* cfunc, int var_idx, TypeC
         }
         
         // Check for function pointer access
-        if (access.semantic_type == SemanticType::FunctionPointer ||
-            access.access_type == AccessType::Call) {
-            has_funcptr_access = true;
-        }
-        
         // Check for pointer dereferences (indicates this is a pointer)
         if (access.offset >= 0) {
             has_pointer_access = true;
@@ -756,6 +1074,299 @@ inline tinfo_t TypeFixer::infer_variable_type(cfunc_t* cfunc, int var_idx, TypeC
     }
     
     return result;
+}
+
+inline tinfo_t TypeFixer::infer_overlapped_variable_type(cfunc_t* cfunc, int var_idx, TypeConfidence& out_confidence) {
+    tinfo_t best_type;
+    out_confidence = TypeConfidence::Low;
+
+#ifndef STRUCTOR_TESTING
+    if (!cfunc) {
+        return best_type;
+    }
+
+    lvars_t* lvars = cfunc->get_lvars();
+    if (!lvars || var_idx < 0 || static_cast<size_t>(var_idx) >= lvars->size()) {
+        return best_type;
+    }
+
+    const lvar_t& target = lvars->at(static_cast<size_t>(var_idx));
+    int best_score = -1;
+
+    for (size_t i = 0; i < lvars->size(); ++i) {
+        if (static_cast<int>(i) == var_idx) {
+            continue;
+        }
+
+        const lvar_t& other = lvars->at(i);
+        if (!target.has_common(other)) {
+            continue;
+        }
+        if (!detail::lvars_share_exact_storage(target, other)) {
+            continue;
+        }
+
+        tinfo_t candidate_type;
+        TypeConfidence candidate_confidence = TypeConfidence::Low;
+
+        if (!other.type().empty()
+         && !is_default_type(other.type())
+         && detail::type_matches_lvar_width(other.type(), target)) {
+            candidate_type = other.type();
+            candidate_confidence = other.has_user_type() ? TypeConfidence::High
+                                                         : TypeConfidence::Medium;
+        }
+
+        TypeConfidence inferred_confidence = TypeConfidence::Low;
+        tinfo_t inferred_type = infer_variable_type_direct(cfunc, static_cast<int>(i), inferred_confidence);
+        if (!inferred_type.empty()
+         && !is_default_type(inferred_type)
+         && detail::type_matches_lvar_width(inferred_type, target)
+         && (candidate_type.empty()
+          || inferred_confidence > candidate_confidence
+          || type_priority_score(inferred_type) > type_priority_score(candidate_type))) {
+            candidate_type = inferred_type;
+            candidate_confidence = inferred_confidence;
+        }
+
+        if (candidate_type.empty()) {
+            continue;
+        }
+
+        int score = static_cast<int>(candidate_confidence) * 100
+                  + type_priority_score(candidate_type)
+                  + (other.has_user_type() ? 25 : 0);
+        if (score > best_score) {
+            best_score = score;
+            best_type = candidate_type;
+            out_confidence = candidate_confidence;
+        }
+    }
+#else
+    (void) cfunc;
+    (void) var_idx;
+#endif
+
+    return best_type;
+}
+
+inline qvector<qstring> TypeFixer::collect_missing_argument_warnings(cfunc_t* cfunc) {
+    qvector<qstring> warnings;
+
+#ifndef STRUCTOR_TESTING
+    if (!cfunc) {
+        return warnings;
+    }
+
+    lvars_t* lvars = cfunc->get_lvars();
+    if (!lvars) {
+        return warnings;
+    }
+
+    qstring func_name;
+    get_func_name(&func_name, cfunc->entry_ea);
+
+    struct CallerTypeSummary {
+        tinfo_t type;
+        TypeConfidence confidence = TypeConfidence::Low;
+        int support = 0;
+        int typed_callers = 0;
+        int conflicts = 0;
+    };
+
+    std::unordered_map<ea_t, cfuncptr_t> cfunc_cache;
+    std::unordered_map<uint64_t, std::pair<tinfo_t, TypeConfidence>> type_cache;
+
+    auto get_cached_cfunc = [&cfunc_cache](ea_t func_ea) -> cfuncptr_t {
+        auto it = cfunc_cache.find(func_ea);
+        if (it != cfunc_cache.end()) {
+            return it->second;
+        }
+
+        cfuncptr_t decompiled = utils::get_cfunc(func_ea);
+        cfunc_cache.emplace(func_ea, decompiled);
+        return decompiled;
+    };
+
+    auto get_cached_direct_type = [this, &type_cache](cfunc_t* owner, int owner_var_idx) {
+        TypeConfidence confidence = TypeConfidence::Low;
+        if (!owner) {
+            return std::make_pair(tinfo_t(), confidence);
+        }
+
+        uint64_t key = (static_cast<uint64_t>(owner->entry_ea) << 32)
+                     | static_cast<uint32_t>(owner_var_idx);
+        auto it = type_cache.find(key);
+        if (it != type_cache.end()) {
+            return it->second;
+        }
+
+        tinfo_t inferred = infer_variable_type_direct(owner, owner_var_idx, confidence);
+        auto inserted = type_cache.emplace(key, std::make_pair(inferred, confidence));
+        return inserted.first->second;
+    };
+
+    CrossFunctionAnalyzer analyzer;
+
+    for (size_t i = 0; i < lvars->size(); ++i) {
+        const lvar_t& var = lvars->at(i);
+        if (var.is_arg_var() || !var.is_reg_var()) {
+            continue;
+        }
+        if (var.is_result_var() || var.is_fake_var() || var.is_spoiled_var() || var.has_regname()) {
+            continue;
+        }
+        if (var.is_dummy_arg() || var.is_notarg()) {
+            continue;
+        }
+        if (detail::is_var_assigned_in_function(cfunc, static_cast<int>(i))) {
+            continue;
+        }
+
+        qstring reg_display = detail::describe_lvar_location(var);
+        std::string reg_family = detail::normalize_register_family(reg_display);
+        qvector<int> candidate_param_indices = detail::candidate_param_indices_for_register(reg_family);
+        if (candidate_param_indices.empty()) {
+            continue;
+        }
+
+        TypeConfidence local_confidence = TypeConfidence::Low;
+        tinfo_t local_type = infer_variable_type_direct(cfunc, static_cast<int>(i), local_confidence);
+        if (!local_type.empty() && is_default_type(local_type)) {
+            local_type.clear();
+            local_confidence = TypeConfidence::Low;
+        }
+
+        int best_param_idx = -1;
+        int best_score = 0;
+        CallerTypeSummary best_summary;
+
+        for (int param_idx : candidate_param_indices) {
+            auto callers = analyzer.find_callers_with_param(cfunc->entry_ea, param_idx);
+            if (callers.empty()) {
+                continue;
+            }
+
+            CallerTypeSummary summary;
+
+            for (const auto& caller : callers) {
+                if (caller.caller_ea == BADADDR || caller.var_idx < 0) {
+                    continue;
+                }
+
+                cfuncptr_t caller_cfunc = get_cached_cfunc(caller.caller_ea);
+                if (!caller_cfunc) {
+                    continue;
+                }
+
+                lvars_t* caller_lvars = caller_cfunc->get_lvars();
+                if (!caller_lvars || static_cast<size_t>(caller.var_idx) >= caller_lvars->size()) {
+                    continue;
+                }
+
+                const lvar_t& caller_var = caller_lvars->at(static_cast<size_t>(caller.var_idx));
+                tinfo_t candidate_type = caller_var.type();
+                TypeConfidence candidate_confidence = caller_var.has_user_type()
+                    ? TypeConfidence::High
+                    : TypeConfidence::Medium;
+
+                if (candidate_type.empty() || is_default_type(candidate_type)) {
+                    auto inferred = get_cached_direct_type(caller_cfunc, caller.var_idx);
+                    candidate_type = inferred.first;
+                    candidate_confidence = inferred.second;
+                }
+
+                if (candidate_type.empty() || is_default_type(candidate_type)) {
+                    continue;
+                }
+
+                if (caller.by_ref && !candidate_type.is_ptr() && !candidate_type.is_funcptr()) {
+                    tinfo_t ptr_type;
+                    ptr_type.create_ptr(candidate_type);
+                    candidate_type = ptr_type;
+                    candidate_confidence = std::max(candidate_confidence, TypeConfidence::Medium);
+                }
+
+                if (!detail::type_matches_lvar_width(candidate_type, var)) {
+                    continue;
+                }
+
+                if (summary.type.empty()) {
+                    summary.type = candidate_type;
+                    summary.confidence = candidate_confidence;
+                    summary.support = 1;
+                    summary.typed_callers = 1;
+                    continue;
+                }
+
+                if (detail::types_are_compatible_for_recovery(summary.type, candidate_type)) {
+                    summary.type = resolve_type_conflict(summary.type, candidate_type);
+                    summary.confidence = std::max(summary.confidence, candidate_confidence);
+                    ++summary.support;
+                    ++summary.typed_callers;
+                } else {
+                    ++summary.conflicts;
+                }
+            }
+
+            if (summary.type.empty()) {
+                continue;
+            }
+
+            if (!local_type.empty()) {
+                if (detail::types_are_compatible_for_recovery(summary.type, local_type)) {
+                    summary.type = resolve_type_conflict(summary.type, local_type);
+                    summary.confidence = std::max(summary.confidence, local_confidence);
+                } else {
+                    ++summary.conflicts;
+                }
+            }
+
+            int score = summary.support * 100
+                      + summary.typed_callers * 40
+                      + static_cast<int>(summary.confidence) * 20
+                      - summary.conflicts * 60;
+            if (!local_type.empty()) {
+                score += 20;
+            }
+
+            if (score > best_score) {
+                best_score = score;
+                best_param_idx = param_idx;
+                best_summary = summary;
+            }
+        }
+
+        if (best_param_idx < 0 || best_summary.type.empty()) {
+            continue;
+        }
+
+        qstring type_str;
+        best_summary.type.print(&type_str);
+
+        qstring warning;
+        warning.sprnt(
+            "possible missing argument in %s: %s (%s) looks like parameter #%d with type %s from %d caller%s",
+            func_name.c_str(),
+            var.name.c_str(),
+            reg_display.c_str(),
+            best_param_idx + 1,
+            type_str.c_str(),
+            best_summary.support,
+            best_summary.support == 1 ? "" : "s");
+        if (best_summary.conflicts > 0) {
+            warning.cat_sprnt(
+                " (%d conflicting caller inference%s)",
+                best_summary.conflicts,
+                best_summary.conflicts == 1 ? "" : "s");
+        }
+        warnings.push_back(std::move(warning));
+    }
+#else
+    (void) cfunc;
+#endif
+
+    return warnings;
 }
 
 inline bool TypeFixer::apply_fix(

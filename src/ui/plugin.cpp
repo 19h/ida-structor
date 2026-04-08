@@ -98,6 +98,10 @@ static error_t idaapi idc_structor_fix_function_types(idc_value_t* argv, idc_val
 
     TypeFixResult result = StructorAPI::instance().fix_function_types(func_ea);
 
+    for (const auto& warning : result.warnings) {
+        msg("Structor: %s\n", warning.c_str());
+    }
+
     // Store results for helper functions
     g_last_error = result.errors.empty() ? qstring() : result.errors[0];
     g_last_fix_count = result.analyzed;
@@ -439,6 +443,10 @@ void StructorPlugin::on_decompilation_complete(cfunc_t* cfunc) {
             result.analyzed,
             result.differences_found,
             result.fixes_applied);
+    }
+
+    for (const auto& warning : result.warnings) {
+        msg("Structor: %s\n", warning.c_str());
     }
     
     if (verbose && result.fixes_applied > 0) {

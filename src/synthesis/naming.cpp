@@ -1011,7 +1011,7 @@ qstring generate_field_name(sval_t offset, SemanticType semantic, std::uint32_t 
             case 2:  prefix = "u16"; break;
             case 4:  prefix = "u32"; break;
             case 8:  prefix = "u64"; break;
-            default: prefix = size > 0 ? "bytes" : "field"; break;
+            default: prefix = size > 0 ? "bytes" : "u32"; break;
         }
     }
 
