@@ -91,6 +91,63 @@ static error_t idaapi idc_structor_get_vtable_tid(idc_value_t* /*argv*/, idc_val
 static thread_local int g_last_fix_count = 0;
 static thread_local int g_last_fix_applied = 0;
 static thread_local int g_last_fix_skipped = 0;
+static thread_local qvector<qstring> g_last_fix_warnings;
+static thread_local qvector<qstring> g_last_fix_diagnostics;
+
+static void print_type_fix_messages(const TypeFixResult& result, bool include_diagnostics) {
+    for (const auto& warning : result.warnings) {
+        msg("Structor: %s\n", warning.c_str());
+    }
+
+    if (!include_diagnostics) {
+        return;
+    }
+
+    for (const auto& diagnostic : result.diagnostics) {
+        msg("Structor: diagnostic: %s\n", diagnostic.c_str());
+    }
+}
+
+static void store_last_type_fix_result(const TypeFixResult& result, int applied_value, int skipped_value) {
+    g_last_error = result.errors.empty() ? qstring() : result.errors[0];
+    g_last_fix_count = result.analyzed;
+    g_last_fix_applied = applied_value;
+    g_last_fix_skipped = skipped_value;
+    g_last_fix_warnings = result.warnings;
+    g_last_fix_diagnostics = result.diagnostics;
+}
+
+static error_t idaapi idc_structor_get_fix_warning_count(idc_value_t* /*argv*/, idc_value_t* res) {
+    res->set_long(static_cast<long>(g_last_fix_warnings.size()));
+    return eOk;
+}
+
+static error_t idaapi idc_structor_get_fix_warning(idc_value_t* argv, idc_value_t* res) {
+    int idx = static_cast<int>(argv[0].num);
+    if (idx < 0 || static_cast<size_t>(idx) >= g_last_fix_warnings.size()) {
+        res->set_string(qstring());
+        return eOk;
+    }
+
+    res->set_string(g_last_fix_warnings[static_cast<size_t>(idx)]);
+    return eOk;
+}
+
+static error_t idaapi idc_structor_get_fix_diagnostic_count(idc_value_t* /*argv*/, idc_value_t* res) {
+    res->set_long(static_cast<long>(g_last_fix_diagnostics.size()));
+    return eOk;
+}
+
+static error_t idaapi idc_structor_get_fix_diagnostic(idc_value_t* argv, idc_value_t* res) {
+    int idx = static_cast<int>(argv[0].num);
+    if (idx < 0 || static_cast<size_t>(idx) >= g_last_fix_diagnostics.size()) {
+        res->set_string(qstring());
+        return eOk;
+    }
+
+    res->set_string(g_last_fix_diagnostics[static_cast<size_t>(idx)]);
+    return eOk;
+}
 
 // IDC function: structor_fix_function_types(func_ea) -> long (number of fixes applied)
 static error_t idaapi idc_structor_fix_function_types(idc_value_t* argv, idc_value_t* res) {
@@ -98,15 +155,9 @@ static error_t idaapi idc_structor_fix_function_types(idc_value_t* argv, idc_val
 
     TypeFixResult result = StructorAPI::instance().fix_function_types(func_ea);
 
-    for (const auto& warning : result.warnings) {
-        msg("Structor: %s\n", warning.c_str());
-    }
+    print_type_fix_messages(result, true);
 
-    // Store results for helper functions
-    g_last_error = result.errors.empty() ? qstring() : result.errors[0];
-    g_last_fix_count = result.analyzed;
-    g_last_fix_applied = result.fixes_applied;
-    g_last_fix_skipped = result.fixes_skipped;
+    store_last_type_fix_result(result, result.fixes_applied, result.fixes_skipped);
 
     res->set_long(result.fixes_applied);
     return eOk;
@@ -142,14 +193,9 @@ static error_t idaapi idc_structor_analyze_function_types(idc_value_t* argv, idc
 
     TypeFixResult result = StructorAPI::instance().analyze_function_types(func_ea);
 
-    for (const auto& warning : result.warnings) {
-        msg("Structor: %s\n", warning.c_str());
-    }
+    print_type_fix_messages(result, true);
 
-    g_last_error = result.errors.empty() ? qstring() : result.errors[0];
-    g_last_fix_count = result.analyzed;
-    g_last_fix_applied = result.differences_found;
-    g_last_fix_skipped = 0;
+    store_last_type_fix_result(result, result.differences_found, 0);
 
     res->set_long(result.differences_found);
     return eOk;
@@ -178,6 +224,7 @@ static const char args_synthesize[] = { VT_INT64, VT_LONG, 0 };
 static const char args_synthesize_by_name[] = { VT_INT64, VT_STR, 0 };
 static const char args_no_args[] = { 0 };
 static const char args_func_ea[] = { VT_INT64, 0 };
+static const char args_index[] = { VT_LONG, 0 };
 
 static const ext_idcfunc_t idc_funcs[] = {
     { "structor_synthesize", idc_structor_synthesize, args_synthesize, nullptr, 0, EXTFUN_BASE },
@@ -193,6 +240,10 @@ static const ext_idcfunc_t idc_funcs[] = {
     { "structor_get_fix_count", idc_structor_get_fix_count, args_no_args, nullptr, 0, EXTFUN_BASE },
     { "structor_get_fixes_applied", idc_structor_get_fixes_applied, args_no_args, nullptr, 0, EXTFUN_BASE },
     { "structor_get_fixes_skipped", idc_structor_get_fixes_skipped, args_no_args, nullptr, 0, EXTFUN_BASE },
+    { "structor_get_fix_warning_count", idc_structor_get_fix_warning_count, args_no_args, nullptr, 0, EXTFUN_BASE },
+    { "structor_get_fix_warning", idc_structor_get_fix_warning, args_index, nullptr, 0, EXTFUN_BASE },
+    { "structor_get_fix_diagnostic_count", idc_structor_get_fix_diagnostic_count, args_no_args, nullptr, 0, EXTFUN_BASE },
+    { "structor_get_fix_diagnostic", idc_structor_get_fix_diagnostic, args_index, nullptr, 0, EXTFUN_BASE },
 };
 
 static void register_idc_funcs() {
@@ -449,9 +500,7 @@ void StructorPlugin::on_decompilation_complete(cfunc_t* cfunc) {
             result.fixes_applied);
     }
 
-    for (const auto& warning : result.warnings) {
-        msg("Structor: %s\n", warning.c_str());
-    }
+    print_type_fix_messages(result, debug);
     
     if (verbose && result.fixes_applied > 0) {
         msg("Structor: Auto-fixed %u types in %s\n",

@@ -233,6 +233,7 @@ struct TypeFixResult {
     /// Errors encountered
     qvector<qstring> errors;
     qvector<qstring> warnings;
+    qvector<qstring> diagnostics;
     
     /// Overall success
     [[nodiscard]] bool success() const noexcept {
@@ -970,6 +971,7 @@ public:
 
 private:
     TypeFixerConfig config_;
+    qvector<qstring> diagnostics_;
     
     /// Infer type for a variable by analyzing access patterns
     [[nodiscard]] tinfo_t infer_variable_type(cfunc_t* cfunc, int var_idx, TypeConfidence& out_confidence);
@@ -1025,6 +1027,7 @@ inline TypeFixResult TypeFixer::fix_function_types(ea_t func_ea) {
 
 inline TypeFixResult TypeFixer::fix_function_types(cfunc_t* cfunc) {
     TypeFixResult result;
+    diagnostics_.clear();
     
     if (!cfunc) {
         result.errors.push_back(qstring("Null cfunc pointer"));
@@ -1147,6 +1150,11 @@ inline TypeFixResult TypeFixer::fix_function_types(cfunc_t* cfunc) {
     for (auto& warning : missing_arg_warnings) {
         result.warnings.push_back(std::move(warning));
     }
+
+    for (auto& diagnostic : diagnostics_) {
+        result.diagnostics.push_back(std::move(diagnostic));
+    }
+    diagnostics_.clear();
     
     return result;
 }
@@ -1356,7 +1364,7 @@ inline tinfo_t TypeFixer::infer_overlapped_variable_type(cfunc_t* cfunc, int var
         }
     }
 
-    if (!best_type.empty() && best_source_idx >= 0 && Config::instance().options().debug_mode) {
+    if (!best_type.empty() && best_source_idx >= 0) {
         const lvar_t& source = lvars->at(static_cast<size_t>(best_source_idx));
         qstring func_name;
         get_func_name(&func_name, cfunc->entry_ea);
@@ -1367,16 +1375,32 @@ inline tinfo_t TypeFixer::infer_overlapped_variable_type(cfunc_t* cfunc, int var
         qstring target_loc = detail::describe_lvar_location(target);
         qstring source_loc = detail::describe_lvar_location(source);
 
-        msg(
-            "Structor: overlap recovery in %s selected %s for var #%d (%s @ %s) from var #%d (%s @ %s)\n",
+        qstring target_name = target.name;
+        if (target_name.empty()) {
+            target_name.sprnt("var#%d", var_idx);
+        }
+
+        qstring source_name = source.name;
+        if (source_name.empty()) {
+            source_name.sprnt("var#%d", best_source_idx);
+        }
+
+        qstring diagnostic;
+        diagnostic.sprnt(
+            "overlap recovery in %s selected %s for var #%d (%s @ %s) from var #%d (%s @ %s)",
             func_name.c_str(),
             type_str.c_str(),
             var_idx,
-            target.name.c_str(),
+            target_name.c_str(),
             target_loc.c_str(),
             best_source_idx,
-            source.name.c_str(),
+            source_name.c_str(),
             source_loc.c_str());
+        diagnostics_.push_back(diagnostic);
+
+        if (Config::instance().options().debug_mode) {
+            msg("Structor: diagnostic: %s\n", diagnostic.c_str());
+        }
     }
 #else
     (void) cfunc;

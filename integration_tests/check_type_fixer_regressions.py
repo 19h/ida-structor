@@ -127,109 +127,108 @@ def write_structor_config(
     config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def run_idump(
+    repo_root: Path,
+    plugin_path: Path,
+    idump_path: str,
+    binary: Path,
+    function_name: str,
+    *,
+    debug_mode: bool = False,
+    auto_fix_verbose: bool = False,
+) -> dict:
+    real_home = Path.home()
+    sandbox_home = prepare_plugin_home(plugin_path, real_home)
+    write_structor_config(
+        sandbox_home, debug_mode=debug_mode, auto_fix_verbose=auto_fix_verbose
+    )
+
+    try:
+        env = os.environ.copy()
+        env["HOME"] = str(sandbox_home)
+        proc = run(
+            [
+                idump_path,
+                "--plugin",
+                "structor",
+                "--pseudo-only",
+                "-f",
+                function_name,
+                str(binary),
+            ],
+            cwd=repo_root,
+            env=env,
+        )
+        require_success(proc, f"running idump for {function_name}")
+        return {"output": strip_ansi((proc.stdout or "") + (proc.stderr or ""))}
+    finally:
+        shutil.rmtree(sandbox_home, ignore_errors=True)
+
+
 def run_missing_regarg_regression(
     repo_root: Path, plugin_path: Path, idump_path: str
 ) -> None:
     binary = build_missing_regarg_fixture(repo_root)
-    real_home = Path.home()
-    sandbox_home = prepare_plugin_home(plugin_path, real_home)
-    write_structor_config(sandbox_home)
+    run = run_idump(
+        repo_root,
+        plugin_path,
+        idump_path,
+        binary,
+        "regarg_callee",
+    )
+    output = run["output"]
 
-    try:
-        env = os.environ.copy()
-        env["HOME"] = str(sandbox_home)
-
-        proc = run(
-            [
-                idump_path,
-                "--plugin",
-                "structor",
-                "--pseudo-only",
-                "-f",
-                "regarg_callee",
-                str(binary),
-            ],
-            cwd=repo_root,
-            env=env,
+    required_substrings = [
+        "Structor: possible missing argument in _regarg_callee",
+        "v0 (w19)",
+        "is populated by 1 caller before the call",
+        "inferred type",
+        "variable 'v0' is possibly undefined",
+        "// w19",
+    ]
+    missing = [needle for needle in required_substrings if needle not in output]
+    if missing:
+        raise RuntimeError(
+            "missing expected output from missing-regarg regression: "
+            + ", ".join(missing)
+            + "\n"
+            + output
         )
-        require_success(proc, "running idump missing-regarg regression")
-
-        output = strip_ansi((proc.stdout or "") + (proc.stderr or ""))
-        required_substrings = [
-            "Structor: possible missing argument in",
-            "v0 (w19)",
-            "is populated by 1 caller before the call",
-            "inferred type",
-            "variable 'v0' is possibly undefined",
-            "// w19",
-        ]
-        missing = [needle for needle in required_substrings if needle not in output]
-        if missing:
-            raise RuntimeError(
-                "missing expected output from type-fixer regression: "
-                + ", ".join(missing)
-                + "\n"
-                + output
-            )
-    finally:
-        shutil.rmtree(sandbox_home, ignore_errors=True)
 
 
 def run_overlap_regression(repo_root: Path, plugin_path: Path, idump_path: str) -> None:
     binary = build_overlap_scope_fixture(repo_root)
-    real_home = Path.home()
-    sandbox_home = prepare_plugin_home(plugin_path, real_home)
-    write_structor_config(sandbox_home, debug_mode=True, auto_fix_verbose=True)
+    run = run_idump(
+        repo_root,
+        plugin_path,
+        idump_path,
+        binary,
+        "overlap_scope",
+        debug_mode=True,
+        auto_fix_verbose=True,
+    )
+    output = run["output"]
 
-    try:
-        env = os.environ.copy()
-        env["HOME"] = str(sandbox_home)
-
-        proc = run(
-            [
-                idump_path,
-                "--plugin",
-                "structor",
-                "--pseudo-only",
-                "-f",
-                "overlap_scope",
-                str(binary),
-            ],
-            cwd=repo_root,
-            env=env,
+    required_substrings = [
+        "Structor: diagnostic: overlap recovery in overlap_scope selected Pair *",
+        "from var #0 (p @ x0)",
+        "var #4 (var#4 @ x0)",
+        "Structor: Auto-fixed 1 types in overlap_scope",
+        "integer -> Pair *",
+        "Pair *slot;",
+        "slot->left",
+    ]
+    missing = [needle for needle in required_substrings if needle not in output]
+    if missing:
+        raise RuntimeError(
+            "missing expected output from overlap regression: "
+            + ", ".join(missing)
+            + "\n"
+            + output
         )
-        require_success(proc, "running idump overlap regression")
 
-        output = strip_ansi((proc.stdout or "") + (proc.stderr or ""))
-        required_substrings = [
-            "Structor: overlap recovery in overlap_scope selected Pair *",
-            "from var #0 (p @ x0)",
-            "Structor: overlap_scope - analyzed",
-            "Structor: Auto-fixed 1 types in overlap_scope",
-            "integer -> Pair *",
-        ]
-        missing = [needle for needle in required_substrings if needle not in output]
-        if missing:
-            raise RuntimeError(
-                "missing expected output from overlap regression: "
-                + ", ".join(missing)
-                + "\n"
-                + output
-            )
-
-        forbidden_substrings = [
-            "possible missing argument in overlap_scope",
-        ]
-        present = [needle for needle in forbidden_substrings if needle in output]
-        if present:
-            raise RuntimeError(
-                "unexpected output from overlap regression: "
-                + ", ".join(present)
-                + "\n"
-                + output
-            )
-    finally:
-        shutil.rmtree(sandbox_home, ignore_errors=True)
+    if "possible missing argument in overlap_scope" in output:
+        raise RuntimeError("unexpected missing-argument warning for overlap_scope")
 
 
 def main() -> int:
