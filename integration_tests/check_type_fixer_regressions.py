@@ -61,6 +61,24 @@ def build_missing_regarg_fixture(repo_root: Path) -> Path:
     return binary
 
 
+def build_overlap_scope_fixture(repo_root: Path) -> Path:
+    proc = run(
+        [
+            "sh",
+            str(repo_root / "integration_tests" / "build_fixtures.sh"),
+            "test_overlap_scope",
+        ],
+        cwd=repo_root,
+    )
+    require_success(proc, "building test_overlap_scope")
+
+    binary = repo_root / "integration_tests" / "test_overlap_scope"
+    if not binary.exists():
+        raise RuntimeError(f"expected fixture binary was not created: {binary}")
+
+    return binary
+
+
 def link_license_files(real_home: Path, sandbox_home: Path) -> None:
     real_idapro = real_home / ".idapro"
     sandbox_idapro = sandbox_home / ".idapro"
@@ -97,12 +115,25 @@ def prepare_plugin_home(plugin_path: Path, real_home: Path) -> Path:
     return sandbox_home
 
 
+def write_structor_config(
+    sandbox_home: Path, *, debug_mode: bool = False, auto_fix_verbose: bool = False
+) -> None:
+    config_path = sandbox_home / ".idapro" / "structor.cfg"
+    lines = [
+        f"debug_mode={'true' if debug_mode else 'false'}",
+        "auto_fix_types=true",
+        f"auto_fix_verbose={'true' if auto_fix_verbose else 'false'}",
+    ]
+    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def run_missing_regarg_regression(
     repo_root: Path, plugin_path: Path, idump_path: str
 ) -> None:
     binary = build_missing_regarg_fixture(repo_root)
     real_home = Path.home()
     sandbox_home = prepare_plugin_home(plugin_path, real_home)
+    write_structor_config(sandbox_home)
 
     try:
         env = os.environ.copy()
@@ -144,6 +175,63 @@ def run_missing_regarg_regression(
         shutil.rmtree(sandbox_home, ignore_errors=True)
 
 
+def run_overlap_regression(repo_root: Path, plugin_path: Path, idump_path: str) -> None:
+    binary = build_overlap_scope_fixture(repo_root)
+    real_home = Path.home()
+    sandbox_home = prepare_plugin_home(plugin_path, real_home)
+    write_structor_config(sandbox_home, debug_mode=True, auto_fix_verbose=True)
+
+    try:
+        env = os.environ.copy()
+        env["HOME"] = str(sandbox_home)
+
+        proc = run(
+            [
+                idump_path,
+                "--plugin",
+                "structor",
+                "--pseudo-only",
+                "-f",
+                "overlap_scope",
+                str(binary),
+            ],
+            cwd=repo_root,
+            env=env,
+        )
+        require_success(proc, "running idump overlap regression")
+
+        output = strip_ansi((proc.stdout or "") + (proc.stderr or ""))
+        required_substrings = [
+            "Structor: overlap recovery in overlap_scope selected Pair *",
+            "from var #0 (p @ x0)",
+            "Structor: overlap_scope - analyzed",
+            "Structor: Auto-fixed 1 types in overlap_scope",
+            "integer -> Pair *",
+        ]
+        missing = [needle for needle in required_substrings if needle not in output]
+        if missing:
+            raise RuntimeError(
+                "missing expected output from overlap regression: "
+                + ", ".join(missing)
+                + "\n"
+                + output
+            )
+
+        forbidden_substrings = [
+            "possible missing argument in overlap_scope",
+        ]
+        present = [needle for needle in forbidden_substrings if needle in output]
+        if present:
+            raise RuntimeError(
+                "unexpected output from overlap regression: "
+                + ", ".join(present)
+                + "\n"
+                + output
+            )
+    finally:
+        shutil.rmtree(sandbox_home, ignore_errors=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run live type-fixer regressions with idump"
@@ -159,7 +247,9 @@ def main() -> int:
         raise RuntimeError(f"plugin not found: {plugin_path}")
 
     run_missing_regarg_regression(repo_root, plugin_path, args.idump)
+    run_overlap_regression(repo_root, plugin_path, args.idump)
     print("[PASS] missing register argument regression")
+    print("[PASS] overlap recovery regression")
     return 0
 
 

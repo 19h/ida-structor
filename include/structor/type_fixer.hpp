@@ -665,6 +665,13 @@ struct RegisterHandoffSummary {
     return type;
 }
 
+[[nodiscard]] inline bool is_likely_return_register_family(const std::string& reg_family) {
+    return reg_family == "rax"
+        || reg_family == "x0"
+        || reg_family == "v0"
+        || reg_family == "xmm0";
+}
+
 [[nodiscard]] inline std::string operand_reg_family(const op_t& op, int fallback_width = 0) {
 #ifndef STRUCTOR_TESTING
     if (op.type != o_reg) {
@@ -733,6 +740,7 @@ struct RegisterHandoffSummary {
 
         ea_t scan_ea = call_ea;
         bool found_write = false;
+        bool rejected_write = false;
 
         for (int step = 0; step < 12; ++step) {
             insn_t insn;
@@ -759,6 +767,27 @@ struct RegisterHandoffSummary {
             }
 
             found_write = true;
+
+            if ((feature & CF_USE2) != 0 && insn.Op2.type == o_reg) {
+                int src_width = static_cast<int>(get_dtype_size(insn.Op2.dtype));
+                if (src_width <= 0) {
+                    src_width = callee_var.width;
+                }
+
+                std::string src_family = operand_reg_family(insn.Op2, src_width);
+                if (is_likely_return_register_family(src_family)) {
+                    insn_t prev_write_insn;
+                    ea_t before_write_ea = decode_prev_insn(&prev_write_insn, prev_ea);
+                    if (before_write_ea != BADADDR
+                     && before_write_ea >= caller_func->start_ea
+                     && (prev_write_insn.get_canon_feature(PH) & CF_CALL) != 0) {
+                        rejected_write = true;
+                        found_write = false;
+                        break;
+                    }
+                }
+            }
+
             ++summary.support;
 
             tinfo_t candidate_type;
@@ -815,7 +844,7 @@ struct RegisterHandoffSummary {
             break;
         }
 
-        if (!found_write) {
+        if (!found_write || rejected_write) {
             continue;
         }
     }
@@ -1274,6 +1303,7 @@ inline tinfo_t TypeFixer::infer_overlapped_variable_type(cfunc_t* cfunc, int var
 
     const lvar_t& target = lvars->at(static_cast<size_t>(var_idx));
     int best_score = -1;
+    int best_source_idx = -1;
 
     for (size_t i = 0; i < lvars->size(); ++i) {
         if (static_cast<int>(i) == var_idx) {
@@ -1322,7 +1352,31 @@ inline tinfo_t TypeFixer::infer_overlapped_variable_type(cfunc_t* cfunc, int var
             best_score = score;
             best_type = candidate_type;
             out_confidence = candidate_confidence;
+            best_source_idx = static_cast<int>(i);
         }
+    }
+
+    if (!best_type.empty() && best_source_idx >= 0 && Config::instance().options().debug_mode) {
+        const lvar_t& source = lvars->at(static_cast<size_t>(best_source_idx));
+        qstring func_name;
+        get_func_name(&func_name, cfunc->entry_ea);
+
+        qstring type_str;
+        best_type.print(&type_str);
+
+        qstring target_loc = detail::describe_lvar_location(target);
+        qstring source_loc = detail::describe_lvar_location(source);
+
+        msg(
+            "Structor: overlap recovery in %s selected %s for var #%d (%s @ %s) from var #%d (%s @ %s)\n",
+            func_name.c_str(),
+            type_str.c_str(),
+            var_idx,
+            target.name.c_str(),
+            target_loc.c_str(),
+            best_source_idx,
+            source.name.c_str(),
+            source_loc.c_str());
     }
 #else
     (void) cfunc;
@@ -1403,6 +1457,11 @@ inline qvector<qstring> TypeFixer::collect_missing_argument_warnings(cfunc_t* cf
         }
         if (detail::is_var_assigned_in_function(cfunc, static_cast<int>(i))) {
             continue;
+        }
+
+        qstring display_name = var.name;
+        if (display_name.empty()) {
+            display_name.sprnt("var#%d", static_cast<int>(i));
         }
 
         qstring reg_display = detail::describe_lvar_location(var);
@@ -1561,7 +1620,7 @@ inline qvector<qstring> TypeFixer::collect_missing_argument_warnings(cfunc_t* cf
             warning.sprnt(
                 "possible missing argument in %s: %s (%s) is populated by %d caller%s before the call; inferred type %s",
                 func_name.c_str(),
-                var.name.c_str(),
+                display_name.c_str(),
                 reg_display.c_str(),
                 best_summary.support,
                 best_summary.support == 1 ? "" : "s",
@@ -1570,7 +1629,7 @@ inline qvector<qstring> TypeFixer::collect_missing_argument_warnings(cfunc_t* cf
             warning.sprnt(
                 "possible missing argument in %s: %s (%s) looks like parameter #%d with type %s from %d caller%s",
                 func_name.c_str(),
-                var.name.c_str(),
+                display_name.c_str(),
                 reg_display.c_str(),
                 best_param_idx + 1,
                 type_str.c_str(),

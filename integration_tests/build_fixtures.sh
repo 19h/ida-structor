@@ -7,11 +7,18 @@ cc=${CC:-clang}
 cxx=${CXX:-clang++}
 cflags="-g -O0"
 cxxflags="-g -O0 -std=c++17"
+opt_cflags="-g -O2"
 
 build_c() {
     src="$1"
     out="${src%.c}"
     "$cc" $cflags -o "$out" "$src"
+}
+
+build_optimized_c() {
+    src="$1"
+    out="${src%.c}"
+    "$cc" $opt_cflags -o "$out" "$src"
 }
 
 build_cxx() {
@@ -41,6 +48,9 @@ build_named() {
     case "$name" in
         missing_regarg|test_missing_regarg)
             build_missing_regarg
+            ;;
+        overlap_scope|test_overlap_scope)
+            build_optimized_c "$root/test_overlap_scope.c"
             ;;
         *)
             if [ -f "$root/$name.c" ]; then
@@ -87,6 +97,7 @@ build_c "$root/test_mixed_subobject_deltas.c"
 build_c "$root/test_shifted_siblings.c"
 build_c "$root/test_tree_struct.c"
 build_c "$root/test_partial_overlap.c"
+build_optimized_c "$root/test_overlap_scope.c"
 build_c "$root/test_vtable_direct.c"
 build_missing_regarg
 build_cxx "$root/test_vtable.cpp"
