@@ -893,17 +893,6 @@ void CrossFunctionAnalyzer::trace_forward(
             int param_idx = call.arg_idx;
             sval_t arg_delta = call.delta;
 
-            // Check if we've already visited this function/param
-            FunctionVariable fv(callee_ea, param_idx, 0);
-            if (visited_.count(fv)) continue;
-
-            // Calculate cumulative delta
-            sval_t cumulative_delta = current_delta + arg_delta;
-
-            // Add to equivalence class
-            add_variable(callee_ea, param_idx, cumulative_delta);
-
-            // Record flow edge
             PointerFlowEdge edge;
             edge.caller_ea = func_ea;
             edge.callee_ea = callee_ea;
@@ -912,6 +901,21 @@ void CrossFunctionAnalyzer::trace_forward(
             edge.callee_param_idx = param_idx;
             edge.delta = arg_delta;
             edge.is_direct_call = call.is_direct;
+
+            // Check if we've already visited this function/param
+            FunctionVariable fv(callee_ea, param_idx, 0);
+            if (visited_.count(fv)) {
+                add_flow_edge(edge);
+                continue;
+            }
+
+            // Calculate cumulative delta
+            sval_t cumulative_delta = current_delta + arg_delta;
+
+            // Add to equivalence class
+            add_variable(callee_ea, param_idx, cumulative_delta);
+
+            // Record flow edge
             add_flow_edge(edge);
 
             // Collect pattern for this function
@@ -1049,6 +1053,14 @@ void CrossFunctionAnalyzer::trace_backward(
     for (const auto& call : callers) {
         if (call.caller_ea == BADADDR) continue;
 
+        PointerFlowEdge edge;
+        edge.caller_ea = call.caller_ea;
+        edge.callee_ea = func_ea;
+        edge.caller_var_idx = call.var_idx;
+        edge.callee_param_idx = var_idx;
+        edge.delta = call.delta;
+        edge.is_direct_call = true;
+
         if (call.by_ref) {
             FunctionVariable adjusted_key(func_ea, var_idx, 0);
             if (base_indirection_adjusted_.insert(adjusted_key).second) {
@@ -1063,7 +1075,10 @@ void CrossFunctionAnalyzer::trace_backward(
 
         // Check if we've already visited
         FunctionVariable fv(call.caller_ea, call.var_idx, 0);
-        if (visited_.count(fv)) continue;
+        if (visited_.count(fv)) {
+            add_flow_edge(edge);
+            continue;
+        }
 
         // The arg_delta is extracted from the call expression.
         // For example, if the call is `func((char*)ptr + 0x10)`, arg_delta = 0x10.
@@ -1092,13 +1107,6 @@ void CrossFunctionAnalyzer::trace_backward(
         add_variable(call.caller_ea, call.var_idx, 0);
 
         // Record flow edge (reversed direction)
-        PointerFlowEdge edge;
-        edge.caller_ea = call.caller_ea;
-        edge.callee_ea = func_ea;
-        edge.caller_var_idx = call.var_idx;
-        edge.callee_param_idx = var_idx;
-        edge.delta = call.delta;
-        edge.is_direct_call = true;
         add_flow_edge(edge);
 
         // Collect pattern
@@ -1240,6 +1248,17 @@ void CrossFunctionAnalyzer::add_variable(ea_t func_ea, int var_idx, sval_t delta
 }
 
 void CrossFunctionAnalyzer::add_flow_edge(const PointerFlowEdge& edge) {
+    for (const auto& existing : equiv_class_.flow_edges) {
+        if (existing.caller_ea == edge.caller_ea &&
+            existing.callee_ea == edge.callee_ea &&
+            existing.call_site == edge.call_site &&
+            existing.caller_var_idx == edge.caller_var_idx &&
+            existing.callee_param_idx == edge.callee_param_idx &&
+            existing.delta == edge.delta &&
+            existing.is_direct_call == edge.is_direct_call) {
+            return;
+        }
+    }
     equiv_class_.flow_edges.push_back(edge);
 }
 

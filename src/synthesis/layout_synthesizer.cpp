@@ -759,6 +759,10 @@ void LayoutSynthesizer::detect_subobjects(
             }
 
             for (const auto& fn_pattern : pattern.per_function_patterns) {
+                if (fn_pattern.func_ea == result.structure.source_func &&
+                    edge.callee_ea == result.structure.source_func) {
+                    continue;
+                }
                 if (fn_pattern.func_ea != edge.callee_ea || fn_pattern.var_idx != edge.callee_param_idx) {
                     continue;
                 }
@@ -786,13 +790,68 @@ void LayoutSynthesizer::detect_subobjects(
 
     if (groups.empty()) return;
 
+    qvector<sval_t> ordered_deltas;
+    ordered_deltas.reserve(groups.size());
+    for (const auto& [delta, _] : groups) {
+        ordered_deltas.push_back(delta);
+    }
+    std::sort(ordered_deltas.begin(), ordered_deltas.end());
+
     LayoutSynthConfig sub_config = config_;
     sub_config.cross_function = false;
     sub_config.emit_substructs = false;
 
     LayoutSynthesizer sub_synth(sub_config);
 
-    for (auto& [delta, group] : groups) {
+    auto region_covered_by_other_fields = [&](sval_t start, sval_t end, size_t skip_index) {
+        if (start >= end) {
+            return true;
+        }
+
+        bool touched_by_access = false;
+        for (const auto& access : pattern.all_accesses) {
+            const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
+            if (access.offset < end && access_end > start) {
+                touched_by_access = true;
+                break;
+            }
+        }
+        if (!touched_by_access) {
+            return true;
+        }
+
+        sval_t cursor = start;
+        while (cursor < end) {
+            sval_t covered_until = cursor;
+            for (size_t i = 0; i < result.structure.fields.size(); ++i) {
+                if (i == skip_index) {
+                    continue;
+                }
+
+                const auto& other = result.structure.fields[i];
+                const sval_t other_end = other.offset + static_cast<sval_t>(other.size);
+                if (other.offset > cursor || other_end <= cursor) {
+                    continue;
+                }
+
+                covered_until = std::max(covered_until, std::min(other_end, end));
+            }
+
+            if (covered_until == cursor) {
+                return false;
+            }
+            cursor = covered_until;
+        }
+
+        return true;
+    };
+
+    for (sval_t delta : ordered_deltas) {
+        auto group_it = groups.find(delta);
+        if (group_it == groups.end()) {
+            continue;
+        }
+        auto& group = group_it->second;
 
         AccessPattern sub_pattern;
         sub_pattern.func_ea = group.patterns.front().func_ea;
@@ -829,6 +888,23 @@ void LayoutSynthesizer::detect_subobjects(
 
             bool removable = field.offset >= delta && field_end <= sub_end;
 
+            if (!removable) {
+                const bool aggregate_like =
+                    (!field.type.empty() && (field.type.is_struct() || field.type.is_array())) ||
+                    field.semantic == SemanticType::NestedStruct ||
+                    field.source_accesses.size() <= 1;
+
+                if (aggregate_like) {
+                    const sval_t left_start = field.offset;
+                    const sval_t left_end = std::min(field_end, delta);
+                    const sval_t right_start = std::max(field.offset, sub_end);
+                    const sval_t right_end = field_end;
+
+                    removable = region_covered_by_other_fields(left_start, left_end, i) &&
+                                region_covered_by_other_fields(right_start, right_end, i);
+                }
+            }
+
             if (removable) {
                 remove_indices.push_back(i);
             } else {
@@ -861,12 +937,23 @@ void LayoutSynthesizer::detect_subobjects(
         info.parent_offset = delta;
         info.field_name = sub_field.name;
         result.sub_structs.push_back(std::move(info));
+    }
 
-        // Reuse the same recovered child layout for sibling windows of equal
-        // size when they also have concrete accesses. This helps repeated
-        // embedded-child patterns such as left/right operation tables.
+    const qvector<SubStructInfo> explicit_sub_structs = result.sub_structs;
+
+    // Reuse the same recovered child layout for sibling windows of equal
+    // size after all explicit flow-edge-derived children have been attempted.
+    for (const auto& existing_sub : explicit_sub_structs) {
+        const std::uint32_t sub_size = existing_sub.structure.size;
+        if (sub_size == 0) {
+            continue;
+        }
+
         for (auto& field : result.structure.fields) {
-            if (field.offset == delta || field.is_padding || field.is_array || field.is_union_candidate) {
+            if (field.offset == existing_sub.parent_offset ||
+                field.is_padding ||
+                field.is_array ||
+                field.is_union_candidate) {
                 continue;
             }
             if (field.size != sub_size || field.semantic == SemanticType::NestedStruct) {
@@ -874,8 +961,8 @@ void LayoutSynthesizer::detect_subobjects(
             }
 
             bool already_present = false;
-            for (const auto& existing : result.sub_structs) {
-                if (existing.parent_offset == field.offset) {
+            for (const auto& sub : result.sub_structs) {
+                if (sub.parent_offset == field.offset) {
                     already_present = true;
                     break;
                 }
@@ -904,7 +991,7 @@ void LayoutSynthesizer::detect_subobjects(
             field.semantic = SemanticType::NestedStruct;
             field.name.sprnt("sub_%X", static_cast<unsigned>(field.offset));
 
-            SubStructInfo sibling = result.sub_structs.back();
+            SubStructInfo sibling = existing_sub;
             sibling.parent_offset = field.offset;
             sibling.field_name = field.name;
             result.sub_structs.push_back(std::move(sibling));
