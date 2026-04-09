@@ -1,5 +1,18 @@
 # Cross-Function Sibling Callee Discovery
 
+## Status
+
+This document describes a specific implemented improvement to cross-function analysis.
+
+- The underlying behavior is present in the current codebase.
+- Some concrete paths and generated-name examples below are historical and may no longer match current filenames or naming heuristics exactly.
+- Use `README.md` for the current public summary of cross-function analysis behavior.
+
+### How to read this document
+
+- Treat it as a focused implementation note for one cross-function-analysis change.
+- Treat concrete type names and example output as historical illustrations unless they still match current naming heuristics.
+
 ## Overview
 
 This document describes the fix for cross-function sibling callee discovery in struct reconstruction.
@@ -34,7 +47,7 @@ main()
 
 ## The Fix
 
-Added to `src/cross_function_analyzer.cpp` in `trace_backward()`:
+Added to `src/analysis/cross_function_analyzer.cpp` in `trace_backward()`:
 
 ```cpp
 // Recurse backward
@@ -48,7 +61,7 @@ if (config_.follow_forward) {
 }
 ```
 
-This mirrors the behavior already present in `TypePropagator::propagate_backward` (which correctly handled sibling discovery during type propagation, but not during constraint collection).
+This mirrors the behavior already present in the propagation path, which already handled sibling discovery during type propagation but not during access-pattern collection.
 
 ## Verification
 
@@ -96,9 +109,9 @@ This results in a more complete struct with fields from ALL related functions.
 
 In the actual `test_linked_list` binary, `insert_after` is NOT called from `main()`, so it won't be discovered as a sibling. This is correct behavior - you can only discover siblings that are actually in the call graph.
 
-The synthesized struct `synth_struct_10000052C_0` correctly contains:
-- `field_0` at offset 0 (next pointer) - from traverse_list/sum_list
-- `func_10` at offset 0x10 (data) - from traverse_list/sum_list
+The synthesized struct in that case correctly contains fields at:
+- offset `0x0` for the next pointer-like field, from `traverse_list` and `sum_list`
+- offset `0x10` for the data-like field, from `traverse_list` and `sum_list`
 
 If `insert_after` were called from `main()`, the struct would also include:
-- `field_8` at offset 8 (prev pointer) - from insert_after
+- offset `0x8` for the prev pointer-like field, from `insert_after`

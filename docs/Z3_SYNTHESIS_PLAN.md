@@ -1,8 +1,30 @@
-# Z3-Powered Struct Synthesis Implementation Plan
+# Z3-Powered Struct Synthesis Design Plan
+
+## Status
+
+This document is a design and historical planning note, not a line-by-line description of the current shipped implementation.
+
+### Implemented in the current codebase
+
+- Z3-backed structure synthesis is present and is the preferred synthesis path when enabled.
+- Heuristic synthesis still exists and remains the fallback path.
+- Cross-function access unification with pointer-delta normalization is implemented.
+- Array detection, union handling, relaxed solving, and heuristic fallback are implemented.
+
+### Partially implemented or evolved since this document was written
+
+- Build and dependency handling changed. The current build tries system Z3 first, can fetch Z3 when missing, and also supports `Z3_USE_CUSTOM`.
+- Some tuning defaults in this document no longer match current code exactly.
+- The current project also includes a function type-fixing pipeline, which is outside the scope of this document.
+
+### How to read this document
+
+- Some sections describe idealized architecture, planned refinements, or solver details more precisely than the current public behavior guarantees.
+- Treat concrete build snippets and numeric defaults here as historical unless they match `README.md`, `CMakeLists.txt`, and `config.hpp`.
 
 ## Executive Summary
 
-This document outlines the implementation of a constraint-solving approach to struct synthesis in Structor, replacing the current heuristic-based `LayoutSynthesizer` with Z3 as the primary synthesis engine. The key new capabilities are:
+This document outlines the constraint-solving approach that shaped Structor's Z3-based struct synthesis. Z3 is now the primary synthesis engine when enabled, with the heuristic `LayoutSynthesizer` retained as a fallback. The key capabilities discussed here are:
 
 1. **Cross-Function Struct Unification**: Collect access patterns from all functions that touch the same struct type, normalize pointer deltas at call boundaries, and synthesize a unified, complete definition.
 
@@ -45,7 +67,7 @@ Type soundness is necessarily weaker than access-soundness: decompiler hints are
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Z3 dependency | Required, via FetchContent (commit hash) | Simplifies build, ensures reproducibility |
+| Z3 dependency | Historical plan: FetchContent-only | Current build behavior has changed; see status note above |
 | C++ standard | Keep C++20 (project standard) | Avoid breaking existing code |
 | Offset/size encoding | Unbounded Int with explicit bounds | Avoids bitvector wrap-around semantics |
 | Alignment constraints | **Soft** (with packing parameter) | Handle packed structs without UNSAT |
@@ -53,7 +75,7 @@ Type soundness is necessarily weaker than access-soundness: decompiler hints are
 | Array element semantics | stride == sizeof(element_type) enforced | C array semantics compliance |
 | Cross-function default | Full call graph with delta normalization | Maximum struct completeness |
 | Shallow analysis option | Depth=1 (direct callers/callees) | For performance-sensitive cases |
-| Z3 timeout | 10 seconds (via global params, not solver.set) | Reliable timeout handling |
+| Z3 timeout | Historical planning value | Check `config.hpp` for current defaults |
 | Solving strategy | Max-SMT with soft constraints | Conflict-tolerant synthesis |
 | Union handling | Create actual C union types | Proper type representation |
 | Union configurability | User option to disable | Some users may prefer manual review |
@@ -138,6 +160,8 @@ Type soundness is necessarily weaker than access-soundness: decompiler hints are
 ---
 
 ## Phase 1: Z3 Build Integration
+
+Historical note: this section reflects the original integration plan. The current build system no longer matches it exactly.
 
 ### 1.1 CMake Configuration
 

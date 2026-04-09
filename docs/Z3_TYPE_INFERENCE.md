@@ -1,3 +1,22 @@
+# Z3 Type Inference Research Notes
+
+## Status
+
+This document is a research/design note, not a description of the default public synthesis pipeline documented in `README.md`.
+
+### What is true today
+
+- Structor does contain substantial Z3 infrastructure and standalone tests around type encoding, layout constraints, array detection, cross-function analysis, and type-lattice behavior.
+- The repository also contains design work for richer type inference than the baseline public structure-synthesis workflow depends on.
+
+### How to read this document
+
+- an exploration of possible instruction-semantics-driven type inference
+- a record of constraint ideas and formalization strategies
+- a source of direction for future or partial implementations
+
+Do not treat every algorithm or quantitative claim below as fully productized current behavior.
+
 ## Constraint Generation Strategy
 
 **Instruction semantics → type constraints:**
