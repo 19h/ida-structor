@@ -1,6 +1,7 @@
 #pragma once
 
 #include "naming.hpp"
+#include "cross_function_analyzer.hpp"
 #include "synth_types.hpp"
 #include "config.hpp"
 #include "utils.hpp"
@@ -15,6 +16,7 @@ public:
 
     /// Detect vtable patterns in access pattern and create vtable structure
     [[nodiscard]] std::optional<SynthVTable> detect(const AccessPattern& pattern, cfunc_t* cfunc);
+    [[nodiscard]] std::optional<SynthVTable> detect(const UnifiedAccessPattern& pattern);
 
     /// Analyze a specific vtable call to extract slot information
     void analyze_vtable_call(const FieldAccess& access, cfunc_t* cfunc, SynthVTable& vtable);
@@ -50,6 +52,7 @@ private:
     };
 
     void collect_vtable_calls(const AccessPattern& pattern, cfunc_t* cfunc, SynthVTable& vtable);
+    void merge_vtable_slots(SynthVTable& dst, const SynthVTable& src);
     void generate_slot_names(SynthVTable& vtable);
     void infer_slot_signatures(SynthVTable& vtable, cfunc_t* cfunc);
 
@@ -148,6 +151,70 @@ inline std::optional<SynthVTable> VTableDetector::detect(const AccessPattern& pa
     generate_slot_names(vtable);
 
     return vtable;
+}
+
+inline std::optional<SynthVTable> VTableDetector::detect(const UnifiedAccessPattern& pattern) {
+    if (!pattern.has_vtable && pattern.per_function_patterns.empty()) {
+        return std::nullopt;
+    }
+
+    ea_t source_func = BADADDR;
+    if (!pattern.per_function_patterns.empty()) {
+        source_func = pattern.per_function_patterns.front().func_ea;
+    } else if (!pattern.contributing_functions.empty()) {
+        source_func = pattern.contributing_functions.front();
+    }
+
+    SynthVTable merged;
+    set_generated_name(merged.name,
+                       merged.naming,
+                       generate_vtable_name(source_func),
+                       GeneratedNameKind::VTable,
+                       NameConfidence::Medium);
+    merged.source_func = source_func;
+    merged.parent_offset = pattern.vtable_offset;
+
+    bool found_any = false;
+    for (const auto& fn_pattern : pattern.per_function_patterns) {
+        AccessPattern local = fn_pattern;
+        if (!local.has_vtable) {
+            for (const auto& access : local.accesses) {
+                if (access.is_vtable_access || access.semantic_type == SemanticType::VTablePointer) {
+                    local.has_vtable = true;
+                    local.vtable_offset = access.offset;
+                    break;
+                }
+            }
+        }
+
+        if (!local.has_vtable) {
+            continue;
+        }
+
+        cfuncptr_t cfunc = utils::get_cfunc(local.func_ea);
+        if (!cfunc) {
+            continue;
+        }
+
+        auto detected = detect(local, cfunc);
+        if (!detected) {
+            continue;
+        }
+
+        merge_vtable_slots(merged, *detected);
+        found_any = true;
+    }
+
+    if (!found_any || merged.slots.empty()) {
+        return std::nullopt;
+    }
+
+    std::sort(merged.slots.begin(), merged.slots.end(),
+        [](const VTableSlot& a, const VTableSlot& b) {
+            return a.index < b.index;
+        });
+    generate_slot_names(merged);
+    return merged;
 }
 
 inline void VTableDetector::analyze_vtable_call(const FieldAccess& access, cfunc_t* cfunc, SynthVTable& vtable) {
@@ -342,6 +409,48 @@ inline void VTableDetector::collect_vtable_calls(const AccessPattern& pattern, c
         }
 
         vtable.slots = std::move(filled);
+    }
+}
+
+inline void VTableDetector::merge_vtable_slots(SynthVTable& dst, const SynthVTable& src) {
+    for (const auto& src_slot : src.slots) {
+        VTableSlot* existing = nullptr;
+        for (auto& dst_slot : dst.slots) {
+            if (dst_slot.index == src_slot.index) {
+                existing = &dst_slot;
+                break;
+            }
+        }
+
+        if (!existing) {
+            dst.slots.push_back(src_slot);
+            continue;
+        }
+
+        const bool src_has_calls = !src_slot.call_sites.empty();
+        const bool existing_has_calls = !existing->call_sites.empty();
+        if (src_has_calls && !existing_has_calls) {
+            *existing = src_slot;
+            continue;
+        }
+
+        for (ea_t call_ea : src_slot.call_sites) {
+            if (std::find(existing->call_sites.begin(), existing->call_sites.end(), call_ea) == existing->call_sites.end()) {
+                existing->call_sites.push_back(call_ea);
+            }
+        }
+
+        if (existing->func_type.empty() && !src_slot.func_type.empty()) {
+            existing->func_type = src_slot.func_type;
+        }
+        if (existing->signature_hint.empty() && !src_slot.signature_hint.empty()) {
+            existing->signature_hint = src_slot.signature_hint;
+        }
+        if ((existing->name.empty() || is_generated_name(existing->name, &existing->naming)) &&
+            !src_slot.name.empty() && !is_generated_name(src_slot.name, &src_slot.naming)) {
+            existing->name = src_slot.name;
+            existing->naming = src_slot.naming;
+        }
     }
 }
 

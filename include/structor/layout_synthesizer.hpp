@@ -44,6 +44,7 @@ struct SynthesisResult {
     SynthStruct structure;
     qvector<SubStructInfo> sub_structs;
     qvector<AccessConflict> conflicts;
+    std::optional<UnifiedAccessPattern> unified_pattern;
 
 
     // Synthesis metadata

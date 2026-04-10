@@ -534,6 +534,7 @@ SynthesisResult LayoutSynthesizer::synthesize(
         detect_subobjects(unified_pattern, opts, synth_result);
     }
     apply_bitfield_recovery(unified_pattern, synth_result.structure);
+    synth_result.unified_pattern = unified_pattern;
     rebase_negative_offsets(synth_result.structure, &synth_result.sub_structs);
     if (source_delta > 0 && !extract_shifted_view_delta(synth_result.structure.name).has_value()) {
         synth_result.structure.name = make_shifted_view_type_name(synth_result.structure.name,

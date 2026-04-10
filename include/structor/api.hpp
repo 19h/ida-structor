@@ -644,9 +644,14 @@ inline SynthResult StructorAPI::do_synthesis(ea_t func_ea, int var_idx, const Sy
     }
 
     // Detect vtable if enabled
-    if (opts.vtable_detection && pattern.has_vtable) {
+    if (opts.vtable_detection) {
         VTableDetector vtable_detector(opts);
-        auto vtable = vtable_detector.detect(pattern, cfunc);
+        std::optional<SynthVTable> vtable;
+        if (synth_result.unified_pattern.has_value() && synth_result.unified_pattern->has_vtable) {
+            vtable = vtable_detector.detect(*synth_result.unified_pattern);
+        } else if (pattern.has_vtable) {
+            vtable = vtable_detector.detect(pattern, cfunc);
+        }
         if (vtable) {
             synth_struct.vtable = std::move(vtable);
         }

@@ -183,6 +183,9 @@ def run_vtable_positive_regression(
             "call_vtable_direct(auto_z18call_vtable_directpv *obj)",
             "obj->vtable->slot_0(a1: obj);",
             "obj->vtable->slot_1",
+            "call_multiple_slots(auto_z18call_vtable_directpv *obj, int arg)",
+            "obj->vtable->slot_2",
+            "obj->vtable->slot_3",
             'printf(a1: "data: %d\\n", obj->u32_8);',
             'printf(a1: "data2: %d\\n", obj->u32_C);',
             'printf(a1: "ptr: %p\\n", obj->ptr_10);',
@@ -196,6 +199,8 @@ def run_vtable_positive_regression(
             "obj->fn_0",
             "obj->fn_8",
             "+ 1))(a1: obj)",
+            "obj->vtable[1].slot_0",
+            "obj->vtable[1].slot_1",
         ],
         "vtable positive regression",
     )
