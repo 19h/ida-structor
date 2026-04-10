@@ -1522,37 +1522,65 @@ bool LayoutConstraintBuilder::candidate_covers_access(
     const FieldCandidate& candidate,
     const FieldAccess& access) const
 {
-    if ((candidate.type_category == TypeCategory::Array ||
-         candidate.type_category == TypeCategory::Struct ||
-         candidate.type_category == TypeCategory::Union) &&
-        candidate.kind == FieldCandidate::Kind::DirectAccess) {
-        return candidate.offset == access.offset && candidate.size == access.size;
-    }
+    const auto is_padding_like_candidate = [](const FieldCandidate& cand) {
+        return cand.kind == FieldCandidate::Kind::PaddingField ||
+               cand.type_category == TypeCategory::RawBytes;
+    };
 
-    if ((candidate.kind == FieldCandidate::Kind::DirectAccess ||
-         candidate.kind == FieldCandidate::Kind::UnionAlternative) &&
-        candidate.offset == access.offset && candidate.size == access.size &&
-        candidate.type_category != TypeCategory::RawBytes) {
-        TypeCategory access_cat = TypeCategory::Unknown;
-        if (!access.inferred_type.empty()) {
-            access_cat = ctx_.type_encoder().categorize(access.inferred_type);
-        } else {
-            access_cat = semantic_to_category(static_cast<int>(access.semantic_type));
+    const auto covers_by_shape = [&](const FieldCandidate& cand) {
+        if ((cand.type_category == TypeCategory::Array ||
+             cand.type_category == TypeCategory::Struct ||
+             cand.type_category == TypeCategory::Union) &&
+            cand.kind == FieldCandidate::Kind::DirectAccess) {
+            return cand.offset == access.offset && cand.size == access.size;
         }
 
-        if (access_cat != TypeCategory::Unknown && access_cat != TypeCategory::RawBytes &&
-            access_cat != candidate.type_category &&
-            !types_compatible(candidate.type_category, access_cat)) {
+        if ((cand.kind == FieldCandidate::Kind::DirectAccess ||
+             cand.kind == FieldCandidate::Kind::UnionAlternative) &&
+            cand.offset == access.offset && cand.size == access.size &&
+            cand.type_category != TypeCategory::RawBytes) {
+            TypeCategory access_cat = TypeCategory::Unknown;
+            if (!access.inferred_type.empty()) {
+                access_cat = ctx_.type_encoder().categorize(access.inferred_type);
+            } else {
+                access_cat = semantic_to_category(static_cast<int>(access.semantic_type));
+            }
+
+            if (access_cat != TypeCategory::Unknown && access_cat != TypeCategory::RawBytes &&
+                access_cat != cand.type_category &&
+                !types_compatible(cand.type_category, access_cat)) {
+                return false;
+            }
+        }
+
+        return cand.offset <= access.offset &&
+               cand.offset + static_cast<sval_t>(cand.size) >=
+               access.offset + static_cast<sval_t>(access.size);
+    };
+
+    if (!covers_by_shape(candidate)) {
+        return false;
+    }
+
+    const bool has_non_padding_evidence =
+        access.access_type == AccessType::Call ||
+        access.access_type == AccessType::AddressTaken ||
+        access.is_call_argument;
+
+    if (!has_non_padding_evidence || !is_padding_like_candidate(candidate)) {
+        return true;
+    }
+
+    for (const auto& other : candidates_) {
+        if (is_padding_like_candidate(other)) {
+            continue;
+        }
+        if (covers_by_shape(other)) {
             return false;
         }
     }
 
-    // Candidate covers access if:
-    //   cand.offset <= access.offset AND
-    //   cand.offset + cand.size >= access.offset + access.size
-    return candidate.offset <= access.offset &&
-           candidate.offset + static_cast<sval_t>(candidate.size) >=
-           access.offset + static_cast<sval_t>(access.size);
+    return true;
 }
 
 } // namespace structor::z3

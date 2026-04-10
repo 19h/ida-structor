@@ -37,11 +37,13 @@ private:
         SemanticType semantic_type = SemanticType::Unknown;
         tinfo_t inferred_type;
         qstring context_expr;
+        bool is_call_argument = false;
         std::optional<std::uint8_t> base_indirection;
     };
 
     void process_dereference(cexpr_t* expr, const cexpr_t* ptr_expr);
     void process_memptr_access(cexpr_t* expr);
+    void process_call_argument_uses(cexpr_t* call_expr);
     void process_call_through_ptr(cexpr_t* call_expr);
     void process_array_access(cexpr_t* expr);
     void process_assignment(cexpr_t* expr);
@@ -60,6 +62,7 @@ private:
     [[nodiscard]] tinfo_t build_funcptr_type(const cexpr_t* call_expr) const;
 
     [[nodiscard]] bool involves_target_var(const cexpr_t* expr) const;
+    [[nodiscard]] bool is_call_argument_use(const cexpr_t* expr) const;
     [[nodiscard]] SemanticType infer_semantic_from_usage(const cexpr_t* expr, const cexpr_t* parent);
     [[nodiscard]] AccessType determine_access_type(const cexpr_t* expr);
     [[nodiscard]] bool is_zero_initialization(const cexpr_t* expr) const;

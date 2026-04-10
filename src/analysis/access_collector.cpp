@@ -101,6 +101,7 @@ int AccessPatternVisitor::visit_expr(cexpr_t* expr) {
             break;
 
         case cot_call:
+            process_call_argument_uses(expr);
             // Check for indirect calls through our variable
             process_call_through_ptr(expr);
             break;
@@ -290,6 +291,7 @@ void AccessPatternVisitor::flush_pending_symbolic_accesses(int index_var, std::u
             access.inferred_type = pending.inferred_type;
             access.source_func_ea = cfunc_->entry_ea;
             access.array_stride_hint = pending.stride;
+            access.is_call_argument = pending.is_call_argument;
             if (pending.base_indirection.has_value()) {
                 access.base_indirection = pending.base_indirection;
             }
@@ -393,6 +395,7 @@ void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr
                     pending.semantic_type = infer_semantic_from_usage(expr, parent);
                     pending.context_expr = utils::expr_to_string(expr, cfunc_);
                     pending.inferred_type = expr->type;
+                    pending.is_call_argument = is_call_argument_use(expr);
                     if (arith.base_indirection > 0) {
                         pending.base_indirection = arith.base_indirection;
                     }
@@ -428,6 +431,7 @@ void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr
     // Infer semantic type from context
     const cexpr_t* parent = parent_expr();
     access.semantic_type = infer_semantic_from_usage(expr, parent);
+    access.is_call_argument = is_call_argument_use(expr);
 
     if (arith.base_indirection > 0) {
         access.base_indirection = arith.base_indirection;
@@ -470,6 +474,7 @@ void AccessPatternVisitor::process_memptr_access(cexpr_t* expr) {
     access.access_type = determine_access_type(expr);
     const cexpr_t* parent = parent_expr();
     access.semantic_type = infer_semantic_from_usage(expr, parent);
+    access.is_call_argument = is_call_argument_use(expr);
     if (arith.base_indirection > 0) {
         access.base_indirection = arith.base_indirection;
     }
@@ -530,6 +535,7 @@ void AccessPatternVisitor::process_array_access(cexpr_t* expr) {
                 bounded.access_type = determine_access_type(expr);
                 const cexpr_t* parent = parent_expr();
                 bounded.semantic_type = infer_semantic_from_usage(expr, parent);
+                bounded.is_call_argument = is_call_argument_use(expr);
                 if (arith.base_indirection > 0) {
                     bounded.base_indirection = arith.base_indirection;
                 }
@@ -556,6 +562,7 @@ void AccessPatternVisitor::process_array_access(cexpr_t* expr) {
     access.access_type = determine_access_type(expr);
     const cexpr_t* parent = parent_expr();
     access.semantic_type = infer_semantic_from_usage(expr, parent);
+    access.is_call_argument = is_call_argument_use(expr);
     if (arith.base_indirection > 0) {
         access.base_indirection = arith.base_indirection;
     }
@@ -565,6 +572,62 @@ void AccessPatternVisitor::process_array_access(cexpr_t* expr) {
     access.array_stride_hint = stride_hint;
 
     accesses_.push_back(std::move(access));
+}
+
+void AccessPatternVisitor::process_call_argument_uses(cexpr_t* call_expr) {
+    if (!call_expr || call_expr->op != cot_call || !call_expr->a) {
+        return;
+    }
+
+    for (const auto& arg : *call_expr->a) {
+        const cexpr_t* arg_expr = &arg;
+        while (arg_expr && arg_expr->op == cot_cast) {
+            arg_expr = arg_expr->x;
+        }
+        if (!arg_expr) {
+            continue;
+        }
+
+        FieldAccess access;
+        bool resolved = false;
+
+        sval_t offset = 0;
+        uint32_t size = 0;
+        std::optional<std::uint8_t> base_indirection;
+        if (extract_access(arg_expr, offset, size, &base_indirection)) {
+            access.insn_ea = call_expr->ea;
+            access.source_func_ea = cfunc_->entry_ea;
+            access.offset = offset;
+            access.size = size;
+            access.access_type = determine_access_type(arg_expr);
+            access.semantic_type = infer_semantic_from_usage(arg_expr, call_expr);
+            access.context_expr = utils::expr_to_string(arg_expr, cfunc_);
+            access.inferred_type = arg_expr->type;
+            if (base_indirection.has_value()) {
+                access.base_indirection = base_indirection;
+            }
+            resolved = true;
+        } else if (arg_expr->op == cot_var) {
+            auto it = local_aliases_.find(arg_expr->v.idx);
+            if (it != local_aliases_.end()) {
+                access = it->second;
+                access.insn_ea = call_expr->ea;
+                access.source_func_ea = cfunc_->entry_ea;
+                access.context_expr = utils::expr_to_string(arg_expr, cfunc_);
+                resolved = true;
+            }
+        }
+
+        if (!resolved) {
+            continue;
+        }
+
+        access.is_call_argument = true;
+        if (access.access_type == AccessType::Unknown) {
+            access.access_type = AccessType::Read;
+        }
+        accesses_.push_back(std::move(access));
+    }
 }
 
 void AccessPatternVisitor::process_call_through_ptr(cexpr_t* call_expr) {
@@ -670,6 +733,7 @@ void AccessPatternVisitor::record_bitfield_access(const cexpr_t* expr, sval_t of
     access.semantic_type = SemanticType::UnsignedInteger;
     access.context_expr = utils::expr_to_string(expr, cfunc_);
     access.inferred_type = expr->type;
+    access.is_call_argument = is_call_argument_use(expr);
     if (base_indirection.has_value()) {
         access.base_indirection = base_indirection;
     }
@@ -798,6 +862,26 @@ bool AccessPatternVisitor::involves_target_var(const cexpr_t* expr) const {
         default:
             return false;
     }
+}
+
+bool AccessPatternVisitor::is_call_argument_use(const cexpr_t* expr) const {
+    const cexpr_t* current = expr;
+
+    for (size_t i = 0; i < parents.size(); ++i) {
+        const citem_t* parent_item = parents[parents.size() - 1 - i];
+        if (!parent_item || !parent_item->is_expr()) {
+            continue;
+        }
+
+        const cexpr_t* parent = static_cast<const cexpr_t*>(parent_item);
+        if (parent->op == cot_call) {
+            return parent->x != current;
+        }
+
+        current = parent;
+    }
+
+    return false;
 }
 
 SemanticType AccessPatternVisitor::infer_semantic_from_usage(const cexpr_t* expr, const cexpr_t* parent) {
@@ -1110,6 +1194,8 @@ void AccessCollector::deduplicate_accesses(AccessPattern& pattern) {
                         existing.array_stride_hint.reset();
                     }
                 }
+
+                existing.is_call_argument = existing.is_call_argument || access.is_call_argument;
 
                 if (access.base_indirection.has_value()) {
                     if (!existing.base_indirection.has_value()) {

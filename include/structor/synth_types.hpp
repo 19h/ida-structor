@@ -233,6 +233,7 @@ struct FieldAccess {
     bool            is_vtable_access;
     sval_t          vtable_slot;    // If vtable access, which slot
     bool            is_zero_init;   // True if this is a zero-initialization write (e.g., memset to 0)
+    bool            is_call_argument; // Value from this region flowed into a call argument.
 
     // Bitfield observations for this access (if any)
     qvector<BitfieldInfo> bitfields;
@@ -258,7 +259,8 @@ struct FieldAccess {
         , semantic_type(SemanticType::Unknown)
         , is_vtable_access(false)
         , vtable_slot(-1)
-        , is_zero_init(false) {}
+        , is_zero_init(false)
+        , is_call_argument(false) {}
 
     bool operator<(const FieldAccess& other) const noexcept {
         if (offset != other.offset) return offset < other.offset;

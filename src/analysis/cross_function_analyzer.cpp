@@ -340,6 +340,8 @@ UnifiedAccessPattern UnifiedAccessPattern::merge(
                     }
                 }
 
+                existing.is_call_argument = existing.is_call_argument || access.is_call_argument;
+
                 if (access.base_indirection.has_value()) {
                     if (!existing.base_indirection.has_value()) {
                         existing.base_indirection = access.base_indirection;

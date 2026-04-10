@@ -797,6 +797,8 @@ private:
                 existing.add_observed_constant(value);
             }
 
+            existing.is_call_argument = existing.is_call_argument || access.is_call_argument;
+
             if (!access.bitfields.empty()) {
                 for (const auto& bf : access.bitfields) {
                     existing.add_bitfield(bf);
