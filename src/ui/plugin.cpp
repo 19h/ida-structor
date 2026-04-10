@@ -69,6 +69,58 @@ static error_t idaapi idc_structor_synthesize_by_name(idc_value_t* argv, idc_val
     return eOk;
 }
 
+// IDC function: structor_synthesize_global(global_ea) -> tid_t
+static error_t idaapi idc_structor_synthesize_global(idc_value_t* argv, idc_value_t* res) {
+    ea_t global_ea = argv[0].vtype == VT_INT64 ? argv[0].i64 : static_cast<ea_t>(argv[0].num);
+
+    SynthOptions opts = Config::instance().options();
+    opts.interactive_mode = false;
+    opts.auto_open_struct = false;
+    opts.highlight_changes = false;
+
+    SynthResult result = StructorAPI::instance().synthesize_global_structure(global_ea, &opts);
+
+    g_last_error = result.error_message;
+    g_last_field_count = result.fields_created;
+    g_last_vtable_tid = result.vtable_tid;
+
+    if (result.success()) {
+        res->set_int64(result.struct_tid);
+    } else {
+        if (g_last_error.empty()) {
+            g_last_error = synth_error_str(result.error);
+        }
+        res->set_int64(BADADDR);
+    }
+    return eOk;
+}
+
+// IDC function: structor_synthesize_global_by_name(global_name) -> tid_t
+static error_t idaapi idc_structor_synthesize_global_by_name(idc_value_t* argv, idc_value_t* res) {
+    const char* global_name = argv[0].c_str();
+
+    SynthOptions opts = Config::instance().options();
+    opts.interactive_mode = false;
+    opts.auto_open_struct = false;
+    opts.highlight_changes = false;
+
+    SynthResult result = StructorAPI::instance().synthesize_global_structure(global_name, &opts);
+
+    g_last_error = result.error_message;
+    g_last_field_count = result.fields_created;
+    g_last_vtable_tid = result.vtable_tid;
+
+    if (result.success()) {
+        res->set_int64(result.struct_tid);
+    } else {
+        if (g_last_error.empty()) {
+            g_last_error = synth_error_str(result.error);
+        }
+        res->set_int64(BADADDR);
+    }
+    return eOk;
+}
+
 // IDC function: structor_get_error() -> string
 static error_t idaapi idc_structor_get_error(idc_value_t* /*argv*/, idc_value_t* res) {
     res->set_string(g_last_error);
@@ -222,6 +274,8 @@ static error_t idaapi idc_structor_get_fixes_skipped(idc_value_t* /*argv*/, idc_
 // Argument type arrays for IDC functions
 static const char args_synthesize[] = { VT_INT64, VT_LONG, 0 };
 static const char args_synthesize_by_name[] = { VT_INT64, VT_STR, 0 };
+static const char args_global_synthesize[] = { VT_INT64, 0 };
+static const char args_global_synthesize_by_name[] = { VT_STR, 0 };
 static const char args_no_args[] = { 0 };
 static const char args_func_ea[] = { VT_INT64, 0 };
 static const char args_index[] = { VT_LONG, 0 };
@@ -229,6 +283,8 @@ static const char args_index[] = { VT_LONG, 0 };
 static const ext_idcfunc_t idc_funcs[] = {
     { "structor_synthesize", idc_structor_synthesize, args_synthesize, nullptr, 0, EXTFUN_BASE },
     { "structor_synthesize_by_name", idc_structor_synthesize_by_name, args_synthesize_by_name, nullptr, 0, EXTFUN_BASE },
+    { "structor_synthesize_global", idc_structor_synthesize_global, args_global_synthesize, nullptr, 0, EXTFUN_BASE },
+    { "structor_synthesize_global_by_name", idc_structor_synthesize_global_by_name, args_global_synthesize_by_name, nullptr, 0, EXTFUN_BASE },
     { "structor_get_error", idc_structor_get_error, args_no_args, nullptr, 0, EXTFUN_BASE },
     { "structor_get_field_count", idc_structor_get_field_count, args_no_args, nullptr, 0, EXTFUN_BASE },
     { "structor_get_vtable_tid", idc_structor_get_vtable_tid, args_no_args, nullptr, 0, EXTFUN_BASE },
@@ -289,6 +345,8 @@ private:
     ea_t pending_synth_ea_ = BADADDR;
     int pending_synth_var_idx_ = 0;
     qstring pending_synth_var_name_;
+    ea_t pending_global_synth_ea_ = BADADDR;
+    qstring pending_global_synth_name_;
     bool auto_synth_done_ = false;
 };
 
@@ -300,6 +358,19 @@ static ssize_t idaapi hexrays_callback(void* /*ud*/, hexrays_event_t event, va_l
     if (!g_plugin) return 0;
     
     switch (event) {
+        case hxe_maturity: {
+            cfunc_t* cfunc = va_arg(va, cfunc_t*);
+            ctree_maturity_t maturity = va_argi(va, ctree_maturity_t);
+            if (cfunc && maturity == CMAT_FINAL) {
+                if (Config::instance().options().debug_mode) {
+                    qstring func_name;
+                    get_func_name(&func_name, cfunc->entry_ea);
+                    msg("Structor: hxe_maturity final for %s\n", func_name.c_str());
+                }
+                (void)rewrite_registered_global_uses(cfunc);
+            }
+            break;
+        }
         case hxe_func_printed: {
             // Called after the function pseudocode is generated
             cfunc_t* cfunc = va_arg(va, cfunc_t*);
@@ -365,16 +436,37 @@ StructorPlugin::StructorPlugin() {
             run_pending_auto_synth();
         }
     }
+
+    // Check for global/static auto-synthesis env var: STRUCTOR_AUTO_SYNTH_GLOBAL=ea_or_name
+    const char* global_env = getenv("STRUCTOR_AUTO_SYNTH_GLOBAL");
+    if (global_env && *global_env) {
+        char* endptr = nullptr;
+        pending_global_synth_ea_ = strtoull(global_env, &endptr, 0);
+        if (!endptr || *endptr != '\0') {
+            pending_global_synth_ea_ = BADADDR;
+            pending_global_synth_name_ = global_env;
+        }
+        run_pending_auto_synth();
+    }
 }
 
 void StructorPlugin::run_pending_auto_synth() {
-    if (auto_synth_done_ || pending_synth_ea_ == BADADDR) return;
+    if (auto_synth_done_) return;
+    if (pending_synth_ea_ == BADADDR && pending_global_synth_ea_ == BADADDR && pending_global_synth_name_.empty()) {
+        return;
+    }
     auto_synth_done_ = true;
 
     // Wait for auto-analysis to complete
     auto_wait();
 
-    if (!pending_synth_var_name_.empty()) {
+    if (!pending_global_synth_name_.empty()) {
+        msg("Structor: Running auto global synthesis for name=%s\n",
+            pending_global_synth_name_.c_str());
+    } else if (pending_global_synth_ea_ != BADADDR) {
+        msg("Structor: Running auto global synthesis for ea=0x%llx\n",
+            (unsigned long long)pending_global_synth_ea_);
+    } else if (!pending_synth_var_name_.empty()) {
         msg("Structor: Running auto-synthesis for func=0x%llx var_name=%s\n",
             (unsigned long long)pending_synth_ea_, pending_synth_var_name_.c_str());
     } else {
@@ -387,11 +479,20 @@ void StructorPlugin::run_pending_auto_synth() {
     opts.auto_open_struct = false;
     opts.highlight_changes = false;
 
-    SynthResult result = pending_synth_var_name_.empty()
-        ? StructorAPI::instance().synthesize_structure(
-              pending_synth_ea_, pending_synth_var_idx_, &opts)
-        : StructorAPI::instance().synthesize_structure(
-              pending_synth_ea_, pending_synth_var_name_.c_str(), &opts);
+    SynthResult result;
+    if (!pending_global_synth_name_.empty()) {
+        result = StructorAPI::instance().synthesize_global_structure(
+            pending_global_synth_name_.c_str(), &opts);
+    } else if (pending_global_synth_ea_ != BADADDR) {
+        result = StructorAPI::instance().synthesize_global_structure(
+            pending_global_synth_ea_, &opts);
+    } else if (pending_synth_var_name_.empty()) {
+        result = StructorAPI::instance().synthesize_structure(
+            pending_synth_ea_, pending_synth_var_idx_, &opts);
+    } else {
+        result = StructorAPI::instance().synthesize_structure(
+            pending_synth_ea_, pending_synth_var_name_.c_str(), &opts);
+    }
 
     g_last_error = result.error_message;
     g_last_field_count = result.fields_created;
@@ -423,6 +524,7 @@ void StructorPlugin::cleanup() {
 
     // Clear global plugin pointer
     g_plugin = nullptr;
+    clear_registered_global_rewrite_info();
 
     // Unregister IDC functions
     unregister_idc_funcs();
@@ -456,7 +558,7 @@ void StructorPlugin::on_decompilation_complete(cfunc_t* cfunc) {
     // When running an explicit non-interactive auto-synthesis session
     // (used by idump verification), do not let the background type fixer
     // mutate the database at the same time.
-    if (pending_synth_ea_ != BADADDR) {
+    if (pending_synth_ea_ != BADADDR || pending_global_synth_ea_ != BADADDR || !pending_global_synth_name_.empty()) {
         return;
     }
 

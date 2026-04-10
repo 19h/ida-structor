@@ -51,6 +51,48 @@ IDAAPI tid_t structor_synthesize_by_name(ea_t func_ea, const char* var_name) {
     return result.struct_tid;
 }
 
+IDAAPI tid_t structor_synthesize_global(ea_t global_ea) {
+    SynthResult result = StructorAPI::instance().synthesize_global_structure(global_ea);
+
+    extern thread_local qstring g_last_error;
+    extern thread_local int g_last_field_count;
+    extern thread_local tid_t g_last_vtable_tid;
+
+    g_last_error = result.error_message;
+    g_last_field_count = result.fields_created;
+    g_last_vtable_tid = result.vtable_tid;
+
+    if (!result.success()) {
+        if (g_last_error.empty()) {
+            g_last_error = synth_error_str(result.error);
+        }
+        return BADADDR;
+    }
+
+    return result.struct_tid;
+}
+
+IDAAPI tid_t structor_synthesize_global_by_name(const char* global_name) {
+    SynthResult result = StructorAPI::instance().synthesize_global_structure(global_name);
+
+    extern thread_local qstring g_last_error;
+    extern thread_local int g_last_field_count;
+    extern thread_local tid_t g_last_vtable_tid;
+
+    g_last_error = result.error_message;
+    g_last_field_count = result.fields_created;
+    g_last_vtable_tid = result.vtable_tid;
+
+    if (!result.success()) {
+        if (g_last_error.empty()) {
+            g_last_error = synth_error_str(result.error);
+        }
+        return BADADDR;
+    }
+
+    return result.struct_tid;
+}
+
 IDAAPI const char* structor_get_error() {
     extern thread_local qstring g_last_error;
     return g_last_error.c_str();

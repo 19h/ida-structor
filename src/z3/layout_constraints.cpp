@@ -5,6 +5,7 @@
 #include "structor/simd.hpp"
 #include <algorithm>
 #include <chrono>
+#include <limits>
 #include <unordered_set>
 
 #ifndef STRUCTOR_TESTING
@@ -1271,6 +1272,16 @@ SynthStruct LayoutConstraintBuilder::extract_struct(const ::z3::model& model) {
                        member_idx, static_cast<unsigned long long>(member_cand.offset), member_cand.size);
             }
 
+            if (union_members.size() <= 1) {
+                z3_log("[Structor/Z3]       -> Single-member union; treating as regular field\n");
+                SynthField field = field_from_candidate(candidate, ctx_.type_encoder(),
+                                                         pattern_ ? &pattern_->all_accesses : nullptr);
+                z3_log("[Structor/Z3]       -> Created field: name='%s', offset=0x%llX, size=%u\n",
+                       field.name.c_str(), static_cast<unsigned long long>(field.offset), field.size);
+                result.fields.push_back(std::move(field));
+                continue;
+            }
+
             // Create union field
             SynthField union_field = create_union_field(union_members, model);
             z3_log("[Structor/Z3]       -> Created union field: name='%s', offset=0x%llX, size=%u\n",
@@ -1286,6 +1297,11 @@ SynthStruct LayoutConstraintBuilder::extract_struct(const ::z3::model& model) {
             result.fields.push_back(std::move(field));
         }
     }
+
+    std::sort(result.fields.begin(), result.fields.end(),
+              [](const SynthField& a, const SynthField& b) {
+                  return a.offset < b.offset;
+              });
 
     // Set struct properties
     if (!result.fields.empty()) {
@@ -1370,7 +1386,7 @@ void LayoutConstraintBuilder::detect_union_groups(const ::z3::model& model) {
 
         // Calculate union offset and size
         sval_t min_offset = SVAL_MAX;
-        sval_t max_end = 0;
+        sval_t max_end = std::numeric_limits<sval_t>::lowest();
 
         for (int idx : members) {
             const auto& cand = candidates_[field_vars_[idx].candidate_id];
@@ -1401,7 +1417,8 @@ SynthField LayoutConstraintBuilder::create_union_field(
 
     // Calculate union bounds
     sval_t min_offset = SVAL_MAX;
-    sval_t max_end = 0;
+    sval_t max_end = std::numeric_limits<sval_t>::lowest();
+    uint32_t max_size = 0;
 
     z3_log("[Structor/Z3] create_union_field: %zu overlapping candidates\n", overlapping_ids.size());
     for (int idx : overlapping_ids) {
@@ -1411,23 +1428,25 @@ SynthField LayoutConstraintBuilder::create_union_field(
                static_cast<unsigned long long>(cand.offset), cand.size);
         min_offset = std::min(min_offset, cand.offset);
         max_end = std::max(max_end, cand.offset + static_cast<sval_t>(cand.size));
+        max_size = std::max(max_size, cand.size);
     }
 
     // Validate: if no valid members, use offset 0
-    if (min_offset == SVAL_MAX || min_offset < 0) {
+    if (min_offset == SVAL_MAX || max_end == std::numeric_limits<sval_t>::lowest()) {
         z3_log("[Structor/Z3] WARNING: Invalid min_offset=0x%llX, using 0\n",
                static_cast<unsigned long long>(min_offset));
         min_offset = 0;
+        max_end = static_cast<sval_t>(max_size == 0 ? 1 : max_size);
     }
-    if (max_end <= min_offset) {
+    if (max_end < min_offset) {
         z3_log("[Structor/Z3] WARNING: Invalid max_end=0x%llX (< min_offset), using min+8\n",
                static_cast<unsigned long long>(max_end));
-        max_end = min_offset + 8;
+        max_end = min_offset + static_cast<sval_t>(max_size == 0 ? 1 : max_size);
     }
 
     union_field.offset = min_offset;
     union_field.size = static_cast<uint32_t>(max_end - min_offset);
-    union_field.name.sprnt("union_%llX", static_cast<unsigned long long>(min_offset));
+    union_field.name.sprnt("union_%s", make_offset_suffix(min_offset).c_str());
     z3_log("[Structor/Z3] Created union: offset=0x%llX, size=%u, name='%s'\n",
            static_cast<unsigned long long>(union_field.offset), union_field.size,
            union_field.name.c_str());

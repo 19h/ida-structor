@@ -24,6 +24,7 @@
 #include "structor/access_collector.hpp"
 #include "structor/vtable_detector.hpp"
 #include "structor/cross_function_analyzer.hpp"
+#include "structor/global_object_analyzer.hpp"
 
 // ============================================================================
 // Synthesis Module

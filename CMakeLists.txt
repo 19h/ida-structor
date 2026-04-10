@@ -240,6 +240,7 @@ set(STRUCTOR_SOURCES
     # Analysis module
     src/analysis/access_collector.cpp
     src/analysis/cross_function_analyzer.cpp
+    src/analysis/global_object_analyzer.cpp
     src/analysis/vtable_detector.cpp
     
     # Synthesis module
@@ -273,6 +274,7 @@ set(STRUCTOR_HEADERS
     include/structor/access_collector.hpp
     include/structor/layout_synthesizer.hpp
     include/structor/vtable_detector.hpp
+    include/structor/global_object_analyzer.hpp
     include/structor/type_propagator.hpp
     include/structor/pseudocode_rewriter.hpp
     include/structor/structure_persistence.hpp

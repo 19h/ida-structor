@@ -4,6 +4,7 @@
 #include "naming.hpp"
 #include "config.hpp"
 #include "access_collector.hpp"
+#include "global_object_analyzer.hpp"
 #include "layout_synthesizer.hpp"
 #include "vtable_detector.hpp"
 #include "type_propagator.hpp"
@@ -38,6 +39,16 @@ public:
     [[nodiscard]] SynthResult synthesize_structure(
         ea_t func_ea,
         const char* var_name,
+        SynthOptions* opts = nullptr);
+
+    /// Synthesize structure for a global/static storage address
+    [[nodiscard]] SynthResult synthesize_global_structure(
+        ea_t global_ea,
+        SynthOptions* opts = nullptr);
+
+    /// Synthesize structure for a global/static storage symbol
+    [[nodiscard]] SynthResult synthesize_global_structure(
+        const char* global_name,
         SynthOptions* opts = nullptr);
 
     /// Collect access patterns without synthesizing
@@ -100,11 +111,135 @@ private:
     StructorAPI& operator=(const StructorAPI&) = delete;
 
     SynthResult do_synthesis(ea_t func_ea, int var_idx, const SynthOptions& opts);
+    SynthResult do_global_synthesis(ea_t global_ea, const SynthOptions& opts);
 };
 
 // ============================================================================
 // Implementation
 // ============================================================================
+
+[[nodiscard]] inline bool apply_global_tinfo(ea_t ea, const tinfo_t& type) {
+#ifndef STRUCTOR_TESTING
+    auto apply_decl = [&](const tinfo_t& decl_type) {
+        qstring symbol_name;
+        get_name(&symbol_name, ea);
+        if (symbol_name.empty()) {
+            return false;
+        }
+
+        qstring type_name;
+        qstring decl;
+        if ((decl_type.is_struct() || decl_type.is_union()) && decl_type.get_type_name(&type_name) && !type_name.empty()) {
+            decl.sprnt("%s %s;", type_name.c_str(), symbol_name.c_str());
+            return apply_cdecl(nullptr, ea, decl.c_str(), TINFO_STRICT);
+        }
+
+        if ((decl_type.is_ptr() || decl_type.is_funcptr()) && decl_type.is_ptr()) {
+            tinfo_t pointed = decl_type.get_pointed_object();
+            if (!pointed.empty() && pointed.get_type_name(&type_name) && !type_name.empty()) {
+                decl.sprnt("%s *%s;", type_name.c_str(), symbol_name.c_str());
+                return apply_cdecl(nullptr, ea, decl.c_str(), TINFO_STRICT);
+            }
+        }
+
+        return false;
+    };
+
+    bool prepared = false;
+
+    const size_t type_size = type.get_size();
+    if ((type.is_struct() || type.is_union()) && type_size != BADSIZE && type_size > 0) {
+        tid_t tid = type.get_tid();
+        if (tid != BADADDR) {
+            prepared = create_struct(ea, type_size, tid, true) || prepared;
+        }
+    } else if (type.is_ptr() || type.is_funcptr()) {
+        const asize_t ptr_size = static_cast<asize_t>(get_ptr_size());
+        if (ptr_size == 8) {
+            prepared = create_qword(ea, ptr_size, true) || prepared;
+        } else if (ptr_size == 4) {
+            prepared = create_dword(ea, ptr_size, true) || prepared;
+        }
+    }
+
+    bool set_ok = set_tinfo(ea, &type);
+    bool apply_ok = apply_tinfo(ea, type, TINFO_DEFINITE | TINFO_STRICT);
+    bool decl_ok = apply_decl(type);
+    return prepared || set_ok || apply_ok || decl_ok;
+#else
+    (void)ea;
+    (void)type;
+    return true;
+#endif
+}
+
+[[nodiscard]] inline bool symbol_name_matches(const qstring& candidate, const qstring& target) {
+    if (candidate.empty() || target.empty()) {
+        return false;
+    }
+    if (candidate == target) {
+        return true;
+    }
+    if (candidate[0] == '_' && candidate.substr(1) == target) {
+        return true;
+    }
+    if (target[0] == '_' && target.substr(1) == candidate) {
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] inline ea_t lookup_global_symbol_ea(const char* global_name) {
+#ifndef STRUCTOR_TESTING
+    if (!global_name || !*global_name) {
+        return BADADDR;
+    }
+
+    ea_t global_ea = get_name_ea(BADADDR, global_name);
+    if (global_ea != BADADDR) {
+        return global_ea;
+    }
+
+    qstring target(global_name);
+    if (global_name[0] != '_') {
+        qstring alt_name("_");
+        alt_name.append(global_name);
+        global_ea = get_name_ea(BADADDR, alt_name.c_str());
+        if (global_ea != BADADDR) {
+            return global_ea;
+        }
+    }
+
+    const size_t name_count = get_nlist_size();
+    for (size_t idx = 0; idx < name_count; ++idx) {
+        ea_t ea = get_nlist_ea(idx);
+        if (ea == BADADDR) {
+            continue;
+        }
+
+        const char* raw_name = get_nlist_name(idx);
+        if (raw_name && symbol_name_matches(qstring(raw_name), target)) {
+            return ea;
+        }
+
+        qstring short_name;
+        get_short_name(&short_name, ea);
+        if (symbol_name_matches(short_name, target)) {
+            return ea;
+        }
+
+        qstring long_name;
+        get_long_name(&long_name, ea);
+        if (symbol_name_matches(long_name, target)) {
+            return ea;
+        }
+    }
+#else
+    (void)global_name;
+#endif
+
+    return BADADDR;
+}
 
 inline SynthResult StructorAPI::synthesize_structure(
     ea_t func_ea,
@@ -165,6 +300,33 @@ inline SynthResult StructorAPI::synthesize_structure(
     }
 
     return SynthResult::make_error(SynthError::InvalidVariable, "Variable index lookup failed");
+}
+
+inline SynthResult StructorAPI::synthesize_global_structure(
+    ea_t global_ea,
+    SynthOptions* opts)
+{
+    const SynthOptions& options = opts ? *opts : Config::instance().options();
+    return do_global_synthesis(global_ea, options);
+}
+
+inline SynthResult StructorAPI::synthesize_global_structure(
+    const char* global_name,
+    SynthOptions* opts)
+{
+    if (!global_name || !*global_name) {
+        return SynthResult::make_error(SynthError::InvalidVariable, "Global name is empty");
+    }
+
+    ea_t global_ea = lookup_global_symbol_ea(global_name);
+
+    if (global_ea == BADADDR) {
+        qstring msg;
+        msg.sprnt("Global '%s' not found", global_name);
+        return SynthResult::make_error(SynthError::InvalidVariable, msg);
+    }
+
+    return synthesize_global_structure(global_ea, opts);
 }
 
 inline AccessPattern StructorAPI::collect_accesses(ea_t func_ea, int var_idx) {
@@ -297,6 +459,119 @@ inline TypeFixResult StructorAPI::analyze_function_types(ea_t func_ea) {
     cfg.dry_run = true;  // Don't actually apply changes
     TypeFixer fixer(cfg);
     return fixer.fix_function_types(func_ea);
+}
+
+inline SynthResult StructorAPI::do_global_synthesis(ea_t global_ea, const SynthOptions& opts) {
+    try {
+        GlobalObjectAnalyzer analyzer(opts);
+        GlobalObjectAnalysis analysis = analyzer.analyze(global_ea);
+
+        if (analysis.pattern.all_accesses.empty()) {
+            return SynthResult::make_error(SynthError::NoAccessesFound,
+                "No global/static structure accesses found");
+        }
+
+        if (static_cast<int>(analysis.pattern.unique_access_locations()) < opts.min_accesses) {
+            qstring msg;
+            msg.sprnt("Only %zu accesses found (minimum: %d)",
+                      analysis.pattern.unique_access_locations(),
+                      opts.min_accesses);
+            return SynthResult::make_error(SynthError::InsufficientAccesses, msg);
+        }
+
+        LayoutSynthesizer synthesizer(opts);
+        SynthesisResult synth_result = synthesizer.synthesize(analysis.pattern);
+        SynthStruct synth_struct = std::move(synth_result.structure);
+        qvector<SubStructInfo> sub_structs = std::move(synth_result.sub_structs);
+
+        if (synth_struct.fields.empty()) {
+            return SynthResult::make_error(SynthError::TypeCreationFailed,
+                "Failed to synthesize structure fields");
+        }
+
+        synth_struct.source_var = analysis.root_name;
+        set_generated_name(synth_struct.name,
+                           synth_struct.naming,
+                           make_auto_root_type_name(BADADDR, analysis.root_name),
+                           GeneratedNameKind::RootStruct,
+                           NameConfidence::Medium);
+
+        if (!analysis.pattern.contributing_functions.empty()) {
+            synth_struct.source_func = analysis.pattern.contributing_functions[0];
+            for (ea_t func_ea : analysis.pattern.contributing_functions) {
+                synth_struct.add_provenance(func_ea);
+            }
+        }
+
+        SynthResult result;
+        result.conflicts = synth_result.conflicts;
+
+        StructurePersistence persistence(opts);
+        tid_t struct_tid = sub_structs.empty()
+            ? persistence.create_struct(synth_struct)
+            : persistence.create_struct_with_substructs(synth_struct, sub_structs);
+        if (struct_tid == BADADDR) {
+            return SynthResult::make_error(SynthError::TypeCreationFailed,
+                "Failed to create structure in IDB");
+        }
+
+        result.struct_tid = struct_tid;
+        result.fields_created = synth_struct.field_count();
+
+        tinfo_t struct_type;
+        if (!struct_type.get_type_by_tid(struct_tid)) {
+            return SynthResult::make_error(SynthError::TypeCreationFailed,
+                "Failed to load synthesized structure type");
+        }
+
+        (void)apply_global_tinfo(global_ea, struct_type);
+
+        TypePropagator propagator(opts);
+        for (const auto& var : analysis.zero_delta_variables) {
+            cfuncptr_t cfunc = utils::get_cfunc(var.func_ea);
+            if (!cfunc) {
+                result.failed_sites.push_back(var.func_ea);
+                continue;
+            }
+
+            if (propagator.apply_type(cfunc, var.var_idx, struct_type)) {
+                if (std::find(result.propagated_to.begin(), result.propagated_to.end(), var.func_ea) == result.propagated_to.end()) {
+                    result.propagated_to.push_back(var.func_ea);
+                }
+            } else {
+                if (std::find(result.failed_sites.begin(), result.failed_sites.end(), var.func_ea) == result.failed_sites.end()) {
+                    result.failed_sites.push_back(var.func_ea);
+                }
+            }
+        }
+
+        tinfo_t ptr_type;
+        ptr_type.create_ptr(struct_type);
+        for (const auto& [alias_ea, delta] : analysis.pointer_alias_globals) {
+            if (delta != 0) {
+                continue;
+            }
+            (void)apply_global_tinfo(alias_ea, ptr_type);
+        }
+
+        register_global_rewrite_info(analysis, synth_struct, struct_type);
+        for (ea_t func_ea : analysis.touched_functions) {
+            (void)mark_cfunc_dirty(func_ea, false);
+        }
+
+        result.synthesized_struct = std::make_unique<SynthStruct>(std::move(synth_struct));
+        result.error = SynthError::Success;
+        return result;
+    } catch (const vd_interr_t& e) {
+        return SynthResult::make_error(SynthError::InternalError, e.desc());
+    } catch (const vd_failure_t& e) {
+        return SynthResult::make_error(SynthError::InternalError, e.desc());
+    } catch (const std::exception& e) {
+        return SynthResult::make_error(SynthError::InternalError, e.what());
+    } catch (...) {
+        return SynthResult::make_error(SynthError::InternalError,
+            "Global/static synthesis raised an unexpected exception");
+    }
 }
 
 inline SynthResult StructorAPI::do_synthesis(ea_t func_ea, int var_idx, const SynthOptions& opts) {
