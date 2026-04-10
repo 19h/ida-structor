@@ -229,6 +229,62 @@ bool is_functionish_type(const tinfo_t& type) {
     return !pointed.empty() && pointed.is_func();
 }
 
+bool field_has_vtable_evidence(const SynthField& field, sval_t parent_offset) {
+    if (field.offset != parent_offset || field.size != get_ptr_size()) {
+        return false;
+    }
+
+    if (field.semantic == SemanticType::VTablePointer) {
+        return true;
+    }
+
+    for (const auto& access : field.source_accesses) {
+        if (access.is_vtable_access || access.semantic_type == SemanticType::VTablePointer) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void apply_vtable_pointer_type(SynthStruct& synth_struct) {
+    if (!synth_struct.has_vtable() || synth_struct.vtable->tid == BADADDR) {
+        return;
+    }
+
+    tinfo_t vtbl_type;
+    if (!vtbl_type.get_type_by_tid(synth_struct.vtable->tid)) {
+        return;
+    }
+
+    tinfo_t vtbl_ptr_type;
+    vtbl_ptr_type.create_ptr(vtbl_type);
+
+    for (auto& field : synth_struct.fields) {
+        if (!field_has_vtable_evidence(field, synth_struct.vtable->parent_offset)) {
+            continue;
+        }
+
+        field.semantic = SemanticType::VTablePointer;
+        field.type = vtbl_ptr_type;
+
+        if (field.name.empty() || is_generated_name(field.name, &field.naming)) {
+            qstring preferred_name;
+            if (field.offset == 0) {
+                preferred_name = "vtable";
+            } else {
+                preferred_name.sprnt("vtable_%s", make_offset_suffix(field.offset).c_str());
+            }
+            set_generated_name(field.name,
+                               field.naming,
+                               preferred_name,
+                               GeneratedNameKind::Field,
+                               NameConfidence::High);
+        }
+        break;
+    }
+}
+
 void apply_array_element_role_names(udt_type_data_t& udt) {
     int func_members = 0;
     for (const auto& member : udt) {
@@ -303,6 +359,14 @@ tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
     if (struct_exists(name.c_str())) {
         name = make_unique_name(name.c_str());
         synth_struct.name = name;
+    }
+
+    if (synth_struct.has_vtable()) {
+        tid_t vtbl_tid = create_vtable(*synth_struct.vtable);
+        if (vtbl_tid != BADADDR) {
+            synth_struct.vtable->tid = vtbl_tid;
+            apply_vtable_pointer_type(synth_struct);
+        }
     }
 
     // Create the structure type
@@ -436,15 +500,6 @@ tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
 
     // Get the tid
     tid_t tid = get_named_type_tid(name.c_str());
-
-    // Create vtable structure if present
-    if (synth_struct.has_vtable()) {
-        tid_t vtbl_tid = create_vtable(*synth_struct.vtable);
-        if (vtbl_tid != BADADDR) {
-            synth_struct.vtable->tid = vtbl_tid;
-            // Note: Could update the vtable pointer field type here
-        }
-    }
 
     // Store provenance
     if (tid != BADADDR) {

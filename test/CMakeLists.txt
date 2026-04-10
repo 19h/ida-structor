@@ -72,6 +72,15 @@ if(IDUMP_EXECUTABLE
                 --idump ${IDUMP_EXECUTABLE}
     )
     set_tests_properties(global_recovery_regressions_live PROPERTIES TIMEOUT 240)
+    add_test(
+        NAME vtable_regressions_live
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/integration_tests/check_vtable_regressions.py
+                --repo-root ${CMAKE_SOURCE_DIR}
+                --plugin ${CMAKE_BINARY_DIR}/structor${PLUGIN_EXT}
+                --idump ${IDUMP_EXECUTABLE}
+    )
+    set_tests_properties(vtable_regressions_live PROPERTIES TIMEOUT 240)
     set(LIVE_TYPE_FIX_DEPS structor${IDA_SUFFIX})
 endif()
 

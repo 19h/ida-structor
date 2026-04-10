@@ -165,6 +165,21 @@ SynthField field_from_candidate(
     } else if (TypeEncoder::is_floating(candidate.type_category)) {
         semantic = candidate.size == 4 ? SemanticType::Float : SemanticType::Double;
     }
+
+    if (access_list) {
+        for (int idx : candidate.source_access_indices) {
+            if (idx >= 0 && static_cast<size_t>(idx) < access_list->size()) {
+                const FieldAccess& access = access_list->at(static_cast<size_t>(idx));
+                field.source_accesses.push_back(access);
+                if (semantic != SemanticType::Array &&
+                    semantic != SemanticType::NestedStruct &&
+                    semantic_priority(access.semantic_type) > semantic_priority(semantic)) {
+                    semantic = access.semantic_type;
+                }
+            }
+        }
+    }
+
     field.semantic = semantic;
 
     // Handle arrays
@@ -197,14 +212,6 @@ SynthField field_from_candidate(
             field.naming.kind = GeneratedNameKind::Field;
             field.naming.origin = NameOrigin::GeneratedFallback;
             field.naming.confidence = NameConfidence::Medium;
-        }
-    }
-
-    if (access_list) {
-        for (int idx : candidate.source_access_indices) {
-            if (idx >= 0 && static_cast<size_t>(idx) < access_list->size()) {
-                field.source_accesses.push_back(access_list->at(static_cast<size_t>(idx)));
-            }
         }
     }
 

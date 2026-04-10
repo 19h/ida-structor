@@ -438,13 +438,42 @@ void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr
     }
 
     // Check for vtable access pattern: *(*var + offset)
-    // This is a double dereference where the inner deref is at offset 0
-    if (ptr_expr->op == cot_ptr) {
-        auto inner_arith = utils::extract_ptr_arith(ptr_expr->x);
-        if (inner_arith.valid && inner_arith.var_idx == target_var_idx_ && inner_arith.offset == 0) {
-            // This is accessing through a pointer at offset 0 (vtable pointer)
+    // This is a double dereference where the outer load resolves to a
+    // function pointer slot through a vtable pointer field on the object.
+    const cexpr_t* normalized_ptr = ptr_expr;
+    while (normalized_ptr && normalized_ptr->op == cot_cast) {
+        normalized_ptr = normalized_ptr->x;
+    }
+
+    const cexpr_t* slot_base = normalized_ptr;
+    if (slot_base && slot_base->op == cot_add) {
+        if (slot_base->x && slot_base->x->op == cot_num) {
+            slot_base = slot_base->y;
+        } else if (slot_base->y && slot_base->y->op == cot_num) {
+            slot_base = slot_base->x;
+        }
+    }
+    while (slot_base && slot_base->op == cot_cast) {
+        slot_base = slot_base->x;
+    }
+
+    if (slot_base && slot_base->op == cot_ptr) {
+        auto inner_arith = utils::extract_ptr_arith(slot_base->x);
+        const bool function_slot_like =
+            expr->type.is_funcptr() ||
+            access.semantic_type == SemanticType::FunctionPointer;
+        if (inner_arith.valid && inner_arith.var_idx == target_var_idx_ &&
+            arith.offset >= inner_arith.offset && function_slot_like) {
+            const sval_t slot_offset = arith.offset - inner_arith.offset;
+            // Normalize nested vtable slot dereferences back to the parent
+            // vtable pointer field so we don't mistake the object for the
+            // vtable layout itself.
+            access.offset = inner_arith.offset;
+            access.semantic_type = SemanticType::VTablePointer;
             access.is_vtable_access = true;
-            access.vtable_slot = arith.offset / get_ptr_size();
+            access.vtable_slot = slot_offset / get_ptr_size();
+            access.set_vtable_nested_access(inner_arith.offset, slot_offset, expr->type);
+            access.base_indirection.reset();
         }
     }
 
@@ -513,6 +542,9 @@ void AccessPatternVisitor::process_array_access(cexpr_t* expr) {
         }
     }
 
+    const bool function_slot_like = expr->type.is_funcptr();
+    const sval_t base_offset = arith.offset;
+
     if (expr->y->op == cot_num) {
         if (stride_hint.has_value()) {
             offset += expr->y->numval() * static_cast<sval_t>(*stride_hint);
@@ -536,8 +568,19 @@ void AccessPatternVisitor::process_array_access(cexpr_t* expr) {
                 const cexpr_t* parent = parent_expr();
                 bounded.semantic_type = infer_semantic_from_usage(expr, parent);
                 bounded.is_call_argument = is_call_argument_use(expr);
+                if (function_slot_like && arith.base_indirection > 0 && stride_hint.has_value()) {
+                    bounded.offset = base_offset;
+                    bounded.semantic_type = SemanticType::VTablePointer;
+                    bounded.is_vtable_access = true;
+                    bounded.vtable_slot = idx;
+                    bounded.set_vtable_nested_access(base_offset,
+                                                     static_cast<sval_t>(idx) * static_cast<sval_t>(*stride_hint),
+                                                     expr->type);
+                }
                 if (arith.base_indirection > 0) {
-                    bounded.base_indirection = arith.base_indirection;
+                    if (!bounded.is_vtable_access) {
+                        bounded.base_indirection = arith.base_indirection;
+                    }
                 }
                 bounded.context_expr = utils::expr_to_string(expr, cfunc_);
                 bounded.inferred_type = expr->type;
@@ -563,8 +606,18 @@ void AccessPatternVisitor::process_array_access(cexpr_t* expr) {
     const cexpr_t* parent = parent_expr();
     access.semantic_type = infer_semantic_from_usage(expr, parent);
     access.is_call_argument = is_call_argument_use(expr);
+    if (function_slot_like && arith.base_indirection > 0 && stride_hint.has_value() && expr->y->op == cot_num) {
+        const sval_t slot_offset = offset - base_offset;
+        access.offset = base_offset;
+        access.semantic_type = SemanticType::VTablePointer;
+        access.is_vtable_access = true;
+        access.vtable_slot = slot_offset / static_cast<sval_t>(*stride_hint);
+        access.set_vtable_nested_access(base_offset, slot_offset, expr->type);
+    }
     if (arith.base_indirection > 0) {
-        access.base_indirection = arith.base_indirection;
+        if (!access.is_vtable_access) {
+            access.base_indirection = arith.base_indirection;
+        }
     }
     access.context_expr = utils::expr_to_string(expr, cfunc_);
     access.inferred_type = expr->type;
@@ -668,6 +721,12 @@ void AccessPatternVisitor::process_call_through_ptr(cexpr_t* call_expr) {
     // Pattern 2: VTable call: (*(*(type**)var + slot))(args)
     if (callee->op == cot_ptr) {
         const cexpr_t* ptr = callee->x;
+        while (ptr && ptr->op == cot_cast) {
+            ptr = ptr->x;
+        }
+        if (!ptr) {
+            return;
+        }
 
         // Check for double dereference (vtable pattern)
         if (ptr->op == cot_add || ptr->op == cot_ptr) {
@@ -677,11 +736,18 @@ void AccessPatternVisitor::process_call_through_ptr(cexpr_t* call_expr) {
             if (ptr->op == cot_add) {
                 if (ptr->y->op == cot_num) {
                     slot_offset = ptr->y->numval();
+                    base_ptr = ptr->x;
+                } else if (ptr->x->op == cot_num) {
+                    slot_offset = ptr->x->numval();
+                    base_ptr = ptr->y;
                 }
-                base_ptr = ptr->x;
             }
 
-            if (base_ptr->op == cot_ptr) {
+            while (base_ptr && base_ptr->op == cot_cast) {
+                base_ptr = base_ptr->x;
+            }
+
+            if (base_ptr && base_ptr->op == cot_ptr) {
                 auto arith = utils::extract_ptr_arith(base_ptr->x);
                 if (arith.valid && arith.var_idx == target_var_idx_) {
                     add_fp_access(arith.offset, SemanticType::VTablePointer, true, slot_offset);

@@ -72,6 +72,11 @@ inline int VTableDetector::VTableCallVisitor::visit_expr(cexpr_t* expr) {
     const cexpr_t* slot_expr = callee->x;
     if (!slot_expr) return 0;
 
+    while (slot_expr && slot_expr->op == cot_cast) {
+        slot_expr = slot_expr->x;
+    }
+    if (!slot_expr) return 0;
+
     sval_t slot_offset = 0;
     const cexpr_t* vtbl_deref = slot_expr;
 
@@ -79,8 +84,15 @@ inline int VTableDetector::VTableCallVisitor::visit_expr(cexpr_t* expr) {
     if (slot_expr->op == cot_add) {
         if (slot_expr->y && slot_expr->y->op == cot_num) {
             slot_offset = slot_expr->y->numval();
+            vtbl_deref = slot_expr->x;
+        } else if (slot_expr->x && slot_expr->x->op == cot_num) {
+            slot_offset = slot_expr->x->numval();
+            vtbl_deref = slot_expr->y;
         }
-        vtbl_deref = slot_expr->x;
+    }
+
+    while (vtbl_deref && vtbl_deref->op == cot_cast) {
+        vtbl_deref = vtbl_deref->x;
     }
 
     // vtbl_deref should be *(var + vtable_offset) or *var

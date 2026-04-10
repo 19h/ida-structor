@@ -44,6 +44,7 @@ TEST_F(SynthTypesTest, FieldAccessDefaultConstruction) {
     EXPECT_EQ(access.access_type, AccessType::Unknown);
     EXPECT_EQ(access.semantic_type, SemanticType::Unknown);
     EXPECT_FALSE(access.is_vtable_access);
+    EXPECT_FALSE(access.is_call_argument);
     EXPECT_EQ(access.vtable_slot, -1);
 }
 
