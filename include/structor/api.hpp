@@ -146,25 +146,41 @@ private:
     };
 
     bool prepared = false;
+    bool set_ok = false;
+    bool apply_ok = false;
+    bool decl_ok = false;
 
-    const size_t type_size = type.get_size();
-    if ((type.is_struct() || type.is_union()) && type_size != BADSIZE && type_size > 0) {
-        tid_t tid = type.get_tid();
-        if (tid != BADADDR) {
-            prepared = create_struct(ea, type_size, tid, true) || prepared;
+    try {
+        const size_t type_size = type.get_size();
+        if ((type.is_struct() || type.is_union()) && type_size != BADSIZE && type_size > 0) {
+            tid_t tid = type.get_tid();
+            if (tid != BADADDR) {
+                prepared = create_struct(ea, type_size, tid, true) || prepared;
+            }
+        } else if (type.is_ptr() || type.is_funcptr()) {
+            const asize_t ptr_size = static_cast<asize_t>(get_ptr_size());
+            if (ptr_size == 8) {
+                prepared = create_qword(ea, ptr_size, true) || prepared;
+            } else if (ptr_size == 4) {
+                prepared = create_dword(ea, ptr_size, true) || prepared;
+            }
         }
-    } else if (type.is_ptr() || type.is_funcptr()) {
-        const asize_t ptr_size = static_cast<asize_t>(get_ptr_size());
-        if (ptr_size == 8) {
-            prepared = create_qword(ea, ptr_size, true) || prepared;
-        } else if (ptr_size == 4) {
-            prepared = create_dword(ea, ptr_size, true) || prepared;
-        }
+    } catch (...) {
     }
 
-    bool set_ok = set_tinfo(ea, &type);
-    bool apply_ok = apply_tinfo(ea, type, TINFO_DEFINITE | TINFO_STRICT);
-    bool decl_ok = apply_decl(type);
+    try {
+        set_ok = set_tinfo(ea, &type);
+    } catch (...) {
+    }
+    try {
+        apply_ok = apply_tinfo(ea, type, TINFO_DEFINITE | TINFO_STRICT);
+    } catch (...) {
+    }
+    try {
+        decl_ok = apply_decl(type);
+    } catch (...) {
+    }
+
     return prepared || set_ok || apply_ok || decl_ok;
 #else
     (void)ea;
@@ -534,11 +550,17 @@ inline SynthResult StructorAPI::do_global_synthesis(ea_t global_ea, const SynthO
                 continue;
             }
 
-            if (propagator.apply_type(cfunc, var.var_idx, struct_type)) {
-                if (std::find(result.propagated_to.begin(), result.propagated_to.end(), var.func_ea) == result.propagated_to.end()) {
-                    result.propagated_to.push_back(var.func_ea);
+            try {
+                if (propagator.apply_type(cfunc, var.var_idx, struct_type)) {
+                    if (std::find(result.propagated_to.begin(), result.propagated_to.end(), var.func_ea) == result.propagated_to.end()) {
+                        result.propagated_to.push_back(var.func_ea);
+                    }
+                } else {
+                    if (std::find(result.failed_sites.begin(), result.failed_sites.end(), var.func_ea) == result.failed_sites.end()) {
+                        result.failed_sites.push_back(var.func_ea);
+                    }
                 }
-            } else {
+            } catch (...) {
                 if (std::find(result.failed_sites.begin(), result.failed_sites.end(), var.func_ea) == result.failed_sites.end()) {
                     result.failed_sites.push_back(var.func_ea);
                 }
@@ -554,9 +576,15 @@ inline SynthResult StructorAPI::do_global_synthesis(ea_t global_ea, const SynthO
             (void)apply_global_tinfo(alias_ea, ptr_type);
         }
 
-        register_global_rewrite_info(analysis, synth_struct, struct_type);
+        try {
+            register_global_rewrite_info(analysis, synth_struct, struct_type);
+        } catch (...) {
+        }
         for (ea_t func_ea : analysis.touched_functions) {
-            (void)mark_cfunc_dirty(func_ea, false);
+            try {
+                (void)mark_cfunc_dirty(func_ea, false);
+            } catch (...) {
+            }
         }
 
         result.synthesized_struct = std::make_unique<SynthStruct>(std::move(synth_struct));

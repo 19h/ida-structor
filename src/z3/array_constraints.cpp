@@ -41,7 +41,37 @@ bool categories_compatible_for_array(TypeCategory a, TypeCategory b) {
         return true;
     }
 
+    const bool a_ptr_like = a == TypeCategory::Pointer || a == TypeCategory::FuncPtr;
+    const bool b_ptr_like = b == TypeCategory::Pointer || b == TypeCategory::FuncPtr;
+    if (a_ptr_like && b_ptr_like) {
+        return true;
+    }
+
     if (TypeEncoder::is_integer(a) && TypeEncoder::is_integer(b)) {
+        return true;
+    }
+
+    return false;
+}
+
+bool semantics_compatible_for_array(SemanticType a, SemanticType b) {
+    if (a == b || a == SemanticType::Unknown || b == SemanticType::Unknown) {
+        return true;
+    }
+
+    const bool a_int = a == SemanticType::Integer || a == SemanticType::UnsignedInteger;
+    const bool b_int = b == SemanticType::Integer || b == SemanticType::UnsignedInteger;
+    if (a_int && b_int) {
+        return true;
+    }
+
+    const bool a_ptr_like = a == SemanticType::Pointer ||
+                            a == SemanticType::FunctionPointer ||
+                            a == SemanticType::VTablePointer;
+    const bool b_ptr_like = b == SemanticType::Pointer ||
+                            b == SemanticType::FunctionPointer ||
+                            b == SemanticType::VTablePointer;
+    if (a_ptr_like && b_ptr_like) {
         return true;
     }
 
@@ -368,39 +398,31 @@ bool ArrayConstraintBuilder::verify_type_consistency(
 {
     if (accesses.empty()) return true;
 
-    // Check that all accesses have compatible types
-    SemanticType first_semantic = accesses[0]->semantic_type;
     uint32_t first_size = accesses[0]->size;
+    SemanticType seen_semantic = SemanticType::Unknown;
+    TypeCategory seen_category = TypeCategory::Unknown;
 
     for (const auto* access : accesses) {
         if (access->size != first_size) {
             return false;
         }
 
-        // Allow some flexibility in semantic type
-        if (access->semantic_type != first_semantic) {
-            // Both unknown is OK
-            if (first_semantic == SemanticType::Unknown ||
-                access->semantic_type == SemanticType::Unknown) {
-                continue;
-            }
-
-            // Integer/UnsignedInteger compatibility
-            if ((first_semantic == SemanticType::Integer ||
-                 first_semantic == SemanticType::UnsignedInteger) &&
-                (access->semantic_type == SemanticType::Integer ||
-                 access->semantic_type == SemanticType::UnsignedInteger)) {
-                continue;
-            }
-
+        if (!semantics_compatible_for_array(seen_semantic, access->semantic_type)) {
             return false;
+        }
+        if (seen_semantic == SemanticType::Unknown && access->semantic_type != SemanticType::Unknown) {
+            seen_semantic = access->semantic_type;
         }
 
         if (!accesses[0]->inferred_type.empty() && !access->inferred_type.empty()) {
-            TypeCategory first_cat = ctx_.type_encoder().categorize(accesses[0]->inferred_type);
             TypeCategory this_cat = ctx_.type_encoder().categorize(access->inferred_type);
-            if (!categories_compatible_for_array(first_cat, this_cat)) {
+            if (seen_category != TypeCategory::Unknown &&
+                this_cat != TypeCategory::Unknown &&
+                !categories_compatible_for_array(seen_category, this_cat)) {
                 return false;
+            }
+            if (seen_category == TypeCategory::Unknown && this_cat != TypeCategory::Unknown) {
+                seen_category = this_cat;
             }
         }
     }

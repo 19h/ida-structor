@@ -266,6 +266,34 @@ bool types_equal(const tinfo_t& a, const tinfo_t& b) {
     return a.equals_to(b);
 }
 
+bool derive_caller_type_from_shifted_view(const tinfo_t& shifted_type,
+                                          sval_t member_offset,
+                                          tinfo_t& out_type) {
+    if (member_offset < 0) {
+        return false;
+    }
+
+    qstring type_name;
+    shifted_type.get_type_name(&type_name);
+    const std::optional<sval_t> view_delta = extract_shifted_view_delta(type_name);
+    if (!view_delta.has_value() || *view_delta <= 0 || *view_delta != member_offset) {
+        return false;
+    }
+
+    if (shifted_type.is_ptr()) {
+        out_type = shifted_type;
+        return true;
+    }
+
+    tinfo_t ptr_type;
+    if (!ptr_type.create_ptr(shifted_type)) {
+        return false;
+    }
+
+    out_type = ptr_type;
+    return true;
+}
+
 tinfo_t derive_callee_type(const tinfo_t& parent_type,
                            sval_t member_offset,
                            bool by_ref,
@@ -403,34 +431,47 @@ PropagationResult TypePropagator::propagate_local(
 bool TypePropagator::apply_type(cfunc_t* cfunc, int var_idx, const tinfo_t& type) {
     if (!cfunc || type.empty()) return false;
 
-    lvars_t* lvars = cfunc->get_lvars();
-    if (!lvars || var_idx < 0 || static_cast<size_t>(var_idx) >= lvars->size()) {
-        return false;
-    }
-
-    lvar_t& var = lvars->at(var_idx);
-
-    // Create pointer type to the synthesized struct
-    tinfo_t ptr_type = type;
-    if (!ptr_type.is_ptr()) {
-        if (!make_shifted_window_ptr(type, ptr_type)) {
-            ptr_type.create_ptr(type);
+    try {
+        lvars_t* lvars = cfunc->get_lvars();
+        if (!lvars || var_idx < 0 || static_cast<size_t>(var_idx) >= lvars->size()) {
+            return false;
         }
-    }
 
-    // Apply type
-    lvar_saved_info_t lsi;
-    lsi.ll = var;
-    lsi.type = ptr_type;
+        lvar_t& var = lvars->at(var_idx);
 
-    if (!modify_user_lvar_info(cfunc->entry_ea, MLI_TYPE, lsi)) {
+        tinfo_t applied_type = type;
+        if (!applied_type.is_ptr()) {
+            const tinfo_t current_type = var.type();
+            const bool keep_aggregate_type =
+                !var.is_arg_var() &&
+                !current_type.empty() &&
+                !current_type.is_ptr() &&
+                !current_type.is_funcptr();
+
+            if (!keep_aggregate_type) {
+                if (!make_shifted_window_ptr(type, applied_type)) {
+                    applied_type.create_ptr(type);
+                }
+            }
+        }
+
+        lvar_saved_info_t lsi;
+        lsi.ll = var;
+        lsi.type = applied_type;
+
+        if (!modify_user_lvar_info(cfunc->entry_ea, MLI_TYPE, lsi)) {
+            return false;
+        }
+
+        var.set_lvar_type(applied_type);
+        return true;
+    } catch (const vd_interr_t&) {
+        return false;
+    } catch (const vd_failure_t&) {
+        return false;
+    } catch (...) {
         return false;
     }
-
-    // Force refresh
-    var.set_lvar_type(ptr_type);
-
-    return true;
 }
 
 void TypePropagator::propagate_forward(
@@ -647,10 +688,12 @@ void TypePropagator::propagate_backward(
         if (!caller_cfunc) continue;
 
         tinfo_t caller_type = type;
-        if (info.by_ref && type.is_ptr()) {
-            tinfo_t deref = type.get_pointed_object();
-            if (!deref.empty()) {
-                caller_type = deref;
+        if (!derive_caller_type_from_shifted_view(type, info.member_offset, caller_type)) {
+            if (info.by_ref && type.is_ptr()) {
+                tinfo_t deref = type.get_pointed_object();
+                if (!deref.empty()) {
+                    caller_type = deref;
+                }
             }
         }
 
@@ -983,6 +1026,79 @@ void TypePropagator::find_callers_with_param(
                 }
             }
 
+            static const cexpr_t* strip_casts_and_refs(const cexpr_t* expr) {
+                while (expr && (expr->op == cot_cast || expr->op == cot_ref)) {
+                    expr = expr->x;
+                }
+                return expr;
+            }
+
+            bool resolve_var_delta(const cexpr_t* expr, int& var_idx, sval_t& delta) const {
+                if (!expr) {
+                    return false;
+                }
+
+                switch (expr->op) {
+                    case cot_var:
+                        var_idx = expr->v.idx;
+                        return true;
+                    case cot_cast:
+                    case cot_ref:
+                    case cot_ptr:
+                        return resolve_var_delta(expr->x, var_idx, delta);
+                    case cot_add:
+                        if (expr->y && expr->y->op == cot_num && resolve_var_delta(expr->x, var_idx, delta)) {
+                            delta += static_cast<sval_t>(expr->y->numval());
+                            return true;
+                        }
+                        if (expr->x && expr->x->op == cot_num && resolve_var_delta(expr->y, var_idx, delta)) {
+                            delta += static_cast<sval_t>(expr->x->numval());
+                            return true;
+                        }
+                        return false;
+                    case cot_sub:
+                        if (expr->y && expr->y->op == cot_num && resolve_var_delta(expr->x, var_idx, delta)) {
+                            delta -= static_cast<sval_t>(expr->y->numval());
+                            return true;
+                        }
+                        return false;
+                    case cot_memptr:
+                    case cot_memref:
+                        if (resolve_var_delta(expr->x, var_idx, delta)) {
+                            delta += expr->m;
+                            return true;
+                        }
+                        return false;
+                    case cot_idx:
+                        return resolve_var_delta(expr->x, var_idx, delta);
+                    default:
+                        return false;
+                }
+            }
+
+            sval_t extract_member_offset(const cexpr_t* expr, int var_idx) const {
+                expr = strip_casts_and_refs(expr);
+                if (!expr) {
+                    return -1;
+                }
+
+                if (expr->op == cot_memptr || expr->op == cot_memref) {
+                    int base_var = -1;
+                    sval_t delta = 0;
+                    if (resolve_var_delta(expr->x, base_var, delta) && base_var == var_idx) {
+                        return delta + static_cast<sval_t>(expr->m);
+                    }
+                }
+
+                int base_var = -1;
+                sval_t delta = 0;
+                if (resolve_var_delta(expr, base_var, delta) && base_var == var_idx && delta > 0) {
+                    return delta;
+                }
+
+                return -1;
+            }
+
             int idaapi visit_expr(cexpr_t* expr) override {
                 if (expr->op != cot_call || !expr->a) return 0;
 
@@ -1005,6 +1121,7 @@ void TypePropagator::find_callers_with_param(
                     info.caller_ea = caller_ea;
                     info.var_idx = base_var->v.idx;
                     info.by_ref = contains_ref(&arg);
+                    info.member_offset = extract_member_offset(&arg, info.var_idx);
                     results.push_back(info);
                 }
 

@@ -49,6 +49,7 @@ private:
         ea_t caller_ea = BADADDR;
         int var_idx = -1;
         bool by_ref = false;
+        sval_t member_offset = -1;
     };
 
     void propagate_forward(

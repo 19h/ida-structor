@@ -183,7 +183,8 @@ namespace {
             uint32_t merged_count = 1;
 
             size_t j = i + 1;
-            while (j < fields.size() && is_array_mergeable(merged, fields[j])) {
+            while (j < fields.size() && is_array_mergeable(merged, fields[j]) &&
+                   is_byte_field(merged) && is_byte_field(fields[j])) {
                 merged.size += fields[j].size;
                 ++merged_count;
                 ++j;
@@ -254,10 +255,74 @@ namespace {
         return true;
     }
 
+    double repeated_field_coverage_ratio(const qvector<MixedStrideField>& fields, uint32_t stride) {
+        if (stride == 0 || fields.empty()) {
+            return 0.0;
+        }
+
+        uint32_t covered = 0;
+        for (const auto& field : fields) {
+            covered += field.size;
+        }
+
+        return static_cast<double>(covered) / static_cast<double>(stride);
+    }
+
+    bool has_mixed_scalar_array_semantics(const UnifiedAccessPattern& pattern,
+                                          const qvector<int>& source_indices) {
+        bool saw_pointer_like = false;
+        bool saw_scalar_like = false;
+
+        for (int idx : source_indices) {
+            if (idx < 0 || static_cast<size_t>(idx) >= pattern.all_accesses.size()) {
+                continue;
+            }
+
+            const auto& access = pattern.all_accesses[static_cast<size_t>(idx)];
+            switch (access.semantic_type) {
+                case SemanticType::Pointer:
+                case SemanticType::FunctionPointer:
+                case SemanticType::VTablePointer:
+                    saw_pointer_like = true;
+                    break;
+                case SemanticType::Integer:
+                case SemanticType::UnsignedInteger:
+                case SemanticType::Float:
+                case SemanticType::Double:
+                    saw_scalar_like = true;
+                    break;
+                default:
+                    break;
+            }
+
+            if (!access.inferred_type.empty()) {
+                if (access.inferred_type.is_ptr() || access.inferred_type.is_funcptr()) {
+                    saw_pointer_like = true;
+                } else if (access.inferred_type.is_integral() || access.inferred_type.is_floating()) {
+                    saw_scalar_like = true;
+                }
+            }
+        }
+
+        return saw_pointer_like && saw_scalar_like;
+    }
+
+    bool has_multiple_nonbyte_repeated_fields(const qvector<MixedStrideField>& fields) {
+        int nonbyte_count = 0;
+        for (const auto& field : fields) {
+            if (field.size > 1) {
+                ++nonbyte_count;
+            }
+        }
+        return nonbyte_count >= 2;
+    }
+
     void augment_struct_array_candidate(ArrayCandidate& array, const UnifiedAccessPattern& pattern) {
         if (!array.needs_element_struct || array.stride == 0 || array.element_count < 3) {
             return;
         }
+
+        constexpr double kMinStructElementCoverage = 0.75;
 
         struct BestAugmentation {
             sval_t base = 0;
@@ -331,6 +396,14 @@ namespace {
             return;
         }
 
+        if (!has_multiple_nonbyte_repeated_fields(best.fields)) {
+            return;
+        }
+
+        if (repeated_field_coverage_ratio(best.fields, array.stride) < kMinStructElementCoverage) {
+            return;
+        }
+
         tinfo_t struct_type;
         if (!build_struct_type_from_groups(best.fields, array.stride, struct_type)) {
             return;
@@ -356,6 +429,8 @@ namespace {
         uint32_t stride,
         uint32_t count)
     {
+        constexpr double kMinStructElementCoverage = 0.75;
+
         if (count < 3 || stride == 0) {
             return std::nullopt;
         }
@@ -404,6 +479,14 @@ namespace {
         }
 
         if (repeated.size() < 2) {
+            return std::nullopt;
+        }
+
+        if (!has_multiple_nonbyte_repeated_fields(repeated)) {
+            return std::nullopt;
+        }
+
+        if (repeated_field_coverage_ratio(repeated, stride) < kMinStructElementCoverage) {
             return std::nullopt;
         }
 
@@ -762,9 +845,9 @@ void FieldCandidateGenerator::generate_array_candidates(
         direct_index[key] = static_cast<int>(i);
     }
 
-    for (const auto& detected_array : arrays) {
-        ArrayCandidate array = detected_array;
-        augment_struct_array_candidate(array, pattern);
+        for (const auto& detected_array : arrays) {
+            ArrayCandidate array = detected_array;
+            augment_struct_array_candidate(array, pattern);
 
         if (array.element_count == 0) {
             continue;
@@ -789,10 +872,6 @@ void FieldCandidateGenerator::generate_array_candidates(
         uint32_t access_size = static_cast<uint32_t>(elem_size);
         if (array.needs_element_struct && array.inner_access_size > 0) {
             access_size = array.inner_access_size;
-        }
-
-        if (array.element_count == 3 && access_size == 4 && !array.needs_element_struct) {
-            continue;
         }
 
         bool conflicting_access = false;
@@ -844,61 +923,12 @@ void FieldCandidateGenerator::generate_array_candidates(
             }
         }
 
+        if (!array.needs_element_struct &&
+            has_mixed_scalar_array_semantics(pattern, array_candidate.source_access_indices)) {
+            continue;
+        }
+
         candidates.push_back(std::move(array_candidate));
-    }
-
-    // Direct contiguous byte-run detection for compact tails such as
-    // checksum arrays. This prevents larger shifted struct-array candidates
-    // from being the only way to cover a short byte sequence.
-    qvector<sval_t> byte_offsets;
-    for (const auto& access : pattern.all_accesses) {
-        if (access.size == 1) {
-            byte_offsets.push_back(access.offset);
-        }
-    }
-
-    std::sort(byte_offsets.begin(), byte_offsets.end());
-    byte_offsets.erase(std::unique(byte_offsets.begin(), byte_offsets.end()), byte_offsets.end());
-
-    size_t run_start = 0;
-    while (run_start < byte_offsets.size()) {
-        size_t run_end = run_start + 1;
-        while (run_end < byte_offsets.size() && byte_offsets[run_end] == byte_offsets[run_end - 1] + 1) {
-            ++run_end;
-        }
-
-        const size_t run_len = run_end - run_start;
-        const int byte_tail_min = config_.min_array_elements > 2 ? 2 : config_.min_array_elements;
-        if (run_len >= static_cast<size_t>(byte_tail_min)) {
-            FieldCandidate byte_array;
-            byte_array.offset = byte_offsets[run_start];
-            byte_array.size = static_cast<uint32_t>(run_len);
-            byte_array.kind = FieldCandidate::Kind::ArrayField;
-            byte_array.type_category = TypeCategory::UInt8;
-            byte_array.array_element_count = static_cast<uint32_t>(run_len);
-            byte_array.array_stride = 1;
-            byte_array.confidence = TypeConfidence::Medium;
-
-            for (size_t i = 0; i < pattern.all_accesses.size(); ++i) {
-                const auto& access = pattern.all_accesses[i];
-                if (access.size == 1 &&
-                    access.offset >= byte_array.offset &&
-                    access.offset < byte_array.offset + static_cast<sval_t>(byte_array.size)) {
-                    byte_array.source_access_indices.push_back(static_cast<int>(i));
-                }
-            }
-
-            bool duplicate = std::any_of(candidates.begin(), candidates.end(), [&](const FieldCandidate& existing) {
-                return existing.kind == FieldCandidate::Kind::ArrayField &&
-                       existing.offset == byte_array.offset &&
-                       existing.size == byte_array.size;
-            });
-            if (!duplicate) {
-                candidates.push_back(std::move(byte_array));
-            }
-        }
-
-        run_start = run_end;
     }
 
     // Explicit repeated-anchor detection for arrays-of-structs. Start from a
@@ -1000,6 +1030,71 @@ void FieldCandidateGenerator::generate_array_candidates(
                 }
             }
         }
+    }
+
+    // Direct contiguous byte-run detection for compact tails such as
+    // checksum arrays. Run this after struct-array candidates have been added
+    // so byte tails do not swallow the last byte of a packed element.
+    qvector<sval_t> byte_offsets;
+    for (const auto& access : pattern.all_accesses) {
+        if (access.size != 1) {
+            continue;
+        }
+
+        const bool consumed_by_struct_array = std::any_of(candidates.begin(), candidates.end(),
+            [&](const FieldCandidate& candidate) {
+                return candidate.kind == FieldCandidate::Kind::ArrayField &&
+                       candidate.type_category == TypeCategory::Struct &&
+                       access.offset >= candidate.offset &&
+                       access.offset < candidate.end_offset();
+            });
+        if (!consumed_by_struct_array) {
+            byte_offsets.push_back(access.offset);
+        }
+    }
+
+    std::sort(byte_offsets.begin(), byte_offsets.end());
+    byte_offsets.erase(std::unique(byte_offsets.begin(), byte_offsets.end()), byte_offsets.end());
+
+    size_t run_start = 0;
+    while (run_start < byte_offsets.size()) {
+        size_t run_end = run_start + 1;
+        while (run_end < byte_offsets.size() && byte_offsets[run_end] == byte_offsets[run_end - 1] + 1) {
+            ++run_end;
+        }
+
+        const size_t run_len = run_end - run_start;
+        const int byte_tail_min = config_.min_array_elements > 2 ? 2 : config_.min_array_elements;
+        if (run_len >= static_cast<size_t>(byte_tail_min)) {
+            FieldCandidate byte_array;
+            byte_array.offset = byte_offsets[run_start];
+            byte_array.size = static_cast<uint32_t>(run_len);
+            byte_array.kind = FieldCandidate::Kind::ArrayField;
+            byte_array.type_category = TypeCategory::UInt8;
+            byte_array.array_element_count = static_cast<uint32_t>(run_len);
+            byte_array.array_stride = 1;
+            byte_array.confidence = TypeConfidence::Medium;
+
+            for (size_t i = 0; i < pattern.all_accesses.size(); ++i) {
+                const auto& access = pattern.all_accesses[i];
+                if (access.size == 1 &&
+                    access.offset >= byte_array.offset &&
+                    access.offset < byte_array.offset + static_cast<sval_t>(byte_array.size)) {
+                    byte_array.source_access_indices.push_back(static_cast<int>(i));
+                }
+            }
+
+            bool duplicate = std::any_of(candidates.begin(), candidates.end(), [&](const FieldCandidate& existing) {
+                return existing.kind == FieldCandidate::Kind::ArrayField &&
+                       existing.offset == byte_array.offset &&
+                       existing.size == byte_array.size;
+            });
+            if (!duplicate) {
+                candidates.push_back(std::move(byte_array));
+            }
+        }
+
+        run_start = run_end;
     }
 }
 
