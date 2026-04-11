@@ -2,8 +2,40 @@
 /// @brief Access pattern collection implementation
 
 #include <structor/access_collector.hpp>
+#include <structor/config.hpp>
 
 namespace structor {
+
+namespace {
+
+bool is_aggregate_member_container(const cexpr_t* expr) {
+    if (!expr || (expr->op != cot_memref && expr->op != cot_memptr) || !expr->x) {
+        return false;
+    }
+
+    tinfo_t base_type = expr->x->type;
+    if (base_type.is_ptr()) {
+        base_type = base_type.get_pointed_object();
+    }
+
+    udt_type_data_t udt;
+    if (!base_type.get_udt_details(&udt)) {
+        return false;
+    }
+
+    const uint64 member_offset = static_cast<uint64>(expr->m) * 8;
+    for (const auto& member : udt) {
+        if (member.offset != member_offset || member.type.empty()) {
+            continue;
+        }
+
+        return member.type.is_array() || member.type.is_struct() || member.type.is_union();
+    }
+
+    return false;
+}
+
+} // namespace
 
 // ============================================================================
 // AccessPatternVisitor Implementation
@@ -486,7 +518,8 @@ void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr
 
 void AccessPatternVisitor::process_memptr_access(cexpr_t* expr) {
     const cexpr_t* parent = parent_expr();
-    if ((expr->type.is_array() || expr->type.is_struct()) && parent != nullptr) {
+    if ((expr->type.is_array() || expr->type.is_struct() || is_aggregate_member_container(expr)) &&
+        parent != nullptr) {
         switch (parent->op) {
             case cot_idx:
             case cot_call:
@@ -654,7 +687,7 @@ void AccessPatternVisitor::process_call_argument_uses(cexpr_t* call_expr) {
             continue;
         }
 
-        if (arg_expr->type.is_array() || arg_expr->type.is_struct()) {
+        if (arg_expr->type.is_array() || arg_expr->type.is_struct() || is_aggregate_member_container(arg_expr)) {
             continue;
         }
 
@@ -1158,6 +1191,23 @@ AccessPattern AccessCollector::collect(cfunc_t* cfunc, int var_idx) {
     // Post-process
     analyze_accesses(pattern);
     deduplicate_accesses(pattern);
+
+    if (Config::instance().options().debug_mode) {
+        qstring func_name;
+        get_func_name(&func_name, pattern.func_ea);
+        msg("Structor: collected %zu accesses for %s var_idx=%d\n",
+            pattern.accesses.size(), func_name.c_str(), var_idx);
+        for (const auto& access : pattern.accesses) {
+            msg("Structor:   access off=0x%llX size=%u sem=%s type=%s base_indir=%u call_arg=%s ctx=%s\n",
+                static_cast<unsigned long long>(access.offset),
+                access.size,
+                semantic_type_str(access.semantic_type),
+                access.inferred_type.dstr(),
+                access.base_indirection.value_or(0),
+                access.is_call_argument ? "true" : "false",
+                access.context_expr.c_str());
+        }
+    }
 
     if (options_.vtable_detection) {
         detect_vtable_pattern(pattern);

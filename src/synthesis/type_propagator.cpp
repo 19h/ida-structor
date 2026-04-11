@@ -483,7 +483,12 @@ bool TypePropagator::apply_type(cfunc_t* cfunc, int var_idx, const tinfo_t& type
             return false;
         }
 
-        var.set_lvar_type(applied_type);
+        // Keep the cached lvar in sync when Hex-Rays accepts the type, but
+        // never force an in-memory update that would raise an internal error
+        // on already-decompiled special arguments such as C++ 'this'.
+        if (var.accepts_type(applied_type, false)) {
+            (void)var.set_lvar_type(applied_type, true);
+        }
         return true;
     } catch (const vd_interr_t&) {
         return false;
@@ -710,7 +715,9 @@ void TypePropagator::propagate_backward(
         if (!caller_cfunc) continue;
 
         tinfo_t caller_type = type;
-        if (!derive_caller_type_from_shifted_view(type, info.member_offset, caller_type)) {
+        const bool derived_shifted_caller_type =
+            derive_caller_type_from_shifted_view(type, info.member_offset, caller_type);
+        if (!derived_shifted_caller_type) {
             if (info.by_ref && type.is_ptr()) {
                 tinfo_t deref = type.get_pointed_object();
                 if (!deref.empty()) {
@@ -727,6 +734,9 @@ void TypePropagator::propagate_backward(
 
         lvars_t& caller_lvars = *caller_cfunc->get_lvars();
         if (info.var_idx >= 0 && static_cast<size_t>(info.var_idx) < caller_lvars.size()) {
+            if (derived_shifted_caller_type && !caller_lvars[info.var_idx].is_arg_var()) {
+                continue;
+            }
             site.var_name = caller_lvars[info.var_idx].name;
             site.old_type = caller_lvars[info.var_idx].type();
         }

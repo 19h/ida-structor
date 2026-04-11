@@ -540,10 +540,24 @@ inline SynthResult StructorAPI::do_global_synthesis(ea_t global_ea, const SynthO
                 "Failed to load synthesized structure type");
         }
 
+        if (opts.debug_mode) {
+            msg("Structor: applying synthesized global type at 0x%llX\n",
+                static_cast<unsigned long long>(global_ea));
+        }
         (void)apply_global_tinfo(global_ea, struct_type);
 
         TypePropagator propagator(opts);
+        if (opts.debug_mode) {
+            msg("Structor: propagating global type to %zu zero-delta vars\n",
+                analysis.zero_delta_variables.size());
+        }
         for (const auto& var : analysis.zero_delta_variables) {
+            if (opts.debug_mode) {
+                qstring func_name;
+                get_func_name(&func_name, var.func_ea);
+                msg("Structor:   global propagate candidate %s var_idx=%d\n",
+                    func_name.c_str(), var.var_idx);
+            }
             cfuncptr_t cfunc = utils::get_cfunc(var.func_ea);
             if (!cfunc) {
                 result.failed_sites.push_back(var.func_ea);
@@ -569,14 +583,26 @@ inline SynthResult StructorAPI::do_global_synthesis(ea_t global_ea, const SynthO
 
         tinfo_t ptr_type;
         ptr_type.create_ptr(struct_type);
+        if (opts.debug_mode) {
+            msg("Structor: applying pointer aliases for %zu globals\n",
+                analysis.pointer_alias_globals.size());
+        }
         for (const auto& [alias_ea, delta] : analysis.pointer_alias_globals) {
             if (delta != 0) {
                 continue;
+            }
+            if (opts.debug_mode) {
+                msg("Structor:   applying pointer alias type at 0x%llX\n",
+                    static_cast<unsigned long long>(alias_ea));
             }
             (void)apply_global_tinfo(alias_ea, ptr_type);
         }
 
         try {
+            if (opts.debug_mode) {
+                msg("Structor: registering global rewrite info for %s\n",
+                    analysis.root_name.c_str());
+            }
             register_global_rewrite_info(analysis, synth_struct, struct_type);
         } catch (...) {
         }
