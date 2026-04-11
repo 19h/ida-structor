@@ -485,6 +485,20 @@ void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr
 }
 
 void AccessPatternVisitor::process_memptr_access(cexpr_t* expr) {
+    const cexpr_t* parent = parent_expr();
+    if ((expr->type.is_array() || expr->type.is_struct()) && parent != nullptr) {
+        switch (parent->op) {
+            case cot_idx:
+            case cot_call:
+            case cot_ref:
+            case cot_memref:
+            case cot_memptr:
+                return;
+            default:
+                break;
+        }
+    }
+
     auto arith = utils::extract_ptr_arith(expr->x);
     if (!arith.valid || arith.var_idx != target_var_idx_) {
         return;
@@ -501,7 +515,6 @@ void AccessPatternVisitor::process_memptr_access(cexpr_t* expr) {
     }
 
     access.access_type = determine_access_type(expr);
-    const cexpr_t* parent = parent_expr();
     access.semantic_type = infer_semantic_from_usage(expr, parent);
     access.is_call_argument = is_call_argument_use(expr);
     if (arith.base_indirection > 0) {
@@ -638,6 +651,10 @@ void AccessPatternVisitor::process_call_argument_uses(cexpr_t* call_expr) {
             arg_expr = arg_expr->x;
         }
         if (!arg_expr) {
+            continue;
+        }
+
+        if (arg_expr->type.is_array() || arg_expr->type.is_struct()) {
             continue;
         }
 

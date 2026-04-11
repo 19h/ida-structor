@@ -294,6 +294,16 @@ bool derive_caller_type_from_shifted_view(const tinfo_t& shifted_type,
     return true;
 }
 
+bool derive_return_source_type(const tinfo_t& returned_type,
+                               sval_t return_delta,
+                               tinfo_t& out_type) {
+    if (return_delta <= 0) {
+        return false;
+    }
+
+    return derive_caller_type_from_shifted_view(returned_type, return_delta, out_type);
+}
+
 tinfo_t derive_callee_type(const tinfo_t& parent_type,
                            sval_t member_offset,
                            bool by_ref,
@@ -442,17 +452,27 @@ bool TypePropagator::apply_type(cfunc_t* cfunc, int var_idx, const tinfo_t& type
         tinfo_t applied_type = type;
         if (!applied_type.is_ptr()) {
             const tinfo_t current_type = var.type();
+            const bool risky_split_local =
+                !var.is_arg_var() &&
+                (var.is_split_var() || var.is_overlapped_var() || var.is_mapdst_var());
             const bool keep_aggregate_type =
                 !var.is_arg_var() &&
                 !current_type.empty() &&
                 !current_type.is_ptr() &&
                 !current_type.is_funcptr();
 
-            if (!keep_aggregate_type) {
+            if (!(keep_aggregate_type || risky_split_local)) {
                 if (!make_shifted_window_ptr(type, applied_type)) {
                     applied_type.create_ptr(type);
                 }
             }
+        }
+
+        if (!var.is_arg_var() &&
+            var.is_used_byref() &&
+            applied_type.is_ptr() &&
+            (var.is_split_var() || var.is_overlapped_var() || var.type().empty())) {
+            return false;
         }
 
         lvar_saved_info_t lsi;
@@ -584,15 +604,17 @@ void TypePropagator::propagate_forward(
         find_return_sources(callee_cfunc, return_vars);
 
         for (const auto& [return_var_idx, return_delta] : return_vars) {
-            (void)return_delta;
             auto key = make_visit_key(callee_ea, return_var_idx);
             if (visited_.count(key)) continue;
             visited_.insert(key);
 
+            tinfo_t return_type = type;
+            (void)derive_return_source_type(type, return_delta, return_type);
+
             PropagationSite site;
             site.func_ea = callee_ea;
             site.var_idx = return_var_idx;
-            site.new_type = type;
+            site.new_type = return_type;
             site.direction = PropagationDirection::Forward;
 
             lvars_t& callee_lvars = *callee_cfunc->get_lvars();
@@ -601,9 +623,9 @@ void TypePropagator::propagate_forward(
                 site.old_type = callee_lvars[return_var_idx].type();
             }
 
-            if (apply_type(callee_cfunc, return_var_idx, type)) {
+            if (apply_type(callee_cfunc, return_var_idx, return_type)) {
                 result.add_success(std::move(site));
-                propagate_forward(callee_ea, return_var_idx, type, depth + 1, result);
+                propagate_forward(callee_ea, return_var_idx, return_type, depth + 1, result);
             } else {
                 site.failure_reason = "Failed to apply type";
                 result.add_failure(std::move(site));

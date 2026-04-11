@@ -317,6 +317,29 @@ namespace {
         return nonbyte_count >= 2;
     }
 
+    bool overlaps_struct_array_prefix(const ArrayCandidate& array,
+                                      const qvector<ArrayCandidate>& arrays) {
+        if (array.needs_element_struct || array.element_count < 3 || array.stride == 0) {
+            return false;
+        }
+
+        const sval_t array_begin = array.base_offset;
+        const sval_t array_end = array.base_offset + static_cast<sval_t>(array.total_size());
+        for (const auto& other : arrays) {
+            if (!other.needs_element_struct || other.base_offset <= array_begin) {
+                continue;
+            }
+
+            if (other.base_offset >= array_end) {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
     void augment_struct_array_candidate(ArrayCandidate& array, const UnifiedAccessPattern& pattern) {
         if (!array.needs_element_struct || array.stride == 0 || array.element_count < 3) {
             return;
@@ -654,6 +677,15 @@ qvector<FieldCandidate> FieldCandidateGenerator::generate(
                 dominated = true;
                 break;
             }
+            if (candidates[i].kind == FieldCandidate::Kind::ArrayField &&
+                candidates[i].type_category != TypeCategory::Struct &&
+                candidates[j].kind == FieldCandidate::Kind::ArrayField &&
+                candidates[j].type_category == TypeCategory::Struct &&
+                candidates[j].offset > candidates[i].offset &&
+                candidates[j].offset < candidates[i].end_offset()) {
+                dominated = true;
+                break;
+            }
         }
         if (!dominated) {
             pruned.push_back(std::move(candidates[i]));
@@ -696,8 +728,7 @@ void FieldCandidateGenerator::generate_direct_candidates(
         const auto& access = pattern.all_accesses[i];
 
         if (!access.inferred_type.empty() &&
-            (access.inferred_type.is_array() || access.inferred_type.is_struct()) &&
-            access.size > 8) {
+            (access.inferred_type.is_array() || access.inferred_type.is_struct())) {
             int covered_subaccesses = 0;
             const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
             for (size_t j = 0; j < pattern.all_accesses.size(); ++j) {
@@ -891,6 +922,10 @@ void FieldCandidateGenerator::generate_array_candidates(
         }
 
         if (conflicting_access) {
+            continue;
+        }
+
+        if (overlaps_struct_array_prefix(array, arrays)) {
             continue;
         }
 

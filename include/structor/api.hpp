@@ -149,36 +149,36 @@ private:
     bool set_ok = false;
     bool apply_ok = false;
     bool decl_ok = false;
+    const bool aggregate_type = type.is_struct() || type.is_union();
 
-    try {
-        const size_t type_size = type.get_size();
-        if ((type.is_struct() || type.is_union()) && type_size != BADSIZE && type_size > 0) {
-            tid_t tid = type.get_tid();
-            if (tid != BADADDR) {
-                prepared = create_struct(ea, type_size, tid, true) || prepared;
+    if (!aggregate_type) {
+        try {
+            const size_t type_size = type.get_size();
+            if ((type.is_ptr() || type.is_funcptr()) && type_size != BADSIZE && type_size > 0) {
+                const asize_t ptr_size = static_cast<asize_t>(get_ptr_size());
+                if (ptr_size == 8) {
+                    prepared = create_qword(ea, ptr_size, true) || prepared;
+                } else if (ptr_size == 4) {
+                    prepared = create_dword(ea, ptr_size, true) || prepared;
+                }
             }
-        } else if (type.is_ptr() || type.is_funcptr()) {
-            const asize_t ptr_size = static_cast<asize_t>(get_ptr_size());
-            if (ptr_size == 8) {
-                prepared = create_qword(ea, ptr_size, true) || prepared;
-            } else if (ptr_size == 4) {
-                prepared = create_dword(ea, ptr_size, true) || prepared;
-            }
+        } catch (...) {
         }
-    } catch (...) {
     }
 
     try {
         set_ok = set_tinfo(ea, &type);
     } catch (...) {
     }
-    try {
-        apply_ok = apply_tinfo(ea, type, TINFO_DEFINITE | TINFO_STRICT);
-    } catch (...) {
-    }
-    try {
-        decl_ok = apply_decl(type);
-    } catch (...) {
+    if (type.is_ptr() || type.is_funcptr()) {
+        try {
+            apply_ok = apply_tinfo(ea, type, TINFO_DEFINITE | TINFO_STRICT);
+        } catch (...) {
+        }
+        try {
+            decl_ok = apply_decl(type);
+        } catch (...) {
+        }
     }
 
     return prepared || set_ok || apply_ok || decl_ok;
@@ -580,12 +580,9 @@ inline SynthResult StructorAPI::do_global_synthesis(ea_t global_ea, const SynthO
             register_global_rewrite_info(analysis, synth_struct, struct_type);
         } catch (...) {
         }
-        for (ea_t func_ea : analysis.touched_functions) {
-            try {
-                (void)mark_cfunc_dirty(func_ea, false);
-            } catch (...) {
-            }
-        }
+        // Avoid eager dirty-marking here. Some already-decompiled C++ helpers
+        // raise Hex-Rays internal errors during immediate refresh even though
+        // fresh decompilations pick up the applied global types correctly.
 
         result.synthesized_struct = std::make_unique<SynthStruct>(std::move(synth_struct));
         result.error = SynthError::Success;
