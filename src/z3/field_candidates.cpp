@@ -78,6 +78,43 @@ namespace {
         return indices;
     }
 
+    bool covers_all_elements(const MixedStrideField& field,
+                             const UnifiedAccessPattern& pattern,
+                             sval_t base,
+                             uint32_t stride,
+                             uint32_t required_count) {
+        if (required_count == 0) {
+            return false;
+        }
+
+        const auto indices = collect_element_indices(field, pattern, base, stride, required_count);
+        if (indices.size() < required_count) {
+            return false;
+        }
+
+        for (uint32_t i = 0; i < required_count; ++i) {
+            if (indices.count(i) == 0) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    size_t count_stable_repeated_fields(const qvector<MixedStrideField>& fields,
+                                        const UnifiedAccessPattern& pattern,
+                                        sval_t base,
+                                        uint32_t stride,
+                                        uint32_t required_count) {
+        size_t stable = 0;
+        for (const auto& field : fields) {
+            if (covers_all_elements(field, pattern, base, stride, required_count)) {
+                ++stable;
+            }
+        }
+        return stable;
+    }
+
     qvector<MixedStrideField> collapse_fields_by_inner_offset(
         const qvector<MixedStrideField>& fields,
         const UnifiedAccessPattern& pattern,
@@ -153,7 +190,10 @@ namespace {
             other.type_category == TypeCategory::UInt8 &&
             other.array_stride.value_or(0) == 1 &&
             other.size <= 16;
-        if (compact_byte_array) {
+        const bool scalar_array_field =
+            other.kind == FieldCandidate::Kind::ArrayField &&
+            other.type_category != TypeCategory::Struct;
+        if (compact_byte_array || scalar_array_field) {
             return false;
         }
 
@@ -480,6 +520,17 @@ namespace {
                 raw_fields.push_back(field);
             }
 
+            const size_t stable_fields = count_stable_repeated_fields(
+                raw_fields,
+                pattern,
+                base,
+                array.stride,
+                array.element_count);
+            const size_t min_stable_fields = base == 0 ? 2u : 1u;
+            if (stable_fields < min_stable_fields) {
+                continue;
+            }
+
             qvector<MixedStrideField> repeated = collapse_fields_by_inner_offset(
                 raw_fields,
                 pattern,
@@ -624,6 +675,17 @@ namespace {
         }
 
         if (effective_count < 3) {
+            return std::nullopt;
+        }
+
+        const size_t stable_fields = count_stable_repeated_fields(
+            raw_fields,
+            pattern,
+            base,
+            stride,
+            effective_count);
+        const size_t min_stable_fields = base == 0 ? 2u : 1u;
+        if (stable_fields < min_stable_fields) {
             return std::nullopt;
         }
 
@@ -997,6 +1059,53 @@ void FieldCandidateGenerator::generate_array_candidates(
 
         if (array.element_count == 0) {
             continue;
+        }
+
+        if (array.needs_element_struct) {
+            std::unordered_map<MixedStrideKey, MixedStrideField, MixedStrideKeyHash> raw_groups;
+            for (size_t i = 0; i < pattern.all_accesses.size(); ++i) {
+                const auto& access = pattern.all_accesses[i];
+                if (access.offset < array.base_offset) {
+                    continue;
+                }
+
+                const sval_t rel = access.offset - array.base_offset;
+                const uint32_t idx = static_cast<uint32_t>(rel / array.stride);
+                if (idx >= array.element_count) {
+                    continue;
+                }
+
+                const uint32_t inner = static_cast<uint32_t>(rel % array.stride);
+                if (inner + access.size > array.stride) {
+                    continue;
+                }
+
+                MixedStrideKey key{inner, access.size};
+                auto& field = raw_groups[key];
+                field.inner_offset = inner;
+                field.size = access.size;
+                if (field.type.empty() && !access.inferred_type.empty()) {
+                    field.type = access.inferred_type;
+                }
+                field.access_indices.push_back(static_cast<int>(i));
+            }
+
+            qvector<MixedStrideField> raw_fields;
+            raw_fields.reserve(raw_groups.size());
+            for (auto& [key, field] : raw_groups) {
+                raw_fields.push_back(field);
+            }
+
+            const size_t stable_fields = count_stable_repeated_fields(
+                raw_fields,
+                pattern,
+                array.base_offset,
+                array.stride,
+                array.element_count);
+            const size_t min_stable_fields = array.base_offset == 0 ? 2u : 1u;
+            if (stable_fields < min_stable_fields) {
+                continue;
+            }
         }
 
         std::unordered_set<sval_t> member_offsets;

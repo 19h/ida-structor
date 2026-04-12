@@ -113,6 +113,27 @@ namespace {
             return false;
         }
 
+        const bool preferred_struct_array =
+            preferred.kind == FieldCandidate::Kind::ArrayField &&
+            preferred.type_category == TypeCategory::Struct;
+        const bool preferred_scalar_array =
+            preferred.kind == FieldCandidate::Kind::ArrayField &&
+            preferred.type_category != TypeCategory::Struct;
+        const bool other_scalar_array =
+            other.kind == FieldCandidate::Kind::ArrayField &&
+            other.type_category != TypeCategory::Struct;
+        const bool other_struct_array =
+            other.kind == FieldCandidate::Kind::ArrayField &&
+            other.type_category == TypeCategory::Struct;
+
+        if (preferred_struct_array && other_scalar_array) {
+            return false;
+        }
+
+        if (preferred_scalar_array && other_struct_array) {
+            return true;
+        }
+
         if (!preferred.overlaps(other)) {
             return false;
         }
