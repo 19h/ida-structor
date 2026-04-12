@@ -305,12 +305,18 @@ def run_cpp_static_lookup_regression(
         output,
         [
             "Structor: Running auto global synthesis for name=g_engine",
-            "Structor: Auto-synthesis FAILED -",
         ],
         "cpp static global lookup",
     )
     if "Global 'g_engine' not found" in output:
         raise RuntimeError("demangled C++ static global lookup regressed")
+    if (
+        "Structor: Auto-synthesis OK -" not in output
+        and "Structor: Auto-synthesis FAILED -" not in output
+    ):
+        raise RuntimeError(
+            "cpp static global lookup did not report a synthesis result\n" + output
+        )
 
 
 def main() -> int:

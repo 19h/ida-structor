@@ -604,6 +604,25 @@ inline SynthResult StructorAPI::do_global_synthesis(ea_t global_ea, const SynthO
                     analysis.root_name.c_str());
             }
             register_global_rewrite_info(analysis, synth_struct, struct_type);
+
+            // Global analysis typically decompiles the contributing functions before
+            // the rewrite registry is populated. Rewrite those cached cfuncs now so
+            // idump and the UI don't keep showing stale raw dereferences.
+            for (ea_t func_ea : analysis.touched_functions) {
+                cfuncptr_t cfunc = utils::get_cfunc(func_ea);
+                if (!cfunc) {
+                    continue;
+                }
+
+                if (opts.debug_mode) {
+                    qstring func_name;
+                    get_func_name(&func_name, func_ea);
+                    msg("Structor:   applying registered global rewrites in %s\n",
+                        func_name.c_str());
+                }
+
+                (void)rewrite_registered_global_uses(cfunc);
+            }
         } catch (...) {
         }
         // Avoid eager dirty-marking here. Some already-decompiled C++ helpers

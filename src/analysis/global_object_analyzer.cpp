@@ -1010,6 +1010,17 @@ struct ResolvedGlobalExpr {
     }
 };
 
+struct ResolvedFieldRef {
+    const SynthField* field = nullptr;
+    bool is_array_element = false;
+    uint32_t array_index = 0;
+    tinfo_t element_type;
+
+    [[nodiscard]] bool valid() const noexcept {
+        return field != nullptr;
+    }
+};
+
 [[nodiscard]] static const SynthField* find_exact_field(
     const RegisteredGlobalRewrite& entry,
     sval_t offset)
@@ -1020,6 +1031,49 @@ struct ResolvedGlobalExpr {
         }
     }
     return nullptr;
+}
+
+[[nodiscard]] static ResolvedFieldRef find_field_ref(
+    const RegisteredGlobalRewrite& entry,
+    sval_t offset)
+{
+    if (const SynthField* field = find_exact_field(entry, offset)) {
+        return ResolvedFieldRef{field, false, 0, field->type};
+    }
+
+    for (const auto& field : entry.structure.fields) {
+        if (field.is_padding || !field.is_array || offset < field.offset) {
+            continue;
+        }
+
+        const sval_t rel = offset - field.offset;
+        if (rel < 0 || rel >= static_cast<sval_t>(field.size)) {
+            continue;
+        }
+
+        array_type_data_t atd;
+        if (!field.type.is_array() || !field.type.get_array_details(&atd)) {
+            continue;
+        }
+
+        const size_t elem_size = atd.elem_type.get_size();
+        if (elem_size == BADSIZE || elem_size == 0 || rel % static_cast<sval_t>(elem_size) != 0) {
+            continue;
+        }
+
+        const uint32_t index = static_cast<uint32_t>(rel / static_cast<sval_t>(elem_size));
+        if (index >= static_cast<uint32_t>(atd.nelems)) {
+            continue;
+        }
+
+        if (atd.elem_type.is_array() || atd.elem_type.is_struct() || atd.elem_type.is_union()) {
+            continue;
+        }
+
+        return ResolvedFieldRef{&field, true, index, atd.elem_type};
+    }
+
+    return {};
 }
 
 class RegisteredGlobalUseRewriter : public ctree_visitor_t {
@@ -1129,6 +1183,23 @@ private:
         return obj;
     }
 
+    [[nodiscard]] cexpr_t* make_field_expr(const ResolvedGlobalExpr& resolved,
+                                           const SynthField& field,
+                                           ea_t ea) const {
+        cexpr_t* replacement = new cexpr_t();
+        replacement->op = resolved.through_pointer ? cot_memptr : cot_memref;
+        replacement->ea = ea;
+        replacement->x = make_obj_expr(
+            resolved.obj_ea,
+            resolved.through_pointer ? resolved.entry->ptr_type : resolved.entry->struct_type,
+            ea);
+        replacement->m = static_cast<uint32>(field.offset);
+        replacement->ptrsize = get_ptr_size();
+        replacement->type = field.type;
+        replacement->calc_type(false);
+        return replacement;
+    }
+
     void rewrite_dereference(cexpr_t* expr) {
         if (!expr || !expr->x) {
             return;
@@ -1139,8 +1210,8 @@ private:
             return;
         }
 
-        const SynthField* field = find_exact_field(*resolved.entry, resolved.offset);
-        if (!field) {
+        const ResolvedFieldRef field_ref = find_field_ref(*resolved.entry, resolved.offset);
+        if (!field_ref.valid()) {
             return;
         }
 
@@ -1151,20 +1222,24 @@ private:
                 before.c_str(),
                 resolved.entry->root_name.c_str(),
                 resolved.through_pointer ? "->" : ".",
-                static_cast<unsigned long long>(field->offset));
+                static_cast<unsigned long long>(field_ref.field->offset));
         }
 
-        cexpr_t* replacement = new cexpr_t();
-        replacement->op = resolved.through_pointer ? cot_memptr : cot_memref;
-        replacement->ea = expr->ea;
-        replacement->x = make_obj_expr(
-            resolved.obj_ea,
-            resolved.through_pointer ? resolved.entry->ptr_type : resolved.entry->struct_type,
-            expr->ea);
-        replacement->m = static_cast<uint32>(field->offset);
-        replacement->ptrsize = get_ptr_size();
-        replacement->type = field->type;
-        replacement->calc_type(false);
+        cexpr_t* replacement = make_field_expr(resolved, *field_ref.field, expr->ea);
+        if (field_ref.is_array_element) {
+            cexpr_t* index_expr = new cexpr_t();
+            index_expr->ea = expr->ea;
+            index_expr->put_number(cfunc_, field_ref.array_index, 4);
+
+            cexpr_t* element_expr = new cexpr_t();
+            element_expr->op = cot_idx;
+            element_expr->ea = expr->ea;
+            element_expr->x = replacement;
+            element_expr->y = index_expr;
+            element_expr->type = field_ref.element_type;
+            element_expr->calc_type(false);
+            replacement = element_expr;
+        }
 
         expr->replace_by(replacement);
         modified_ = true;
