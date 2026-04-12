@@ -1159,6 +1159,14 @@ void LayoutSynthesizer::apply_bitfield_recovery(
             continue;
         }
 
+        // Hex-Rays handles packed misaligned scalar fields much more reliably as
+        // plain storage than as synthetic C bitfields. Converting those fields
+        // into bitfields tends to skew later member accesses back into casts.
+        if (field.size > 1 && field.offset >= 0 && (field.offset % static_cast<sval_t>(field.size)) != 0) {
+            updated.push_back(field);
+            continue;
+        }
+
         const auto& bfs = it->second;
         bool valid = true;
         for (const auto& bf : bfs) {
