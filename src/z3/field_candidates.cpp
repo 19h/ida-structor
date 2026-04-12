@@ -397,6 +397,96 @@ namespace {
         return static_cast<double>(covered) / static_cast<double>(stride);
     }
 
+    bool overlaps_scalar_array_field(const FieldCandidate& candidate,
+                                     const qvector<FieldCandidate>& candidates) {
+        if (candidate.kind != FieldCandidate::Kind::ArrayField ||
+            candidate.type_category != TypeCategory::Struct) {
+            return false;
+        }
+
+        for (const auto& other : candidates) {
+            if (other.kind != FieldCandidate::Kind::ArrayField ||
+                other.type_category == TypeCategory::Struct) {
+                continue;
+            }
+
+            if (candidate.overlaps(other)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool struct_array_depends_on_mixed_size_collapse(const UnifiedAccessPattern& pattern,
+                                                     const FieldCandidate& candidate) {
+        if (candidate.kind != FieldCandidate::Kind::ArrayField ||
+            candidate.type_category != TypeCategory::Struct ||
+            !candidate.array_stride.has_value() ||
+            !candidate.array_element_count.has_value()) {
+            return false;
+        }
+
+        const uint32_t stride = *candidate.array_stride;
+        const uint32_t count = *candidate.array_element_count;
+        if (stride == 0 || count < 3) {
+            return false;
+        }
+
+        std::unordered_map<MixedStrideKey, MixedStrideField, MixedStrideKeyHash> by_inner;
+        for (size_t i = 0; i < pattern.all_accesses.size(); ++i) {
+            const auto& access = pattern.all_accesses[i];
+            if (access.offset < candidate.offset) {
+                continue;
+            }
+
+            sval_t rel = access.offset - candidate.offset;
+            if (rel < 0) {
+                continue;
+            }
+
+            uint32_t idx = static_cast<uint32_t>(rel / stride);
+            if (idx >= count) {
+                continue;
+            }
+
+            uint32_t inner = static_cast<uint32_t>(rel % stride);
+            if (inner + access.size > stride) {
+                continue;
+            }
+
+            MixedStrideKey key{inner, access.size};
+            auto& field = by_inner[key];
+            field.inner_offset = inner;
+            field.size = access.size;
+            if (field.type.empty() && !access.inferred_type.empty()) {
+                field.type = access.inferred_type;
+            }
+            field.access_indices.push_back(static_cast<int>(i));
+        }
+
+        qvector<MixedStrideField> raw_fields;
+        raw_fields.reserve(by_inner.size());
+        for (auto& [key, field] : by_inner) {
+            raw_fields.push_back(field);
+        }
+
+        const size_t stable_fields = count_stable_repeated_fields(
+            raw_fields,
+            pattern,
+            candidate.offset,
+            stride,
+            count);
+        qvector<MixedStrideField> repeated = collapse_fields_by_inner_offset(
+            raw_fields,
+            pattern,
+            candidate.offset,
+            stride,
+            count);
+
+        return repeated.size() > stable_fields;
+    }
+
     bool has_mixed_scalar_array_semantics(const UnifiedAccessPattern& pattern,
                                           const qvector<int>& source_indices) {
         bool saw_pointer_like = false;
@@ -1234,6 +1324,11 @@ void FieldCandidateGenerator::generate_array_candidates(
                 if (count >= static_cast<uint32_t>(config_.min_array_elements)) {
                     auto candidate = build_struct_array_candidate(
                         ctx_, pattern, offsets_for_size[i], stride, count);
+                    if (candidate.has_value() &&
+                        struct_array_depends_on_mixed_size_collapse(pattern, *candidate) &&
+                        overlaps_scalar_array_field(*candidate, candidates)) {
+                        continue;
+                    }
                     if (candidate.has_value() && !array_candidate_exists(*candidate)) {
                         candidates.push_back(std::move(*candidate));
                     }
@@ -1281,6 +1376,11 @@ void FieldCandidateGenerator::generate_array_candidates(
 
                 auto candidate = build_struct_array_candidate(ctx_, pattern, access.offset, stride, count);
                 if (!candidate.has_value()) {
+                    continue;
+                }
+
+                if (struct_array_depends_on_mixed_size_collapse(pattern, *candidate) &&
+                    overlaps_scalar_array_field(*candidate, candidates)) {
                     continue;
                 }
 
