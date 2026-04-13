@@ -17,10 +17,10 @@
         "success": true,
         "error": "Success",
         "error_message": "",
-        "fields_created": 12,
+        "fields_created": 4,
         "vtable_slots": 0,
         "propagated_to": [
-          "record_ctor"
+          "_record_ctor"
         ],
         "failed_sites": [],
         "z3": {
@@ -29,18 +29,15 @@
           "used_fallback": false
         },
         "structure": {
-          "name": "auto_g_dual_arena",
-          "size": 81,
+          "name": "entry_point_command",
+          "size": 24,
           "alignment": 1,
-          "source_func_name": "record_ctor",
-          "source_var": "g_dual_arena",
-          "field_count": 12,
-          "non_padding_field_count": 8,
+          "source_func_name": "_record_ctor",
+          "source_var": "_g_dual_arena",
+          "field_count": 4,
+          "non_padding_field_count": 4,
           "provenance": [
-            "build_right",
-            "record_ctor",
-            "use_left",
-            "use_right"
+            "_record_ctor"
           ],
           "fields": [
             {
@@ -106,140 +103,12 @@
               "bit_offset": 0,
               "bit_size": 0,
               "union_members": []
-            },
-            {
-              "name": "__pad_18",
-              "offset": 24,
-              "size": 40,
-              "semantic": "padding",
-              "type": "char[40]",
-              "confidence": "medium",
-              "is_padding": true,
-              "is_array": false,
-              "array_count": 1,
-              "is_union_candidate": false,
-              "is_bitfield": false,
-              "bit_offset": 0,
-              "bit_size": 0,
-              "union_members": []
-            },
-            {
-              "name": "u8_40",
-              "offset": 64,
-              "size": 1,
-              "semantic": "uint",
-              "type": "unsigned __int8",
-              "confidence": "medium",
-              "is_padding": false,
-              "is_array": false,
-              "array_count": 1,
-              "is_union_candidate": false,
-              "is_bitfield": false,
-              "bit_offset": 0,
-              "bit_size": 0,
-              "union_members": []
-            },
-            {
-              "name": "__pad_41",
-              "offset": 65,
-              "size": 3,
-              "semantic": "padding",
-              "type": "char[3]",
-              "confidence": "medium",
-              "is_padding": true,
-              "is_array": false,
-              "array_count": 1,
-              "is_union_candidate": false,
-              "is_bitfield": false,
-              "bit_offset": 0,
-              "bit_size": 0,
-              "union_members": []
-            },
-            {
-              "name": "u8_44",
-              "offset": 68,
-              "size": 1,
-              "semantic": "uint",
-              "type": "unsigned __int8",
-              "confidence": "medium",
-              "is_padding": false,
-              "is_array": false,
-              "array_count": 1,
-              "is_union_candidate": false,
-              "is_bitfield": false,
-              "bit_offset": 0,
-              "bit_size": 0,
-              "union_members": []
-            },
-            {
-              "name": "__pad_45",
-              "offset": 69,
-              "size": 3,
-              "semantic": "padding",
-              "type": "char[3]",
-              "confidence": "medium",
-              "is_padding": true,
-              "is_array": false,
-              "array_count": 1,
-              "is_union_candidate": false,
-              "is_bitfield": false,
-              "bit_offset": 0,
-              "bit_size": 0,
-              "union_members": []
-            },
-            {
-              "name": "u8_48",
-              "offset": 72,
-              "size": 1,
-              "semantic": "uint",
-              "type": "unsigned __int8",
-              "confidence": "medium",
-              "is_padding": false,
-              "is_array": false,
-              "array_count": 1,
-              "is_union_candidate": false,
-              "is_bitfield": false,
-              "bit_offset": 0,
-              "bit_size": 0,
-              "union_members": []
-            },
-            {
-              "name": "__pad_49",
-              "offset": 73,
-              "size": 7,
-              "semantic": "padding",
-              "type": "char[7]",
-              "confidence": "medium",
-              "is_padding": true,
-              "is_array": false,
-              "array_count": 1,
-              "is_union_candidate": false,
-              "is_bitfield": false,
-              "bit_offset": 0,
-              "bit_size": 0,
-              "union_members": []
-            },
-            {
-              "name": "u8_50",
-              "offset": 80,
-              "size": 1,
-              "semantic": "uint",
-              "type": "unsigned __int8",
-              "confidence": "medium",
-              "is_padding": false,
-              "is_array": false,
-              "array_count": 1,
-              "is_union_candidate": false,
-              "is_bitfield": false,
-              "bit_offset": 0,
-              "bit_size": 0,
-              "union_members": []
             }
           ],
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> build_left\nvoid build_left() {\n    record_ctor(dst: g_dual_arena, magic: 0x1111u, value: 0xAAAABBBBCCCCDDDDLL);\n}\n<<<\n\n>>> build_right\nvoid build_right() {\n    record_ctor(dst: &g_dual_arena[64], magic: 0x2222u, value: 0x1111222233334444uLL);\n}\n<<<\n\n>>> use_left\nvoid use_left() {\n    sink ^= g_dual_arena.u32_0;\n    sink ^= g_dual_arena.u32_4;\n    sink ^= g_dual_arena.u64_8;\n}\n<<<\n\n>>> use_right\nvoid use_right() {\n    sink ^= g_dual_arena.u8_40;\n    sink ^= g_dual_arena.u8_44;\n    sink ^= g_dual_arena.u8_48;\n    sink ^= g_dual_arena.u8_50;\n}\n<<<\n"
+      "golden_pseudocode": ">>> build_left\n__int64 build_left() {\n    return record_ctor(a1: &g_dual_arena, a2: 4369, a3: 0xAAAABBBBCCCCDDDDLL);\n}\n<<<\n\n>>> build_right\n__int64 build_right() {\n    return record_ctor(result: (__int64)&dword_100008040, a2: 8738, a3: 0x1111222233334444LL);\n}\n<<<\n\n>>> use_left\nvoid use_left() {\n    sink ^= (unsigned int)g_dual_arena;\n    sink ^= (unsigned int)dword_100008004;\n    sink ^= qword_100008008;\n}\n<<<\n\n>>> use_right\nvoid use_right() {\n    sink ^= (unsigned int)dword_100008040;\n    sink ^= (unsigned int)dword_100008044;\n    sink ^= qword_100008048;\n    sink ^= qword_100008050;\n}\n<<<\n"
     }
   ]
 }

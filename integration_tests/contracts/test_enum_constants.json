@@ -27,7 +27,7 @@
         },
         "structure": null
       },
-      "golden_pseudocode": ">>> inspect_mode\nvoid __cdecl inspect_mode(void *p) {\n    int v1; // [xsp+Ch] [xbp-14h]\n\n    v1 = *(_DWORD *)p;\n    if ( *(_DWORD *)p == 1 ) {\n        sink ^= 1uLL;\n    } else if ( v1 == 2 ) {\n        sink ^= 2uLL;\n    } else if ( v1 == 3 ) {\n        sink ^= 3uLL;\n    }\n}\n<<<\n\n>>> inspect_state\nvoid __cdecl inspect_state(void *p) {\n    int v1; // [xsp+Ch] [xbp-14h]\n\n    v1 = *((_DWORD *)p + 1);\n    if ( v1 == 16 )\n        sink ^= 0x10uLL;\n    if ( v1 == 32 )\n        sink ^= 0x20uLL;\n    if ( v1 == 64 )\n        sink ^= 0x40uLL;\n    sink ^= *((unsigned __int16 *)p + 4);\n    sink ^= *((unsigned __int8 *)p + 10);\n}\n<<<\n"
+      "golden_pseudocode": ">>> inspect_mode\nint *__fastcall inspect_mode(int *result) {\n    int v1; // [xsp+Ch] [xbp-14h]\n\n    v1 = *result;\n    if ( *result == 1 ) {\n        sink ^= 1uLL;\n    } else if ( v1 == 2 ) {\n        sink ^= 2uLL;\n    } else if ( v1 == 3 ) {\n        sink ^= 3uLL;\n    }\n    return result;\n}\n\n100008000: using guessed type __int64 sink;\n<<<\n\n>>> inspect_state\n__int64 __fastcall inspect_state(__int64 result) {\n    int v1; // [xsp+Ch] [xbp-14h]\n\n    v1 = *(_DWORD *)(result + 4);\n    if ( v1 == 16 )\n        sink ^= 0x10uLL;\n    if ( v1 == 32 )\n        sink ^= 0x20uLL;\n    if ( v1 == 64 )\n        sink ^= 0x40uLL;\n    sink ^= *(unsigned __int16 *)(result + 8);\n    sink ^= *(unsigned __int8 *)(result + 10);\n    return result;\n}\n<<<\n"
     }
   ]
 }

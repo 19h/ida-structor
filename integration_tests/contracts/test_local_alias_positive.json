@@ -16,13 +16,12 @@
         "success": true,
         "error": "Success",
         "error_message": "",
-        "fields_created": 5,
+        "fields_created": 7,
         "vtable_slots": 0,
         "propagated_to": [
-          "init_alias_record",
-          "main",
-          "use_alias_chain",
-          "use_alias_read"
+          "_main",
+          "_use_alias_chain",
+          "_use_alias_read"
         ],
         "failed_sites": [],
         "z3": {
@@ -31,13 +30,13 @@
           "used_fallback": false
         },
         "structure": {
-          "name": "auto_use_alias_read",
-          "size": 21,
+          "name": "auto_result",
+          "size": 32,
           "alignment": 1,
-          "source_func_name": "use_alias_read",
-          "source_var": "p",
-          "field_count": 5,
-          "non_padding_field_count": 4,
+          "source_func_name": "_use_alias_read",
+          "source_var": "result",
+          "field_count": 7,
+          "non_padding_field_count": 5,
           "provenance": [],
           "fields": [
             {
@@ -119,12 +118,44 @@
               "bit_offset": 0,
               "bit_size": 0,
               "union_members": []
+            },
+            {
+              "name": "__pad_15",
+              "offset": 21,
+              "size": 7,
+              "semantic": "padding",
+              "type": "char[7]",
+              "confidence": "medium",
+              "is_padding": true,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_1C",
+              "offset": 28,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
             }
           ],
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> use_alias_read\nvoid __cdecl use_alias_read(auto_use_alias_read *p) {\n    sink ^= p->u32_0;\n    sink ^= p->u64_8;\n    sink ^= p->u16_10;\n}\n<<<\n\n>>> use_alias_chain\nvoid __cdecl use_alias_chain(auto_use_alias_read *p) {\n    sink ^= p->u8s_12[0];\n    sink ^= p->u8s_12[1];\n    sink ^= p->u8s_12[2];\n}\n<<<\n"
+      "golden_pseudocode": ">>> use_alias_read\nauto_result *__fastcall use_alias_read(auto_result *result) {\n    sink ^= result->u32_0;\n    sink ^= result->u64_8;\n    sink ^= result->u16_10;\n    return result;\n}\n<<<\n\n>>> use_alias_chain\nauto_result *__fastcall use_alias_chain(auto_result *result) {\n    sink ^= result->u8s_12[0];\n    sink ^= result->u8s_12[1];\n    sink ^= result->u8s_12[2];\n    return result;\n}\n<<<\n"
     }
   ]
 }

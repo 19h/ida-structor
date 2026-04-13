@@ -20,10 +20,9 @@
         "fields_created": 3,
         "vtable_slots": 0,
         "propagated_to": [
-          "invoke_handler",
-          "main",
-          "setup_handler",
-          "update_and_invoke"
+          "_invoke_handler",
+          "_main",
+          "_update_and_invoke"
         ],
         "failed_sites": [],
         "z3": {
@@ -32,11 +31,11 @@
           "used_fallback": false
         },
         "structure": {
-          "name": "auto_handler_ptr",
-          "size": 32,
+          "name": "auto_result",
+          "size": 20,
           "alignment": 1,
-          "source_func_name": "invoke_handler",
-          "source_var": "handler_ptr",
+          "source_func_name": "_invoke_handler",
+          "source_var": "result",
           "field_count": 3,
           "non_padding_field_count": 3,
           "provenance": [],
@@ -46,7 +45,7 @@
               "offset": 0,
               "size": 8,
               "semantic": "funcptr",
-              "type": "void (__fastcall *)(_QWORD, _QWORD)",
+              "type": "__int64 (__fastcall *)(_QWORD, _QWORD)",
               "confidence": "medium",
               "is_padding": false,
               "is_array": false,
@@ -74,15 +73,15 @@
               "union_members": []
             },
             {
-              "name": "u32s_10",
+              "name": "u32_10",
               "offset": 16,
-              "size": 16,
-              "semantic": "array",
-              "type": "unsigned __int32[4]",
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
               "confidence": "medium",
               "is_padding": false,
-              "is_array": true,
-              "array_count": 4,
+              "is_array": false,
+              "array_count": 1,
               "is_union_candidate": false,
               "is_bitfield": false,
               "bit_offset": 0,
@@ -93,7 +92,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> invoke_handler\nvoid __cdecl invoke_handler(auto_handler_ptr *handler_ptr) {\n    if ( handler_ptr->fn_0 )\n        handler_ptr->fn_0(a1: handler_ptr->u64_8, a2: handler_ptr->u32s_10[0]);\n}\n<<<\n\n>>> setup_handler\nvoid __cdecl setup_handler(auto_handler_ptr *handler_ptr, void *cb, void *ctx, int initial_state) {\n    handler_ptr->fn_0 = (void (__fastcall *)(_QWORD, _QWORD))cb;\n    handler_ptr->u64_8 = (unsigned __int64)ctx;\n    handler_ptr->u32s_10[0] = initial_state;\n    handler_ptr->u32s_10[1] = 0;\n}\n<<<\n\n>>> update_and_invoke\nvoid __fastcall update_and_invoke(auto_handler_ptr *handler_ptr, unsigned __int32 new_state) {\n    handler_ptr->u32s_10[0] = new_state;\n    invoke_handler(handler_ptr);\n}\n<<<\n"
+      "golden_pseudocode": ">>> invoke_handler\nauto_result *__fastcall invoke_handler(auto_result *result) {\n    if ( result->fn_0 )\n        return (auto_result *)result->fn_0(a1: result->u64_8, a2: result->u32_10);\n    return result;\n}\n<<<\n\n>>> setup_handler\n__int64 __fastcall setup_handler(__int64 result, __int64 a2, __int64 a3, int a4) {\n    *(_QWORD *)result = a2;\n    *(_QWORD *)(result + 8) = a3;\n    *(_DWORD *)(result + 16) = a4;\n    *(_DWORD *)(result + 20) = 0;\n    return result;\n}\n<<<\n\n>>> update_and_invoke\nauto_result *__fastcall update_and_invoke(auto_result *a1, unsigned __int32 a2) {\n    a1->u32_10 = a2;\n    return invoke_handler(result: a1);\n}\n<<<\n"
     }
   ]
 }

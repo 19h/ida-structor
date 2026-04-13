@@ -18,8 +18,8 @@
         "fields_created": 4,
         "vtable_slots": 0,
         "propagated_to": [
-          "state_ctor",
-          "use_state_leaf"
+          "_state_ctor",
+          "_use_state_leaf"
         ],
         "failed_sites": [],
         "z3": {
@@ -31,12 +31,12 @@
           "name": "auto_g_state_storage",
           "size": 36,
           "alignment": 1,
-          "source_func_name": "state_ctor",
-          "source_var": "g_state_storage",
+          "source_func_name": "_state_ctor",
+          "source_var": "_g_state_storage",
           "field_count": 4,
           "non_padding_field_count": 4,
           "provenance": [
-            "state_ctor"
+            "_state_ctor"
           ],
           "fields": [
             {
@@ -107,7 +107,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> state_ctor\nvoid __cdecl state_ctor(auto_g_state_storage *dst, uint32_t seed) {\n    dst->u32_0 = 1398030676;\n    dst->u32_4 = seed ^ 0x22;\n    dst->u64s_8[0] = seed | 0x1010101010101000LL;\n    dst->u64s_8[1] = (unsigned __int64)dst;\n    dst->u64s_8[2] = seed + 128LL;\n    dst->u32_20 = seed + 64;\n}\n<<<\n\n>>> use_state\nvoid use_state() {\n    sink ^= g_state_ptr->u32_0;\n    sink ^= g_state_ptr->u32_4;\n    sink ^= g_state_ptr->u64s_8[1];\n    sink ^= g_state_ptr->u32_20;\n    use_state_leaf(dst: g_state_ptr);\n}\n<<<\n"
+      "golden_pseudocode": ">>> state_ctor\nauto_g_state_storage *__fastcall state_ctor(auto_g_state_storage *result, unsigned int a2) {\n    result->u32_0 = 1398030676;\n    result->u32_4 = a2 ^ 0x22;\n    result->u64s_8[0] = a2 | 0x1010101010101000LL;\n    result->u64s_8[1] = (unsigned __int64)result;\n    result->u64s_8[2] = a2 + 128LL;\n    result->u32_20 = a2 + 64;\n    return result;\n}\n<<<\n\n>>> use_state\n__int64 use_state() {\n    sink ^= g_state_ptr->u32_0;\n    sink ^= g_state_ptr->u32_4;\n    sink ^= g_state_ptr->u64s_8[1];\n    sink ^= g_state_ptr->u32_20;\n    return use_state_leaf(a1: g_state_ptr);\n}\n<<<\n"
     }
   ]
 }

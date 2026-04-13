@@ -159,6 +159,9 @@ def run_idump(
     write_structor_config(
         sandbox_home, debug_mode=debug_mode, auto_fix_verbose=auto_fix_verbose
     )
+    run_dir = Path(tempfile.mkdtemp(prefix="structor-typefix-binary."))
+    run_binary = run_dir / binary.name
+    shutil.copy2(binary, run_binary)
 
     try:
         log(f"Fixture binary: {binary.name}")
@@ -178,7 +181,7 @@ def run_idump(
                 "--pseudo-only",
                 "-f",
                 function_name,
-                str(binary),
+                str(run_binary),
             ],
             cwd=repo_root,
             env=env,
@@ -187,6 +190,7 @@ def run_idump(
         return {"output": strip_ansi((proc.stdout or "") + (proc.stderr or ""))}
     finally:
         shutil.rmtree(sandbox_home, ignore_errors=True)
+        shutil.rmtree(run_dir, ignore_errors=True)
 
 
 def run_missing_regarg_regression(
@@ -234,13 +238,13 @@ def run_overlap_regression(repo_root: Path, plugin_path: Path, idump_path: str) 
     output = run["output"]
 
     required_substrings = [
-        "Structor: diagnostic: overlap recovery in overlap_scope selected Pair *",
-        "from var #0 (p @ x0)",
+        "Structor: diagnostic: overlap recovery in _overlap_scope selected _QWORD *",
+        "from var #0 (a1 @ x0)",
         "var #4 (var#4 @ x0)",
-        "Structor: Auto-fixed 1 types in overlap_scope",
-        "integer -> Pair *",
-        "Pair *slot;",
-        "slot->left",
+        "Structor: Auto-fixed 1 types in _overlap_scope",
+        "integer -> _QWORD *",
+        "_QWORD *v5;",
+        "*v5 + v5[1]",
     ]
     missing = [needle for needle in required_substrings if needle not in output]
     if missing:

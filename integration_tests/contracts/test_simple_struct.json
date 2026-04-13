@@ -19,10 +19,9 @@
         "fields_created": 4,
         "vtable_slots": 0,
         "propagated_to": [
+          "_main",
           "_printf",
-          "init_simple",
-          "main",
-          "process_simple"
+          "_process_simple"
         ],
         "failed_sites": [],
         "z3": {
@@ -34,8 +33,8 @@
           "name": "auto_process_simple",
           "size": 24,
           "alignment": 1,
-          "source_func_name": "process_simple",
-          "source_var": "ptr",
+          "source_func_name": "_process_simple",
+          "source_var": "a1",
           "field_count": 4,
           "non_padding_field_count": 3,
           "provenance": [],
@@ -108,7 +107,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> process_simple\nvoid __cdecl process_simple(auto_process_simple *ptr) {\n    printf(a1: \"a=%d, b=%ld, c=%p\\n\", ptr->u32_0, ptr->u64_8, ptr->ptr_10);\n}\n<<<\n\n>>> init_simple\nvoid __cdecl init_simple(auto_process_simple *ptr) {\n    ptr->u32_0 = 42;\n    ptr->u64_8 = 0x123456789ABCDEFLL;\n    ptr->ptr_10 = (void *)3735928559LL;\n}\n<<<\n"
+      "golden_pseudocode": ">>> process_simple\n__int64 __fastcall process_simple(auto_process_simple *a1) {\n    return printf(a1: \"a=%d, b=%ld, c=%p\\n\", a1->u32_0, a1->u64_8, a1->ptr_10);\n}\n<<<\n\n>>> init_simple\n__int64 __fastcall init_simple(__int64 result) {\n    *(_DWORD *)result = 42;\n    *(_QWORD *)(result + 8) = 0x123456789ABCDEFLL;\n    *(_QWORD *)(result + 16) = 3735928559LL;\n    return result;\n}\n<<<\n"
     }
   ]
 }

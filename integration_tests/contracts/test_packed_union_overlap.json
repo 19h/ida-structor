@@ -19,10 +19,9 @@
         "fields_created": 3,
         "vtable_slots": 0,
         "propagated_to": [
-          "init_packed_union",
-          "main",
-          "read_parts",
-          "read_whole"
+          "_main",
+          "_read_parts",
+          "_read_whole"
         ],
         "failed_sites": [],
         "z3": {
@@ -31,11 +30,11 @@
           "used_fallback": false
         },
         "structure": {
-          "name": "PackedUnionView",
+          "name": "auto_result",
           "size": 7,
           "alignment": 1,
-          "source_func_name": "read_whole",
-          "source_var": "p",
+          "source_func_name": "_read_whole",
+          "source_var": "result",
           "field_count": 3,
           "non_padding_field_count": 3,
           "provenance": [],
@@ -92,7 +91,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> read_whole\nvoid __cdecl read_whole(PackedUnionView *p) {\n    sink ^= p->tag;\n    sink ^= p->whole;\n    sink ^= p->tail;\n}\n<<<\n\n>>> read_parts\nvoid __cdecl read_parts(PackedUnionView *p) {\n    sink ^= LOWORD(p->whole);\n    sink ^= HIWORD(p->whole);\n}\n<<<\n"
+      "golden_pseudocode": ">>> read_whole\nauto_result *__fastcall read_whole(auto_result *result) {\n    sink ^= result->u8_0;\n    sink ^= result->u32_1;\n    sink ^= result->u16_5;\n    return result;\n}\n<<<\n\n>>> read_parts\nauto_result *__fastcall read_parts(auto_result *result) {\n    sink ^= LOWORD(result->u32_1);\n    sink ^= HIWORD(result->u32_1);\n    return result;\n}\n<<<\n"
     }
   ]
 }

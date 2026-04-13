@@ -16,56 +16,113 @@
         "success": true,
         "error": "Success",
         "error_message": "",
-        "fields_created": 5,
+        "fields_created": 8,
         "vtable_slots": 0,
         "propagated_to": [
-          "consume_child",
-          "init_parent",
-          "main",
-          "process_parent"
+          "_consume_child",
+          "_main",
+          "_process_parent"
         ],
         "failed_sites": [],
         "z3": {
-          "status": "success",
+          "status": "success_relaxed",
           "used_z3": true,
           "used_fallback": false
         },
         "structure": {
           "name": "auto_process_parent",
-          "size": 64,
+          "size": 72,
           "alignment": 1,
-          "source_func_name": "process_parent",
-          "source_var": "p",
-          "field_count": 5,
-          "non_padding_field_count": 5,
+          "source_func_name": "_process_parent",
+          "source_var": "a1",
+          "field_count": 8,
+          "non_padding_field_count": 6,
           "provenance": [],
           "fields": [
             {
-              "name": "",
+              "name": "union_0",
               "offset": 0,
-              "size": 4,
-              "semantic": "int",
-              "type": "unsigned int",
+              "size": 6,
+              "semantic": "unknown",
+              "type": "unsigned __int32",
               "confidence": "medium",
               "is_padding": false,
               "is_array": false,
               "array_count": 1,
-              "is_union_candidate": false,
+              "is_union_candidate": true,
               "is_bitfield": false,
               "bit_offset": 0,
               "bit_size": 0,
-              "union_members": []
+              "union_members": [
+                {
+                  "name": "u32_0",
+                  "offset": 0,
+                  "size": 4,
+                  "type": "unsigned __int32"
+                },
+                {
+                  "name": "u32_2",
+                  "offset": 0,
+                  "size": 4,
+                  "type": "unsigned __int32"
+                }
+              ]
             },
             {
-              "name": "",
+              "name": "union_4",
               "offset": 4,
+              "size": 6,
+              "semantic": "unknown",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": true,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": [
+                {
+                  "name": "u32_4",
+                  "offset": 0,
+                  "size": 4,
+                  "type": "unsigned __int32"
+                },
+                {
+                  "name": "u32_6",
+                  "offset": 0,
+                  "size": 4,
+                  "type": "unsigned __int32"
+                }
+              ]
+            },
+            {
+              "name": "u64_A",
+              "offset": 10,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u8s_12",
+              "offset": 18,
               "size": 4,
-              "semantic": "int",
-              "type": "unsigned int",
+              "semantic": "array",
+              "type": "unsigned __int8[4]",
               "confidence": "medium",
               "is_padding": false,
-              "is_array": false,
-              "array_count": 1,
+              "is_array": true,
+              "array_count": 4,
               "is_union_candidate": false,
               "is_bitfield": false,
               "bit_offset": 0,
@@ -73,29 +130,13 @@
               "union_members": []
             },
             {
-              "name": "part_8",
-              "offset": 8,
-              "size": 20,
-              "semantic": "struct",
-              "type": "auto_part_8",
+              "name": "__pad_16",
+              "offset": 22,
+              "size": 34,
+              "semantic": "padding",
+              "type": "char[34]",
               "confidence": "medium",
-              "is_padding": false,
-              "is_array": false,
-              "array_count": 1,
-              "is_union_candidate": false,
-              "is_bitfield": false,
-              "bit_offset": 0,
-              "bit_size": 0,
-              "union_members": []
-            },
-            {
-              "name": "part_20",
-              "offset": 32,
-              "size": 20,
-              "semantic": "struct",
-              "type": "auto_part_8",
-              "confidence": "medium",
-              "is_padding": false,
+              "is_padding": true,
               "is_array": false,
               "array_count": 1,
               "is_union_candidate": false,
@@ -119,12 +160,44 @@
               "bit_offset": 0,
               "bit_size": 0,
               "union_members": []
+            },
+            {
+              "name": "__pad_40",
+              "offset": 64,
+              "size": 4,
+              "semantic": "padding",
+              "type": "char[4]",
+              "confidence": "medium",
+              "is_padding": true,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_44",
+              "offset": 68,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
             }
           ],
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> process_parent\nvoid __cdecl process_parent(auto_process_parent *p) {\n    sink ^= p->0;\n    sink ^= p->4;\n    consume_child(child: &p->part_8);\n    consume_child(child: &p->part_20.u32_4);\n    sink ^= *(_QWORD *)&p[1].0;\n}\n<<<\n\n>>> consume_child\nvoid __cdecl consume_child(auto_child_view_8_tail_8 *__shifted(auto_child_view_8, 8) child) {\n    sink ^= ADJ(ptr: child)->u32s_0[2];\n    sink ^= ADJ(ptr: child)->u32s_0[3];\n    sink ^= ADJ(ptr: child)->u64_10;\n    sink ^= ADJ(ptr: child)->u8s_18[0];\n    sink ^= ADJ(ptr: child)->u8s_18[1];\n    sink ^= ADJ(ptr: child)->u8s_18[2];\n    sink ^= ADJ(ptr: child)->u8s_18[3];\n}\n<<<\n"
+      "golden_pseudocode": ">>> process_parent\nunsigned int *__fastcall process_parent(auto_process_parent *a1) {\n    unsigned int *result; // x0\n\n    sink ^= a1->union_0.u32_0;\n    sink ^= a1->union_4.u32_4;\n    consume_child(result: (unsigned int *)&a1->u64_A);\n    result = consume_child(result: (unsigned int *)&a1->__pad_16[12]);\n    sink ^= *(unsigned __int64 *)((char *)&a1->u64_38 + 2);\n    return result;\n}\n<<<\n\n>>> consume_child\nauto_result_view_8_tail_8 *__shifted(auto_result_view_8, 8) __fastcall consume_child(\n    auto_result_view_8_tail_8 *__shifted(auto_result_view_8, 8) result) {\n    sink ^= LODWORD(ADJ(ptr: result)->u64_8);\n    sink ^= HIDWORD(ADJ(ptr: result)->u64_8);\n    sink ^= ADJ(ptr: result)->u64_10;\n    sink ^= ADJ(ptr: result)->u8s_18[0];\n    sink ^= ADJ(ptr: result)->u8s_18[1];\n    sink ^= ADJ(ptr: result)->u8s_18[2];\n    sink ^= ADJ(ptr: result)->u8s_18[3];\n    return result;\n}\n<<<\n"
     }
   ]
 }

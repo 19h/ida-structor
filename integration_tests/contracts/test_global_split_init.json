@@ -19,9 +19,9 @@
         "fields_created": 3,
         "vtable_slots": 0,
         "propagated_to": [
-          "device_attach_cookie",
-          "device_header_ctor",
-          "device_publish_slots"
+          "_device_attach_cookie",
+          "_device_header_ctor",
+          "_device_publish_slots"
         ],
         "failed_sites": [],
         "z3": {
@@ -33,15 +33,14 @@
           "name": "auto_g_device",
           "size": 56,
           "alignment": 1,
-          "source_func_name": "device_header_ctor",
-          "source_var": "g_device",
+          "source_func_name": "_device_header_ctor",
+          "source_var": "_g_device",
           "field_count": 3,
           "non_padding_field_count": 3,
           "provenance": [
-            "device_attach_cookie",
-            "device_header_ctor",
-            "device_publish_slots",
-            "use_device"
+            "_device_attach_cookie",
+            "_device_header_ctor",
+            "_device_publish_slots"
           ],
           "fields": [
             {
@@ -96,7 +95,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> device_header_ctor\nvoid __cdecl device_header_ctor(auto_g_device *dst) {\n    dst->u32_0 = 1146504515;\n    dst->u32_4 = 20;\n    dst->entries_8[0].u64_0 = 0x2000;\n    dst->entries_8[0].u64_8 = 8320;\n}\n<<<\n\n>>> device_attach_cookie\nvoid __cdecl device_attach_cookie(auto_g_device *dst) {\n    dst->entries_8[1].u64_0 = dst;\n    LODWORD(dst->entries_8[1].u64_8) = 49;\n}\n<<<\n\n>>> device_publish_slots\nvoid __cdecl device_publish_slots(auto_g_device *dst) {\n    dst->entries_8[2].u64_0 = 0xAAAABBBBCCCCDDDDLL;\n    dst->entries_8[2].u64_8 = 0x1111222233334444LL;\n}\n<<<\n"
+      "golden_pseudocode": ">>> device_header_ctor\nauto_g_device *__fastcall device_header_ctor(auto_g_device *result) {\n    result->u32_0 = 1146504515;\n    result->u32_4 = 20;\n    result->entries_8[0].u64_0 = 0x2000;\n    result->entries_8[0].u64_8 = 8320;\n    return result;\n}\n<<<\n\n>>> device_attach_cookie\nauto_g_device *__fastcall device_attach_cookie(auto_g_device *result) {\n    result->entries_8[1].u64_0 = result;\n    LODWORD(result->entries_8[1].u64_8) = 49;\n    return result;\n}\n<<<\n\n>>> device_publish_slots\nauto_g_device *__fastcall device_publish_slots(auto_g_device *result) {\n    result->entries_8[2].u64_0 = 0xAAAABBBBCCCCDDDDLL;\n    result->entries_8[2].u64_8 = 0x1111222233334444LL;\n    return result;\n}\n<<<\n"
     }
   ]
 }

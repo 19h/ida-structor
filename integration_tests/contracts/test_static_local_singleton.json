@@ -32,7 +32,7 @@
           "used_fallback": false
         },
         "structure": {
-          "name": "LocalCache",
+          "name": "entry_point_command",
           "size": 24,
           "alignment": 1,
           "source_func_name": "__ZN10LocalCacheC2Ej",
@@ -92,11 +92,11 @@
               "union_members": []
             },
             {
-              "name": "ptr_10",
+              "name": "u64_10",
               "offset": 16,
               "size": 8,
-              "semantic": "ptr",
-              "type": "void *",
+              "semantic": "uint",
+              "type": "unsigned __int64",
               "confidence": "medium",
               "is_padding": false,
               "is_array": false,
@@ -111,7 +111,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> __Z16warm_local_cachev\nvoid warm_local_cache() {\n    LocalCache *local_cache; // [xsp+8h] [xbp-8h]\n\n    local_cache = get_local_cache();\n    LocalCache::touch(this: local_cache, delta: 3u);\n    sink ^= local_cache->magic;\n}\n<<<\n\n>>> __Z16read_local_cachev\nvoid read_local_cache() {\n    LocalCache *local_cache; // [xsp+8h] [xbp-8h]\n\n    local_cache = get_local_cache();\n    sink ^= local_cache->state;\n    sink ^= local_cache->total;\n    sink ^= (volatile uint64_t)local_cache->self;\n}\n<<<\n"
+      "golden_pseudocode": ">>> __Z16warm_local_cachev\n__int64 __fastcall warm_local_cache() {\n    __int64 result; // x0\n    entry_point_command *local_cache; // [xsp+8h] [xbp-8h]\n\n    local_cache = (entry_point_command *)get_local_cache();\n    result = LocalCache::touch(this: (LocalCache *)local_cache, a2: 3u);\n    sink ^= local_cache->cmd;\n    return result;\n}\n<<<\n\n>>> __Z16read_local_cachev\nentry_point_command *__fastcall read_local_cache() {\n    entry_point_command *result; // x0\n\n    result = (entry_point_command *)get_local_cache();\n    sink ^= result->cmdsize;\n    sink ^= result->entryoff;\n    sink ^= result->stacksize;\n    return result;\n}\n<<<\n"
     }
   ]
 }

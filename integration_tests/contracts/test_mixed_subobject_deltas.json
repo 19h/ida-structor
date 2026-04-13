@@ -16,27 +16,26 @@
         "success": true,
         "error": "Success",
         "error_message": "",
-        "fields_created": 4,
+        "fields_created": 7,
         "vtable_slots": 0,
         "propagated_to": [
-          "init_deltas",
-          "main",
-          "read_child",
-          "read_mixed_anchor"
+          "_main",
+          "_read_child",
+          "_read_mixed_anchor"
         ],
         "failed_sites": [],
         "z3": {
-          "status": "success",
+          "status": "success_relaxed",
           "used_z3": true,
           "used_fallback": false
         },
         "structure": {
-          "name": "auto_anchor_view_10",
-          "size": 44,
+          "name": "auto_read_mixed_anchor_view_10",
+          "size": 60,
           "alignment": 1,
-          "source_func_name": "read_mixed_anchor",
-          "source_var": "anchor",
-          "field_count": 4,
+          "source_func_name": "_read_mixed_anchor",
+          "source_var": "a1",
+          "field_count": 7,
           "non_padding_field_count": 4,
           "provenance": [],
           "fields": [
@@ -57,11 +56,27 @@
               "union_members": []
             },
             {
-              "name": "part_4",
+              "name": "__pad_4",
               "offset": 4,
+              "size": 9,
+              "semantic": "padding",
+              "type": "char[9]",
+              "confidence": "medium",
+              "is_padding": true,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "part_d",
+              "offset": 13,
               "size": 16,
               "semantic": "struct",
-              "type": "auto_part_neg_c",
+              "type": "source_version_command",
               "confidence": "medium",
               "is_padding": false,
               "is_array": false,
@@ -73,13 +88,13 @@
               "union_members": []
             },
             {
-              "name": "part_14",
-              "offset": 20,
-              "size": 16,
-              "semantic": "struct",
-              "type": "ChildDelta",
+              "name": "__pad_1d",
+              "offset": 29,
+              "size": 7,
+              "semantic": "padding",
+              "type": "char[7]",
               "confidence": "medium",
-              "is_padding": false,
+              "is_padding": true,
               "is_array": false,
               "array_count": 1,
               "is_union_candidate": false,
@@ -103,12 +118,44 @@
               "bit_offset": 0,
               "bit_size": 0,
               "union_members": []
+            },
+            {
+              "name": "__pad_2c",
+              "offset": 44,
+              "size": 12,
+              "semantic": "padding",
+              "type": "char[12]",
+              "confidence": "medium",
+              "is_padding": true,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_38",
+              "offset": 56,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
             }
           ],
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> read_mixed_anchor\nvoid __cdecl read_mixed_anchor(auto_anchor_view_10_tail_10 *__shifted(auto_anchor_view_10, 0x10) anchor) {\n    sink ^= ADJ(ptr: anchor)->u32_0;\n    read_child(child: &ADJ(ptr: anchor)->part_4);\n    sink ^= ADJ(ptr: anchor)->part_4.value.value_hi[1];\n    read_child(child: &ADJ(ptr: anchor)->part_14);\n    sink ^= ADJ(ptr: anchor)->u64_24;\n}\n<<<\n\n>>> read_child\nvoid __cdecl read_child(ChildDelta *child) {\n    sink ^= child->kind;\n    sink ^= child->flags;\n    sink ^= child->value;\n}\n<<<\n"
+      "golden_pseudocode": ">>> read_mixed_anchor\nsource_version_command *__fastcall read_mixed_anchor(\n    auto_read_mixed_anchor_view_10_tail_10 *__shifted(auto_read_mixed_anchor_view_10, 0x10) a1) {\n    source_version_command *result; // x0\n\n    sink ^= ADJ(ptr: a1)->u32_0;\n    read_child(result: (source_version_command *)ADJ(ptr: a1)->__pad_4);\n    sink ^= *(unsigned __int32 *)((char *)&ADJ(ptr: a1)->part_d.cmd + 3);\n    result = read_child(result: (source_version_command *)((char *)&ADJ(ptr: a1)->part_d.cmdsize + 3));\n    sink ^= ADJ(ptr: a1)->u64_24;\n    return result;\n}\n<<<\n\n>>> read_child\nsource_version_command *__fastcall read_child(source_version_command *result) {\n    sink ^= result->cmd;\n    sink ^= result->cmdsize;\n    sink ^= result->version;\n    return result;\n}\n<<<\n"
     }
   ]
 }

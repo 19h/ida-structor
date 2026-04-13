@@ -17,14 +17,13 @@
         "success": true,
         "error": "Success",
         "error_message": "",
-        "fields_created": 4,
+        "fields_created": 6,
         "vtable_slots": 0,
         "propagated_to": [
-          "init_table",
-          "main",
-          "read_checksum",
-          "read_table",
-          "update_tag"
+          "_main",
+          "_read_checksum",
+          "_read_table",
+          "_update_tag"
         ],
         "failed_sites": [],
         "z3": {
@@ -33,13 +32,13 @@
           "used_fallback": false
         },
         "structure": {
-          "name": "auto_read_table",
-          "size": 76,
+          "name": "auto_result",
+          "size": 88,
           "alignment": 1,
-          "source_func_name": "read_table",
-          "source_var": "p",
-          "field_count": 4,
-          "non_padding_field_count": 4,
+          "source_func_name": "_read_table",
+          "source_var": "result",
+          "field_count": 6,
+          "non_padding_field_count": 5,
           "provenance": [],
           "fields": [
             {
@@ -105,12 +104,44 @@
               "bit_offset": 0,
               "bit_size": 0,
               "union_members": []
+            },
+            {
+              "name": "__pad_4C",
+              "offset": 76,
+              "size": 8,
+              "semantic": "padding",
+              "type": "char[8]",
+              "confidence": "medium",
+              "is_padding": true,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_54",
+              "offset": 84,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
             }
           ],
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> read_table\nvoid __cdecl read_table(auto_read_table *p) {\n    sink ^= p->u32_0;\n    sink ^= p->u32_4;\n    sink ^= p->entries_8[0].u32_0;\n    sink ^= p->entries_8[1].u32_0;\n    sink ^= p->entries_8[2].u32_0;\n    sink ^= p->entries_8[3].u32_0;\n    sink ^= p->entries_8[0].u64_8;\n    sink ^= p->entries_8[1].u64_8;\n    sink ^= p->entries_8[2].u64_8;\n    sink ^= p->entries_8[3].u64_8;\n}\n<<<\n\n>>> update_tag\nvoid __cdecl update_tag(auto_read_table *p, int idx, uint32_t value) {\n    p->entries_8[idx].u32_0 = value;\n}\n<<<\n\n>>> read_checksum\nvoid __cdecl read_checksum(auto_read_table *p) {\n    sink ^= p->u8s_48[0];\n    sink ^= p->u8s_48[1];\n    sink ^= p->u8s_48[2];\n    sink ^= p->u8s_48[3];\n}\n<<<\n"
+      "golden_pseudocode": ">>> read_table\nauto_result *__fastcall read_table(auto_result *result) {\n    sink ^= result->u32_0;\n    sink ^= result->u32_4;\n    sink ^= result->entries_8[0].u32_0;\n    sink ^= result->entries_8[1].u32_0;\n    sink ^= result->entries_8[2].u32_0;\n    sink ^= result->entries_8[3].u32_0;\n    sink ^= result->entries_8[0].u64_8;\n    sink ^= result->entries_8[1].u64_8;\n    sink ^= result->entries_8[2].u64_8;\n    sink ^= result->entries_8[3].u64_8;\n    return result;\n}\n<<<\n\n>>> update_tag\nauto_result *__fastcall update_tag(auto_result *result, int a2, unsigned int a3) {\n    result->entries_8[a2].u32_0 = a3;\n    return result;\n}\n<<<\n\n>>> read_checksum\nauto_result *__fastcall read_checksum(auto_result *result) {\n    sink ^= result->u8s_48[0];\n    sink ^= result->u8s_48[1];\n    sink ^= result->u8s_48[2];\n    sink ^= result->u8s_48[3];\n    return result;\n}\n<<<\n"
     }
   ]
 }

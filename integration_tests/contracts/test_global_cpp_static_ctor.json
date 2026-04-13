@@ -30,7 +30,7 @@
           "used_fallback": false
         },
         "structure": {
-          "name": "Engine",
+          "name": "entry_point_command",
           "size": 24,
           "alignment": 1,
           "source_func_name": "__ZNK6Engine8snapshotEv",
@@ -91,11 +91,11 @@
               "union_members": []
             },
             {
-              "name": "ptr_10",
+              "name": "u64_10",
               "offset": 16,
               "size": 8,
-              "semantic": "ptr",
-              "type": "void *",
+              "semantic": "uint",
+              "type": "unsigned __int64",
               "confidence": "medium",
               "is_padding": false,
               "is_array": false,
@@ -110,7 +110,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> __Z12drive_enginev\nvoid drive_engine() {\n    Engine::tick(this: &g_engine, delta: 5u);\n    sink ^= Engine::snapshot(this: &g_engine);\n}\n<<<\n\n>>> __Z14inspect_enginev\nvoid inspect_engine() {\n    sink ^= g_engine.magic;\n    sink ^= g_engine.flags;\n    sink ^= g_engine.counter;\n    sink ^= (volatile uint64_t)g_engine.self;\n}\n<<<\n"
+      "golden_pseudocode": ">>> __Z12drive_enginev\n__int64 __fastcall drive_engine() {\n    __int64 result; // x0\n\n    Engine::tick(this: (Engine *)&g_engine, a2: 5u);\n    result = Engine::snapshot(this: (Engine *)&g_engine);\n    sink ^= result;\n    return result;\n}\n<<<\n\n>>> __Z14inspect_enginev\nvoid __fastcall inspect_engine() {\n    sink ^= (unsigned int)g_engine;\n    sink ^= (unsigned int)dword_100008004;\n    sink ^= qword_100008008;\n    sink ^= qword_100008010;\n}\n<<<\n"
     }
   ]
 }

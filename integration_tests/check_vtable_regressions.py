@@ -30,6 +30,18 @@ def run(cmd, *, cwd=None, env=None):
     return subprocess.run(cmd, cwd=cwd, env=env, text=True, capture_output=True)
 
 
+def expand_function_filters(function_names: list[str]) -> list[str]:
+    expanded: list[str] = []
+    for name in function_names:
+        if name not in expanded:
+            expanded.append(name)
+        if name and not name.startswith("_"):
+            prefixed = f"_{name}"
+            if prefixed not in expanded:
+                expanded.append(prefixed)
+    return expanded
+
+
 def require_success(proc, description: str) -> None:
     if proc.returncode == 0:
         return
@@ -124,13 +136,9 @@ def run_idump(
     sandbox_home = prepare_plugin_home(plugin_path, real_home)
     write_structor_config(sandbox_home)
 
-    sandbox_binary = sandbox_home / binary.name
+    run_dir = Path(tempfile.mkdtemp(prefix="structor-vtable-binary."))
+    sandbox_binary = run_dir / binary.name
     shutil.copy2(binary, sandbox_binary)
-
-    dsym_src = binary.with_name(binary.name + ".dSYM")
-    dsym_dst = sandbox_home / dsym_src.name
-    if dsym_src.exists():
-        shutil.copytree(dsym_src, dsym_dst)
 
     try:
         log(f"Fixture binary: {binary.name}")
@@ -147,7 +155,7 @@ def run_idump(
                 "structor",
                 "--pseudo-only",
                 "-F",
-                ",".join(function_names),
+                ",".join(expand_function_filters(function_names)),
                 str(sandbox_binary),
             ],
             cwd=repo_root,
@@ -157,6 +165,7 @@ def run_idump(
         return strip_ansi((proc.stdout or "") + (proc.stderr or ""))
     finally:
         shutil.rmtree(sandbox_home, ignore_errors=True)
+        shutil.rmtree(run_dir, ignore_errors=True)
 
 
 def require_substrings(output: str, needles: list[str], description: str) -> None:
@@ -198,15 +207,15 @@ def run_vtable_positive_regression(
     require_substrings(
         output,
         [
-            "call_vtable_direct(auto_z18call_vtable_directpv *obj)",
-            "obj->vtable->slot_0(a1: obj);",
-            "obj->vtable->slot_1",
-            "call_multiple_slots(auto_z18call_vtable_directpv *obj, int arg)",
-            "obj->vtable->slot_2",
-            "obj->vtable->slot_3",
-            'printf(a1: "data: %d\\n", obj->u32_8);',
-            'printf(a1: "data2: %d\\n", obj->u32_C);',
-            'printf(a1: "ptr: %p\\n", obj->ptr_10);',
+            "call_vtable_direct(auto_z18call_vtable_directpv *a1)",
+            "a1->vtable->slot_0",
+            "a1->vtable->slot_1",
+            "call_multiple_slots(auto_z18call_vtable_directpv *a1",
+            "a1->vtable->slot_2",
+            "a1->vtable->slot_3",
+            'printf(a1: "data: %d\\n", a1->u32_8);',
+            'printf(a1: "data2: %d\\n", a1->u32_C);',
+            'printf(a1: "ptr: %p\\n", a1->ptr_10);',
         ],
         "vtable positive regression",
     )

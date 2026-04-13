@@ -18,15 +18,14 @@
         "success": true,
         "error": "Success",
         "error_message": "",
-        "fields_created": 6,
+        "fields_created": 9,
         "vtable_slots": 0,
         "propagated_to": [
-          "init_header",
-          "inspect_bits",
-          "inspect_bytes",
-          "inspect_float_view",
-          "inspect_header",
-          "main"
+          "_inspect_bits",
+          "_inspect_bytes",
+          "_inspect_float_view",
+          "_inspect_header",
+          "_main"
         ],
         "failed_sites": [],
         "z3": {
@@ -35,25 +34,57 @@
           "used_fallback": false
         },
         "structure": {
-          "name": "auto_inspect_header",
-          "size": 20,
+          "name": "auto_result",
+          "size": 24,
           "alignment": 1,
-          "source_func_name": "inspect_header",
-          "source_var": "p",
-          "field_count": 6,
-          "non_padding_field_count": 6,
+          "source_func_name": "_inspect_header",
+          "source_var": "result",
+          "field_count": 9,
+          "non_padding_field_count": 9,
           "provenance": [],
           "fields": [
             {
-              "name": "u32s_0",
+              "name": "u32_0",
               "offset": 0,
-              "size": 12,
-              "semantic": "array",
-              "type": "unsigned __int32[3]",
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
               "confidence": "medium",
               "is_padding": false,
-              "is_array": true,
-              "array_count": 3,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_4",
+              "offset": 4,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "f32_8",
+              "offset": 8,
+              "size": 4,
+              "semantic": "float",
+              "type": "float",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
               "is_union_candidate": false,
               "is_bitfield": false,
               "bit_offset": 0,
@@ -139,12 +170,28 @@
               "bit_offset": 0,
               "bit_size": 0,
               "union_members": []
+            },
+            {
+              "name": "u32_14",
+              "offset": 20,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
             }
           ],
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> inspect_header\nvoid __cdecl inspect_header(auto_inspect_header *p) {\n    sink ^= p->u32s_0[0];\n    sink ^= p->u32s_0[1];\n    sink ^= p->u32s_0[2];\n    sink ^= p->u16_C;\n}\n<<<\n\n>>> inspect_float_view\nvoid __cdecl inspect_float_view(auto_inspect_header *p) {\n    sink ^= p->u32s_0[2];\n}\n<<<\n\n>>> inspect_bits\nvoid __cdecl inspect_bits(auto_inspect_header *p) {\n    auto_inspect_header_flags_E bf_E_0; // [xsp+Eh] [xbp-12h]\n\n    bf_E_0 = p->bf_E_0;\n    sink ^= bf_E_0 & 3;\n    sink ^= ((int)bf_E_0 >> 2) & 7;\n    sink ^= ((int)bf_E_0 >> 5) & 1;\n}\n<<<\n\n>>> inspect_bytes\nvoid __cdecl inspect_bytes(auto_inspect_header *p) {\n    sink ^= LOBYTE(p->bf_E_2);\n    sink ^= HIBYTE(p->bf_E_2);\n    sink ^= LOBYTE(p->bf_E_5);\n    sink ^= HIBYTE(p->bf_E_5);\n}\n<<<\n"
+      "golden_pseudocode": ">>> inspect_header\nauto_result *__fastcall inspect_header(auto_result *result) {\n    sink ^= result->u32_0;\n    sink ^= result->u32_4;\n    sink ^= LODWORD(result->f32_8);\n    sink ^= result->u16_C;\n    return result;\n}\n<<<\n\n>>> inspect_float_view\nfloat __fastcall inspect_float_view(auto_result *a1) {\n    float result; // s0\n\n    result = a1->f32_8;\n    sink ^= LODWORD(result);\n    return result;\n}\n<<<\n\n>>> inspect_bits\nauto_result *__fastcall inspect_bits(auto_result *result) {\n    auto_result_flags_E bf_E_0; // [xsp+Eh] [xbp-12h]\n\n    bf_E_0 = result->bf_E_0;\n    sink ^= bf_E_0 & 3;\n    sink ^= ((int)bf_E_0 >> 2) & 7;\n    sink ^= ((int)bf_E_0 >> 5) & 1;\n    return result;\n}\n<<<\n\n>>> inspect_bytes\nauto_result *__fastcall inspect_bytes(auto_result *result) {\n    sink ^= LOBYTE(result->bf_E_2);\n    sink ^= HIBYTE(result->bf_E_2);\n    sink ^= LOBYTE(result->bf_E_5);\n    sink ^= HIBYTE(result->bf_E_5);\n    return result;\n}\n<<<\n"
     }
   ]
 }

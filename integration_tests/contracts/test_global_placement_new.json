@@ -93,11 +93,11 @@
               "union_members": []
             },
             {
-              "name": "ptr_10",
+              "name": "u64_10",
               "offset": 16,
               "size": 8,
-              "semantic": "ptr",
-              "type": "void *",
+              "semantic": "uint",
+              "type": "unsigned __int64",
               "confidence": "medium",
               "is_padding": false,
               "is_array": false,
@@ -144,7 +144,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> __Z23construct_gadget_stage1v\nvoid construct_gadget_stage1() {\n    construct_gadget_stage2(storage: g_gadget_storage);\n}\n<<<\n\n>>> __Z10use_gadgetv\nvoid use_gadget() {\n    auto_g_gadget_storage *v0; // [xsp+8h] [xbp-8h]\n\n    v0 = g_gadget;\n    sink ^= g_gadget->u32_0;\n    sink ^= g_gadget->u32_4;\n    sink ^= g_gadget->u64_8;\n    sink ^= (volatile uint64_t)g_gadget->ptr_10;\n    sink ^= g_gadget->u16_18;\n    sink ^= g_gadget->u16_1A;\n    Gadget::bump(this: (Gadget *)g_gadget, delta: 4u);\n    sink ^= v0->u32_4;\n}\n<<<\n"
+      "golden_pseudocode": ">>> __Z23construct_gadget_stage1v\n__int64 __fastcall construct_gadget_stage1() {\n    return construct_gadget_stage2(a1: &g_gadget_storage);\n}\n<<<\n\n>>> __Z10use_gadgetv\n__int64 __fastcall use_gadget() {\n    __int64 result; // x0\n    auto_g_gadget_storage *v1; // [xsp+8h] [xbp-8h]\n\n    v1 = g_gadget;\n    sink ^= g_gadget->u32_0;\n    sink ^= g_gadget->u32_4;\n    sink ^= g_gadget->u64_8;\n    sink ^= g_gadget->u64_10;\n    sink ^= g_gadget->u16_18;\n    sink ^= g_gadget->u16_1A;\n    result = Gadget::bump(this: (Gadget *)g_gadget, a2: 4u);\n    sink ^= v1->u32_4;\n    return result;\n}\n<<<\n"
     }
   ]
 }

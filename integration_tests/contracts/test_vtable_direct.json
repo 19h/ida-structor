@@ -20,11 +20,11 @@
         "fields_created": 4,
         "vtable_slots": 0,
         "propagated_to": [
-          "_printf",
-          "access_object_fields",
-          "increment_fields",
-          "main",
-          "modify_object_fields"
+          "_access_object_fields",
+          "_increment_fields",
+          "_main",
+          "_modify_object_fields",
+          "_printf"
         ],
         "failed_sites": [],
         "z3": {
@@ -36,8 +36,8 @@
           "name": "auto_access_object_fields",
           "size": 32,
           "alignment": 1,
-          "source_func_name": "access_object_fields",
-          "source_var": "obj",
+          "source_func_name": "_access_object_fields",
+          "source_var": "a1",
           "field_count": 4,
           "non_padding_field_count": 4,
           "provenance": [],
@@ -110,7 +110,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> access_object_fields\nvoid __cdecl access_object_fields(auto_access_object_fields *obj) {\n    printf(\n        a1: \"vtable=%p, data1=%d, data2=%d, data3=%p, data4=%ld\\n\",\n        obj->ptr_0,\n        LODWORD(obj->u64_8),\n        HIDWORD(obj->u64_8),\n        obj->ptr_10,\n        obj->u64_18);\n}\n<<<\n\n>>> modify_object_fields\nvoid __cdecl modify_object_fields(auto_access_object_fields *obj, int new_data1, int new_data2) {\n    LODWORD(obj->u64_8) = new_data1;\n    HIDWORD(obj->u64_8) = new_data2;\n    obj->u64_18 = new_data1 + new_data2;\n}\n<<<\n\n>>> increment_fields\nvoid __cdecl increment_fields(auto_access_object_fields *obj) {\n    ++LODWORD(obj->u64_8);\n    ++HIDWORD(obj->u64_8);\n    obj->u64_18 *= 2LL;\n}\n<<<\n"
+      "golden_pseudocode": ">>> access_object_fields\n__int64 __fastcall access_object_fields(auto_access_object_fields *a1) {\n    return printf(\n               a1: \"vtable=%p, data1=%d, data2=%d, data3=%p, data4=%ld\\n\",\n               a1->ptr_0,\n               LODWORD(a1->u64_8),\n               HIDWORD(a1->u64_8),\n               a1->ptr_10,\n               a1->u64_18);\n}\n<<<\n\n>>> modify_object_fields\nauto_access_object_fields *__fastcall modify_object_fields(auto_access_object_fields *result, int a2, int a3) {\n    LODWORD(result->u64_8) = a2;\n    HIDWORD(result->u64_8) = a3;\n    result->u64_18 = a2 + a3;\n    return result;\n}\n<<<\n\n>>> increment_fields\nauto_access_object_fields *__fastcall increment_fields(auto_access_object_fields *result) {\n    ++LODWORD(result->u64_8);\n    ++HIDWORD(result->u64_8);\n    result->u64_18 *= 2LL;\n    return result;\n}\n<<<\n"
     }
   ]
 }

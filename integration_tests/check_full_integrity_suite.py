@@ -63,6 +63,7 @@ def main() -> int:
     ]
 
     suites = [
+        ["python3", "integration_tests/check_cpp_api_surface.py", *common],
         ["python3", "integration_tests/check_fixture_contracts.py", *common],
         ["python3", "integration_tests/check_global_recovery_regressions.py", *common],
         ["python3", "integration_tests/check_vtable_regressions.py", *common],
@@ -70,6 +71,7 @@ def main() -> int:
     ]
 
     labels = [
+        "C++ API surface",
         "exact fixture contracts",
         "global recovery regressions",
         "vtable regressions",

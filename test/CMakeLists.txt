@@ -55,6 +55,15 @@ if(IDUMP_EXECUTABLE
    AND EXISTS "$ENV{HOME}/.idapro/ida.reg")
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     add_test(
+        NAME cpp_api_surface_live
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/integration_tests/check_cpp_api_surface.py
+                --repo-root ${CMAKE_SOURCE_DIR}
+                --plugin ${CMAKE_BINARY_DIR}/structor${PLUGIN_EXT}
+                --idump ${IDUMP_EXECUTABLE}
+    )
+    set_tests_properties(cpp_api_surface_live PROPERTIES TIMEOUT 300)
+    add_test(
         NAME type_fixer_regressions_live
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/integration_tests/check_type_fixer_regressions.py

@@ -47,6 +47,18 @@ def run(cmd, *, cwd=None, env=None):
     return subprocess.run(cmd, cwd=cwd, env=env, text=True, capture_output=True)
 
 
+def expand_function_filters(functions: list[str]) -> list[str]:
+    expanded: list[str] = []
+    for name in functions:
+        if name not in expanded:
+            expanded.append(name)
+        if name and not name.startswith("_"):
+            prefixed = f"_{name}"
+            if prefixed not in expanded:
+                expanded.append(prefixed)
+    return expanded
+
+
 def require_success(proc, description: str) -> None:
     if proc.returncode == 0:
         return
@@ -245,7 +257,10 @@ def extract_pseudocode_blocks(output: str) -> dict[str, str]:
 
         while block_lines and not block_lines[-1].strip():
             block_lines.pop()
-        blocks[name] = "\n".join(block_lines)
+        block = "\n".join(block_lines)
+        blocks[name] = block
+        if name.startswith("_") and name[1:] not in blocks:
+            blocks[name[1:]] = block
 
     return blocks
 
@@ -378,13 +393,9 @@ def run_case(
     if not binary.exists():
         raise RuntimeError(f"fixture binary not found: {binary}")
 
-    sandbox_binary = sandbox_home / binary.name
+    run_dir = Path(tempfile.mkdtemp(prefix="structor-contract-binary."))
+    sandbox_binary = run_dir / binary.name
     shutil.copy2(binary, sandbox_binary)
-
-    dsym_src = binary.with_name(binary.name + ".dSYM")
-    dsym_dst = sandbox_home / dsym_src.name
-    if dsym_src.exists():
-        shutil.copytree(dsym_src, dsym_dst)
 
     result_path = sandbox_home / "structor_last_result.json"
 
@@ -409,7 +420,7 @@ def run_case(
                 "structor",
                 "--pseudo-only",
                 "-F",
-                ",".join(functions),
+                ",".join(expand_function_filters(functions)),
                 str(sandbox_binary),
             ],
             cwd=repo_root,
@@ -428,6 +439,7 @@ def run_case(
         return result, output
     finally:
         shutil.rmtree(sandbox_home, ignore_errors=True)
+        shutil.rmtree(run_dir, ignore_errors=True)
 
 
 def require_contains(text: str, needles: list[str], context: str) -> None:

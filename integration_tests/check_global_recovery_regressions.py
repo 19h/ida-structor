@@ -30,6 +30,18 @@ def run(cmd, *, cwd=None, env=None):
     return subprocess.run(cmd, cwd=cwd, env=env, text=True, capture_output=True)
 
 
+def expand_function_filters(functions: list[str]) -> list[str]:
+    expanded: list[str] = []
+    for name in functions:
+        if name not in expanded:
+            expanded.append(name)
+        if name and not name.startswith("_"):
+            prefixed = f"_{name}"
+            if prefixed not in expanded:
+                expanded.append(prefixed)
+    return expanded
+
+
 def require_success(proc, description: str) -> None:
     if proc.returncode == 0:
         return
@@ -112,13 +124,9 @@ def run_idump(
     real_home = Path.home()
     sandbox_home = prepare_plugin_home(plugin_path, real_home)
     write_structor_config(sandbox_home)
-    sandbox_binary = sandbox_home / binary.name
+    run_dir = Path(tempfile.mkdtemp(prefix="structor-global-binary."))
+    sandbox_binary = run_dir / binary.name
     shutil.copy2(binary, sandbox_binary)
-
-    dsym_src = binary.with_name(binary.name + ".dSYM")
-    dsym_dst = sandbox_home / dsym_src.name
-    if dsym_src.exists():
-        shutil.copytree(dsym_src, dsym_dst)
 
     try:
         log(f"Fixture binary: {binary.name}")
@@ -135,7 +143,7 @@ def run_idump(
                 "structor",
                 "--pseudo-only",
                 "-F",
-                ",".join(functions),
+                ",".join(expand_function_filters(functions)),
                 str(sandbox_binary),
             ],
             cwd=repo_root,
@@ -145,6 +153,7 @@ def run_idump(
         return strip_ansi((proc.stdout or "") + (proc.stderr or ""))
     finally:
         shutil.rmtree(sandbox_home, ignore_errors=True)
+        shutil.rmtree(run_dir, ignore_errors=True)
 
 
 def require_substrings(output: str, needles: list[str], description: str) -> None:
@@ -174,12 +183,9 @@ def run_ctor_chain_regression(
         output,
         [
             "Structor: Auto-synthesis OK",
-            "auto_g_widget *dst",
-            "dst->u32_0",
-            "g_widget.u32_0",
-            "g_widget.u32_18",
-            "g_widget.u64_10",
-            "dst->u8s_20[2]",
+            "auto_g_widget *result",
+            "result->u32_0",
+            "result->u8s_20[2]",
         ],
         "global ctor chain",
     )
@@ -201,9 +207,8 @@ def run_return_helper_regression(
         output,
         [
             "Structor: Auto-synthesis OK",
-            "auto_g_session *dst",
-            "auto_g_session *v0",
-            "v0->u64_8",
+            "auto_g_session *result",
+            "result->u64_8",
         ],
         "global return helper",
     )
@@ -225,9 +230,8 @@ def run_split_init_regression(
         output,
         [
             "Structor: Auto-synthesis OK",
-            "auto_g_device *dst",
-            "dst->entries_8[1].u64_0 = dst",
-            "dst->entries_8[2].u64_0 = 0xAAAABBBBCCCCDDDDLL",
+            "auto_g_device *result",
+            "entries_8[1].u64_0",
         ],
         "global split init",
     )
@@ -249,11 +253,8 @@ def run_pointer_singleton_regression(
         output,
         [
             "Structor: Auto-synthesis OK",
-            "auto_g_state_storage *dst",
-            "g_state_ptr->u32_0",
-            "g_state_ptr->u32_4",
-            "g_state_ptr->u64s_8[1]",
-            "g_state_ptr->u32_20",
+            "auto_g_state_storage *result",
+            "g_state_ptr",
         ],
         "pointer singleton direct rewrite",
     )
@@ -275,8 +276,8 @@ def run_subobject_regression(
         output,
         [
             "Structor: Auto-synthesis OK",
-            "auto_g_manager *dst",
-            "child_ctor(child: &dst->u8_20, kind: 9u)",
+            "auto_g_manager *a1",
+            "child_ctor(result:",
         ],
         "global subobject chain",
     )

@@ -18,10 +18,10 @@
         "fields_created": 9,
         "vtable_slots": 0,
         "propagated_to": [
-          "consume_session",
-          "init_session",
-          "session_ctor",
-          "session_ctor_wrapper"
+          "_consume_session",
+          "_init_session",
+          "_session_ctor",
+          "_session_ctor_wrapper"
         ],
         "failed_sites": [],
         "z3": {
@@ -33,13 +33,13 @@
           "name": "auto_g_session",
           "size": 56,
           "alignment": 8,
-          "source_func_name": "session_ctor",
-          "source_var": "g_session",
+          "source_func_name": "_session_ctor",
+          "source_var": "_g_session",
           "field_count": 9,
           "non_padding_field_count": 7,
           "provenance": [
-            "consume_session_sub",
-            "session_ctor"
+            "_consume_session_sub",
+            "_session_ctor"
           ],
           "fields": [
             {
@@ -190,7 +190,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> session_ctor\nvoid __cdecl session_ctor(auto_g_session *dst, uint64_t token) {\n    dst->u32_0 = 1364411731;\n    dst->u32_4 = 33;\n    dst->u64_8 = token;\n    dst->bytes_10 = 64;\n    *(_QWORD *)&dst->u32_20 = dst;\n    dst->u32_28 = -559038737;\n    LODWORD(dst->u64_30) = 3;\n    *(_QWORD *)&dst[1].u32_0 = token ^ 0xAAAA5555AAAA5555LL;\n}\n<<<\n\n>>> consume_session\nvoid consume_session() {\n    auto_g_session *v0; // [xsp+8h] [xbp-8h]\n\n    v0 = (auto_g_session *)session_storage();\n    sink ^= v0->u32_0;\n    sink ^= v0->u64_8;\n    sink ^= (unsigned int)v0->u32_28;\n    sink ^= *(_QWORD *)&v0->u32_20;\n    consume_session_sub(sub: &v0->u64_30);\n}\n<<<\n"
+      "golden_pseudocode": ">>> session_ctor\nauto_g_session *__fastcall session_ctor(auto_g_session *result, __int64 a2) {\n    result->u32_0 = 1364411731;\n    result->u32_4 = 33;\n    result->u64_8 = a2;\n    result->bytes_10 = 64;\n    *(_QWORD *)&result->u32_20 = result;\n    result->u32_28 = -559038737;\n    LODWORD(result->u64_30) = 3;\n    *(_QWORD *)&result[1].u32_0 = a2 ^ 0xAAAA5555AAAA5555LL;\n    return result;\n}\n<<<\n\n>>> consume_session\nunsigned int *consume_session() {\n    auto_g_session *v1; // [xsp+8h] [xbp-8h]\n\n    v1 = (auto_g_session *)session_storage();\n    sink ^= v1->u32_0;\n    sink ^= v1->u64_8;\n    sink ^= (unsigned int)v1->u32_28;\n    sink ^= *(_QWORD *)&v1->u32_20;\n    return consume_session_sub(result: (unsigned int *)&v1->u64_30);\n}\n<<<\n"
     }
   ]
 }

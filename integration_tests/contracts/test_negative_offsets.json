@@ -15,10 +15,11 @@
         "success": true,
         "error": "Success",
         "error_message": "",
-        "fields_created": 6,
+        "fields_created": 8,
         "vtable_slots": 0,
         "propagated_to": [
-          "consume_window"
+          "_consume_window",
+          "_main"
         ],
         "failed_sites": [],
         "z3": {
@@ -27,13 +28,13 @@
           "used_fallback": false
         },
         "structure": {
-          "name": "auto_mid_view_10",
-          "size": 29,
+          "name": "auto_result_view_10",
+          "size": 40,
           "alignment": 1,
-          "source_func_name": "consume_window",
-          "source_var": "mid",
-          "field_count": 6,
-          "non_padding_field_count": 5,
+          "source_func_name": "_consume_window",
+          "source_var": "result",
+          "field_count": 8,
+          "non_padding_field_count": 6,
           "provenance": [],
           "fields": [
             {
@@ -131,12 +132,44 @@
               "bit_offset": 0,
               "bit_size": 0,
               "union_members": []
+            },
+            {
+              "name": "__pad_1d",
+              "offset": 29,
+              "size": 7,
+              "semantic": "padding",
+              "type": "char[7]",
+              "confidence": "medium",
+              "is_padding": true,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_24",
+              "offset": 36,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
             }
           ],
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> consume_window\nvoid __cdecl consume_window(unsigned __int32 (*__shifted(auto_mid_view_10, 0x10) mid)[3]) {\n    sink ^= ADJ(ptr: mid)->u32_0;\n    sink ^= ADJ(ptr: mid)->u16_4;\n    sink ^= ADJ(ptr: mid)->u64_8;\n    sink ^= (*mid)[0];\n    sink ^= (*mid)[1];\n    sink ^= (*mid)[2];\n    sink ^= LOBYTE((*mid)[3]);\n}\n<<<\n"
+      "golden_pseudocode": ">>> consume_window\nunsigned __int32 (*__shifted(auto_result_view_10, 0x10) __fastcall consume_window(\n                      unsigned __int32 (*__shifted(auto_result_view_10, 0x10) result)[3]))[3] {\n    sink ^= ADJ(ptr: result)->u32_0;\n    sink ^= ADJ(ptr: result)->u16_4;\n    sink ^= ADJ(ptr: result)->u64_8;\n    sink ^= (*result)[0];\n    sink ^= (*result)[1];\n    sink ^= (*result)[2];\n    sink ^= LOBYTE((*result)[3]);\n    return result;\n}\n<<<\n"
     }
   ]
 }

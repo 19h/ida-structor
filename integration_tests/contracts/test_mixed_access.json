@@ -20,11 +20,10 @@
         "fields_created": 8,
         "vtable_slots": 0,
         "propagated_to": [
+          "_main",
+          "_modify_mixed",
           "_printf",
-          "main",
-          "modify_mixed",
-          "read_mixed",
-          "write_mixed"
+          "_read_mixed"
         ],
         "failed_sites": [],
         "z3": {
@@ -36,8 +35,8 @@
           "name": "auto_read_mixed",
           "size": 32,
           "alignment": 1,
-          "source_func_name": "read_mixed",
-          "source_var": "ptr",
+          "source_func_name": "_read_mixed",
+          "source_var": "a1",
           "field_count": 8,
           "non_padding_field_count": 6,
           "provenance": [],
@@ -174,7 +173,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> read_mixed\nvoid __cdecl read_mixed(auto_read_mixed *ptr) {\n    printf(\n        a1: \"byte=%u, short=%u, int=%u, long=%llu, float=%f, double=%f\\n\",\n        ptr->u8_0,\n        ptr->u16_2,\n        ptr->u32_4,\n        ptr->u64_8,\n        ptr->f32_10,\n        ptr->f64_18);\n}\n<<<\n\n>>> write_mixed\nvoid __cdecl write_mixed(auto_read_mixed *ptr) {\n    ptr->u8_0 = 66;\n    ptr->u16_2 = 4660;\n    ptr->u32_4 = -559038737;\n    ptr->u64_8 = 0x123456789ABCDEFLL;\n    ptr->f32_10 = 3.1416;\n    ptr->f64_18 = 2.71828183;\n}\n<<<\n\n>>> modify_mixed\nvoid __cdecl modify_mixed(auto_read_mixed *ptr) {\n    ++ptr->u32_4;\n    ptr->f32_10 = ptr->f32_10 * 2.0;\n}\n<<<\n"
+      "golden_pseudocode": ">>> read_mixed\n__int64 __fastcall read_mixed(auto_read_mixed *a1) {\n    auto_read_mixed *v2; // [xsp+58h] [xbp-8h]\n\n    v2 = a1;\n    return printf(\n               a1: \"byte=%u, short=%u, int=%u, long=%llu, float=%f, double=%f\\n\",\n               a1->u8_0,\n               a1->u16_2,\n               a1->u32_4,\n               a1->u64_8,\n               a1->f32_10,\n               a1->f64_18);\n}\n<<<\n\n>>> write_mixed\ndouble __fastcall write_mixed(__int64 a1) {\n    *(_BYTE *)a1 = 66;\n    *(_WORD *)(a1 + 2) = 4660;\n    *(_DWORD *)(a1 + 4) = -559038737;\n    *(_QWORD *)(a1 + 8) = 0x123456789ABCDEFLL;\n    *(_DWORD *)(a1 + 16) = 1078530000;\n    *(_QWORD *)(a1 + 24) = 0x4005BF0A8B04919BLL;\n    return 2.71828183;\n}\n<<<\n\n>>> modify_mixed\nfloat __fastcall modify_mixed(auto_read_mixed *a1) {\n    float result; // s0\n\n    ++a1->u32_4;\n    result = a1->f32_10 * 2.0;\n    a1->f32_10 = result;\n    return result;\n}\n<<<\n"
     }
   ]
 }

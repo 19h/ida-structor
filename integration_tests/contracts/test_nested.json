@@ -19,10 +19,10 @@
         "fields_created": 4,
         "vtable_slots": 0,
         "propagated_to": [
-          "_printf",
-          "access_nested",
-          "main",
-          "modify_array"
+          "_access_nested",
+          "_main",
+          "_modify_array",
+          "_printf"
         ],
         "failed_sites": [],
         "z3": {
@@ -34,8 +34,8 @@
           "name": "auto_access_nested",
           "size": 40,
           "alignment": 1,
-          "source_func_name": "access_nested",
-          "source_var": "ptr",
+          "source_func_name": "_access_nested",
+          "source_var": "a1",
           "field_count": 4,
           "non_padding_field_count": 4,
           "provenance": [],
@@ -108,7 +108,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> access_nested\nvoid __cdecl access_nested(auto_access_nested *ptr) {\n    printf(\n        a1: \"inner=%p, data=%p, array=[%d,%d,%d,%d], flags=%lx\\n\",\n        ptr->ptr_0,\n        ptr->ptr_8,\n        ptr->u32s_10[0],\n        ptr->u32s_10[1],\n        ptr->u32s_10[2],\n        ptr->u32s_10[3],\n        ptr->u64_20);\n}\n<<<\n\n>>> modify_array\nvoid __cdecl modify_array(auto_access_nested *ptr, int idx, int value) {\n    ptr->u32s_10[idx] = value;\n}\n<<<\n"
+      "golden_pseudocode": ">>> access_nested\n__int64 __fastcall access_nested(auto_access_nested *a1) {\n    return printf(\n               a1: \"inner=%p, data=%p, array=[%d,%d,%d,%d], flags=%lx\\n\",\n               a1->ptr_0,\n               a1->ptr_8,\n               a1->u32s_10[0],\n               a1->u32s_10[1],\n               a1->u32s_10[2],\n               a1->u32s_10[3],\n               a1->u64_20);\n}\n<<<\n\n>>> modify_array\nauto_access_nested *__fastcall modify_array(auto_access_nested *result, int a2, unsigned __int32 a3) {\n    result->u32s_10[a2] = a3;\n    return result;\n}\n<<<\n"
     }
   ]
 }

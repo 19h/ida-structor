@@ -27,7 +27,7 @@
         },
         "structure": null
       },
-      "golden_pseudocode": ">>> __Z19call_through_vtablePv\nvoid __cdecl call_through_vtable(void *obj) {\n    int v1; // [xsp+Ch] [xbp-24h]\n    void **vtable; // [xsp+20h] [xbp-10h]\n\n    vtable = *(void ***)obj;\n    (*(void (__fastcall **)(void *))(*(_QWORD *)obj + 8LL))(a1: obj);\n    v1 = ((__int64 (__fastcall *)(void *, __int64))vtable[2])(a1: obj, a2: 10);\n    printf(a1: \"method2 result: %d\\n\", v1);\n}\n<<<\n\n>>> __Z12access_valuePv\nvoid __cdecl access_value(void *obj) {\n    printf(a1: \"value: %d\\n\", *((_DWORD *)obj + 2));\n}\n<<<\n"
+      "golden_pseudocode": ">>> __Z19call_through_vtablePv\n__int64 __fastcall call_through_vtable(__int64 *a1) {\n    int v2; // [xsp+Ch] [xbp-24h]\n    __int64 v3; // [xsp+20h] [xbp-10h]\n\n    v3 = *a1;\n    (*(void (__fastcall **)(__int64 *))(*a1 + 8))(a1);\n    v2 = (*(__int64 (__fastcall **)(__int64 *, __int64))(v3 + 16))(a1, a2: 10);\n    return printf(a1: \"method2 result: %d\\n\", v2);\n}\n<<<\n\n>>> __Z12access_valuePv\n__int64 __fastcall access_value(_DWORD *a1) {\n    return printf(a1: \"value: %d\\n\", a1[2]);\n}\n<<<\n"
     }
   ]
 }

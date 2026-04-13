@@ -17,14 +17,13 @@
         "success": true,
         "error": "Success",
         "error_message": "",
-        "fields_created": 4,
+        "fields_created": 6,
         "vtable_slots": 0,
         "propagated_to": [
-          "init_conflict",
-          "main",
-          "process_conflict",
-          "read_payload_split",
-          "read_payload_whole"
+          "_main",
+          "_process_conflict",
+          "_read_payload_split",
+          "_read_payload_whole"
         ],
         "failed_sites": [],
         "z3": {
@@ -34,12 +33,12 @@
         },
         "structure": {
           "name": "auto_process_conflict",
-          "size": 20,
+          "size": 32,
           "alignment": 1,
-          "source_func_name": "process_conflict",
-          "source_var": "p",
-          "field_count": 4,
-          "non_padding_field_count": 4,
+          "source_func_name": "_process_conflict",
+          "source_var": "a1",
+          "field_count": 6,
+          "non_padding_field_count": 5,
           "provenance": [],
           "fields": [
             {
@@ -105,12 +104,44 @@
               "bit_offset": 0,
               "bit_size": 0,
               "union_members": []
+            },
+            {
+              "name": "__pad_14",
+              "offset": 20,
+              "size": 8,
+              "semantic": "padding",
+              "type": "char[8]",
+              "confidence": "medium",
+              "is_padding": true,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_1C",
+              "offset": 28,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
             }
           ],
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> process_conflict\nvoid __cdecl process_conflict(auto_process_conflict *p) {\n    sink ^= p->u32_0;\n    sink ^= p->u32_4;\n    read_payload_whole(p);\n    read_payload_split(p);\n    sink ^= p->u32_10;\n}\n<<<\n\n>>> read_payload_whole\nvoid __cdecl read_payload_whole(auto_process_conflict *p) {\n    sink ^= p->u64_8;\n}\n<<<\n\n>>> read_payload_split\nvoid __cdecl read_payload_split(auto_process_conflict *p) {\n    sink ^= LODWORD(p->u64_8);\n    sink ^= HIDWORD(p->u64_8);\n}\n<<<\n"
+      "golden_pseudocode": ">>> process_conflict\n__int64 __fastcall process_conflict(auto_process_conflict *a1) {\n    __int64 result; // x0\n\n    sink ^= a1->u32_0;\n    sink ^= a1->u32_4;\n    read_payload_whole(result: (__int64)a1);\n    result = read_payload_split(result: (__int64)a1);\n    sink ^= a1->u32_10;\n    return result;\n}\n<<<\n\n>>> read_payload_whole\nauto_process_conflict *__fastcall read_payload_whole(auto_process_conflict *result) {\n    sink ^= result->u64_8;\n    return result;\n}\n<<<\n\n>>> read_payload_split\nauto_process_conflict *__fastcall read_payload_split(auto_process_conflict *result) {\n    sink ^= LODWORD(result->u64_8);\n    sink ^= HIDWORD(result->u64_8);\n    return result;\n}\n<<<\n"
     }
   ]
 }
