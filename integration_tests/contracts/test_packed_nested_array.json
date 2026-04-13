@@ -1,0 +1,66 @@
+{
+  "fixture": "test_packed_nested_array",
+  "cases": [
+    {
+      "name": "read_bundle",
+      "synth": {
+        "kind": "function",
+        "target": "read_bundle",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "read_bundle",
+        "read_tail"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 1,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "init_bundle",
+          "main",
+          "read_bundle",
+          "read_tail"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success_relaxed",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_read_bundle",
+          "size": 27,
+          "alignment": 1,
+          "source_func_name": "read_bundle",
+          "source_var": "p",
+          "field_count": 1,
+          "non_padding_field_count": 1,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "bytes_0",
+              "offset": 0,
+              "size": 27,
+              "semantic": "int",
+              "type": "unsigned __int8[27]",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> read_bundle\nvoid __cdecl read_bundle(auto_read_bundle *p) {\n    sink ^= p->bytes_0[0];\n    sink ^= *(unsigned __int16 *)&p->bytes_0[1];\n    sink ^= *(unsigned int *)&p->bytes_0[5];\n    sink ^= *(unsigned int *)&p->bytes_0[12];\n    sink ^= *(unsigned int *)&p->bytes_0[19];\n}\n<<<\n\n>>> read_tail\nvoid __cdecl read_tail(auto_read_bundle *p) {\n    sink ^= p->bytes_0[24];\n    sink ^= p->bytes_0[25];\n    sink ^= p->bytes_0[26];\n}\n<<<\n"
+    }
+  ]
+}

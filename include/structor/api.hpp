@@ -479,6 +479,29 @@ inline TypeFixResult StructorAPI::analyze_function_types(ea_t func_ea) {
 
 inline SynthResult StructorAPI::do_global_synthesis(ea_t global_ea, const SynthOptions& opts) {
     try {
+        auto populate_z3_info = [](SynthResult& dst, const SynthesisResult& src) {
+            dst.z3_info.solve_time_ms = static_cast<std::uint32_t>(src.z3_solve_time.count());
+            dst.z3_info.candidates_selected = static_cast<std::uint32_t>(src.structure.fields.size());
+            dst.z3_info.constraints_hard = src.z3_stats.hard_constraints;
+            dst.z3_info.constraints_soft = src.z3_stats.soft_constraints;
+            dst.z3_info.constraints_relaxed = src.z3_stats.relaxations_performed;
+            dst.z3_info.arrays_detected = static_cast<std::uint32_t>(src.arrays_detected);
+            dst.z3_info.unions_created = static_cast<std::uint32_t>(src.unions_created);
+            dst.z3_info.cross_func_merged = static_cast<std::uint32_t>(src.functions_analyzed);
+
+            if (!src.used_z3) {
+                dst.z3_info.status = Z3SynthesisStatus::NotUsed;
+            } else if (src.fell_back_to_heuristic) {
+                dst.z3_info.status = Z3SynthesisStatus::FallbackHeuristic;
+            } else if (src.raw_bytes_regions > 0) {
+                dst.z3_info.status = Z3SynthesisStatus::FallbackRawBytes;
+            } else if (src.had_relaxation) {
+                dst.z3_info.status = Z3SynthesisStatus::SuccessRelaxed;
+            } else {
+                dst.z3_info.status = Z3SynthesisStatus::Success;
+            }
+        };
+
         GlobalObjectAnalyzer analyzer(opts);
         GlobalObjectAnalysis analysis = analyzer.analyze(global_ea);
 
@@ -497,6 +520,9 @@ inline SynthResult StructorAPI::do_global_synthesis(ea_t global_ea, const SynthO
 
         LayoutSynthesizer synthesizer(opts);
         SynthesisResult synth_result = synthesizer.synthesize(analysis.pattern);
+        SynthResult result;
+        result.conflicts = synth_result.conflicts;
+        populate_z3_info(result, synth_result);
         SynthStruct synth_struct = std::move(synth_result.structure);
         qvector<SubStructInfo> sub_structs = std::move(synth_result.sub_structs);
 
@@ -518,9 +544,6 @@ inline SynthResult StructorAPI::do_global_synthesis(ea_t global_ea, const SynthO
                 synth_struct.add_provenance(func_ea);
             }
         }
-
-        SynthResult result;
-        result.conflicts = synth_result.conflicts;
 
         StructurePersistence persistence(opts);
         tid_t struct_tid = sub_structs.empty()
@@ -647,6 +670,29 @@ inline SynthResult StructorAPI::do_global_synthesis(ea_t global_ea, const SynthO
 inline SynthResult StructorAPI::do_synthesis(ea_t func_ea, int var_idx, const SynthOptions& opts) {
     SynthResult result;
 
+    auto populate_z3_info = [](SynthResult& dst, const SynthesisResult& src) {
+        dst.z3_info.solve_time_ms = static_cast<std::uint32_t>(src.z3_solve_time.count());
+        dst.z3_info.candidates_selected = static_cast<std::uint32_t>(src.structure.fields.size());
+        dst.z3_info.constraints_hard = src.z3_stats.hard_constraints;
+        dst.z3_info.constraints_soft = src.z3_stats.soft_constraints;
+        dst.z3_info.constraints_relaxed = src.z3_stats.relaxations_performed;
+        dst.z3_info.arrays_detected = static_cast<std::uint32_t>(src.arrays_detected);
+        dst.z3_info.unions_created = static_cast<std::uint32_t>(src.unions_created);
+        dst.z3_info.cross_func_merged = static_cast<std::uint32_t>(src.functions_analyzed);
+
+        if (!src.used_z3) {
+            dst.z3_info.status = Z3SynthesisStatus::NotUsed;
+        } else if (src.fell_back_to_heuristic) {
+            dst.z3_info.status = Z3SynthesisStatus::FallbackHeuristic;
+        } else if (src.raw_bytes_regions > 0) {
+            dst.z3_info.status = Z3SynthesisStatus::FallbackRawBytes;
+        } else if (src.had_relaxation) {
+            dst.z3_info.status = Z3SynthesisStatus::SuccessRelaxed;
+        } else {
+            dst.z3_info.status = Z3SynthesisStatus::Success;
+        }
+    };
+
     cfuncptr_t cfunc = utils::get_cfunc(func_ea);
     if (!cfunc) {
         return SynthResult::make_error(SynthError::InternalError, "Failed to decompile function");
@@ -703,6 +749,7 @@ inline SynthResult StructorAPI::do_synthesis(ea_t func_ea, int var_idx, const Sy
     // Synthesize structure layout
     LayoutSynthesizer synthesizer(opts);
     SynthesisResult synth_result = synthesizer.synthesize(pattern, opts);
+    populate_z3_info(result, synth_result);
     SynthStruct synth_struct = std::move(synth_result.structure);
     qvector<SubStructInfo> sub_structs = std::move(synth_result.sub_structs);
 

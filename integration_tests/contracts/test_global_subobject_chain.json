@@ -1,0 +1,193 @@
+{
+  "fixture": "test_global_subobject_chain",
+  "cases": [
+    {
+      "name": "g_manager",
+      "synth": {
+        "kind": "global",
+        "target": "g_manager"
+      },
+      "dump_functions": [
+        "manager_ctor"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 9,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "manager_ctor"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_g_manager",
+          "size": 80,
+          "alignment": 1,
+          "source_func_name": "manager_ctor",
+          "source_var": "g_manager",
+          "field_count": 9,
+          "non_padding_field_count": 8,
+          "provenance": [
+            "child_ctor",
+            "manager_ctor",
+            "use_manager"
+          ],
+          "fields": [
+            {
+              "name": "u32_0",
+              "offset": 0,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_4",
+              "offset": 4,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_8",
+              "offset": 8,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_C",
+              "offset": 12,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_10",
+              "offset": 16,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_18",
+              "offset": 24,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u8_20",
+              "offset": 32,
+              "size": 1,
+              "semantic": "uint",
+              "type": "unsigned __int8",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "__pad_21",
+              "offset": 33,
+              "size": 39,
+              "semantic": "padding",
+              "type": "char[39]",
+              "confidence": "medium",
+              "is_padding": true,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_48",
+              "offset": 72,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> manager_ctor\nvoid __fastcall manager_ctor(auto_g_manager *dst) {\n    dst->u32_0 = 1296125511;\n    dst->u32_4 = 85;\n    child_ctor(child: &dst->u8_20, kind: 9u);\n    dst->u64_48 = 0xFEEDFACECAFEBEEFLL;\n}\n<<<\n"
+    }
+  ]
+}

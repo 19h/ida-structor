@@ -1,0 +1,130 @@
+{
+  "fixture": "test_tree_struct",
+  "cases": [
+    {
+      "name": "sum_children",
+      "synth": {
+        "kind": "function",
+        "target": "sum_children",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "sum_children",
+        "walk_two_levels"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 5,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "init_tree",
+          "main",
+          "sum_children",
+          "walk_two_levels"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_sum_children",
+          "size": 25,
+          "alignment": 1,
+          "source_func_name": "sum_children",
+          "source_var": "p",
+          "field_count": 5,
+          "non_padding_field_count": 4,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "u32_0",
+              "offset": 0,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "__pad_4",
+              "offset": 4,
+              "size": 4,
+              "semantic": "padding",
+              "type": "char[4]",
+              "confidence": "medium",
+              "is_padding": true,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "ptr_8",
+              "offset": 8,
+              "size": 8,
+              "semantic": "ptr",
+              "type": "void *",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "ptr_10",
+              "offset": 16,
+              "size": 8,
+              "semantic": "ptr",
+              "type": "void *",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u8_18",
+              "offset": 24,
+              "size": 1,
+              "semantic": "uint",
+              "type": "unsigned __int8",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> sum_children\nvoid __cdecl sum_children(auto_sum_children *p) {\n    sink ^= p->u32_0;\n    sink ^= (volatile uint64_t)p->ptr_8;\n    sink ^= (volatile uint64_t)p->ptr_10;\n    sink ^= p->u8_18;\n}\n<<<\n\n>>> walk_two_levels\nvoid __cdecl walk_two_levels(auto_sum_children *p) {\n    sink ^= *(unsigned int *)p->ptr_8;\n    sink ^= *(unsigned int *)p->ptr_10;\n}\n<<<\n"
+    }
+  ]
+}

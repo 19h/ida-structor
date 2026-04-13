@@ -1,0 +1,33 @@
+{
+  "fixture": "test_vtable",
+  "cases": [
+    {
+      "name": "call_through_vtable",
+      "synth": {
+        "kind": "function",
+        "target": "__Z19call_through_vtablePv",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "__Z19call_through_vtablePv",
+        "__Z12access_valuePv"
+      ],
+      "golden_result": {
+        "success": false,
+        "error": "Insufficient accesses for synthesis",
+        "error_message": "Only 1 accesses found (minimum: 2)",
+        "fields_created": 0,
+        "vtable_slots": 0,
+        "propagated_to": [],
+        "failed_sites": [],
+        "z3": {
+          "status": "not_used",
+          "used_z3": false,
+          "used_fallback": false
+        },
+        "structure": null
+      },
+      "golden_pseudocode": ">>> __Z19call_through_vtablePv\nvoid __cdecl call_through_vtable(void *obj) {\n    int v1; // [xsp+Ch] [xbp-24h]\n    void **vtable; // [xsp+20h] [xbp-10h]\n\n    vtable = *(void ***)obj;\n    (*(void (__fastcall **)(void *))(*(_QWORD *)obj + 8LL))(a1: obj);\n    v1 = ((__int64 (__fastcall *)(void *, __int64))vtable[2])(a1: obj, a2: 10);\n    printf(a1: \"method2 result: %d\\n\", v1);\n}\n<<<\n\n>>> __Z12access_valuePv\nvoid __cdecl access_value(void *obj) {\n    printf(a1: \"value: %d\\n\", *((_DWORD *)obj + 2));\n}\n<<<\n"
+    }
+  ]
+}

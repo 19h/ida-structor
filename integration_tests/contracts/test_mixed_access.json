@@ -1,0 +1,180 @@
+{
+  "fixture": "test_mixed_access",
+  "cases": [
+    {
+      "name": "read_mixed",
+      "synth": {
+        "kind": "function",
+        "target": "read_mixed",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "read_mixed",
+        "write_mixed",
+        "modify_mixed"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 8,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "_printf",
+          "main",
+          "modify_mixed",
+          "read_mixed",
+          "write_mixed"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_read_mixed",
+          "size": 32,
+          "alignment": 1,
+          "source_func_name": "read_mixed",
+          "source_var": "ptr",
+          "field_count": 8,
+          "non_padding_field_count": 6,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "u8_0",
+              "offset": 0,
+              "size": 1,
+              "semantic": "uint",
+              "type": "unsigned __int8",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "__pad_1",
+              "offset": 1,
+              "size": 1,
+              "semantic": "padding",
+              "type": "char[1]",
+              "confidence": "medium",
+              "is_padding": true,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u16_2",
+              "offset": 2,
+              "size": 2,
+              "semantic": "uint",
+              "type": "unsigned __int16",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_4",
+              "offset": 4,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_8",
+              "offset": 8,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "f32_10",
+              "offset": 16,
+              "size": 4,
+              "semantic": "float",
+              "type": "float",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "__pad_14",
+              "offset": 20,
+              "size": 4,
+              "semantic": "padding",
+              "type": "char[4]",
+              "confidence": "medium",
+              "is_padding": true,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "f64_18",
+              "offset": 24,
+              "size": 8,
+              "semantic": "double",
+              "type": "double",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> read_mixed\nvoid __cdecl read_mixed(auto_read_mixed *ptr) {\n    printf(\n        a1: \"byte=%u, short=%u, int=%u, long=%llu, float=%f, double=%f\\n\",\n        ptr->u8_0,\n        ptr->u16_2,\n        ptr->u32_4,\n        ptr->u64_8,\n        ptr->f32_10,\n        ptr->f64_18);\n}\n<<<\n\n>>> write_mixed\nvoid __cdecl write_mixed(auto_read_mixed *ptr) {\n    ptr->u8_0 = 66;\n    ptr->u16_2 = 4660;\n    ptr->u32_4 = -559038737;\n    ptr->u64_8 = 0x123456789ABCDEFLL;\n    ptr->f32_10 = 3.1416;\n    ptr->f64_18 = 2.71828183;\n}\n<<<\n\n>>> modify_mixed\nvoid __cdecl modify_mixed(auto_read_mixed *ptr) {\n    ++ptr->u32_4;\n    ptr->f32_10 = ptr->f32_10 * 2.0;\n}\n<<<\n"
+    }
+  ]
+}

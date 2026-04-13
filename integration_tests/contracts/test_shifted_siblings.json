@@ -1,0 +1,130 @@
+{
+  "fixture": "test_shifted_siblings",
+  "cases": [
+    {
+      "name": "process_parent",
+      "synth": {
+        "kind": "function",
+        "target": "process_parent",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "process_parent",
+        "consume_child"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 5,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "consume_child",
+          "init_parent",
+          "main",
+          "process_parent"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_process_parent",
+          "size": 64,
+          "alignment": 1,
+          "source_func_name": "process_parent",
+          "source_var": "p",
+          "field_count": 5,
+          "non_padding_field_count": 5,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "",
+              "offset": 0,
+              "size": 4,
+              "semantic": "int",
+              "type": "unsigned int",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "",
+              "offset": 4,
+              "size": 4,
+              "semantic": "int",
+              "type": "unsigned int",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "part_8",
+              "offset": 8,
+              "size": 20,
+              "semantic": "struct",
+              "type": "auto_part_8",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "part_20",
+              "offset": 32,
+              "size": 20,
+              "semantic": "struct",
+              "type": "auto_part_8",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_38",
+              "offset": 56,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> process_parent\nvoid __cdecl process_parent(auto_process_parent *p) {\n    sink ^= p->0;\n    sink ^= p->4;\n    consume_child(child: &p->part_8);\n    consume_child(child: &p->part_20.u32_4);\n    sink ^= *(_QWORD *)&p[1].0;\n}\n<<<\n\n>>> consume_child\nvoid __cdecl consume_child(auto_child_view_8_tail_8 *__shifted(auto_child_view_8, 8) child) {\n    sink ^= ADJ(ptr: child)->u32s_0[2];\n    sink ^= ADJ(ptr: child)->u32s_0[3];\n    sink ^= ADJ(ptr: child)->u64_10;\n    sink ^= ADJ(ptr: child)->u8s_18[0];\n    sink ^= ADJ(ptr: child)->u8s_18[1];\n    sink ^= ADJ(ptr: child)->u8s_18[2];\n    sink ^= ADJ(ptr: child)->u8s_18[3];\n}\n<<<\n"
+    }
+  ]
+}

@@ -1,0 +1,196 @@
+{
+  "fixture": "test_global_ctor_return",
+  "cases": [
+    {
+      "name": "g_session",
+      "synth": {
+        "kind": "global",
+        "target": "g_session"
+      },
+      "dump_functions": [
+        "session_ctor",
+        "consume_session"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 9,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "consume_session",
+          "init_session",
+          "session_ctor",
+          "session_ctor_wrapper"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "not_used",
+          "used_z3": false,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_g_session",
+          "size": 56,
+          "alignment": 8,
+          "source_func_name": "session_ctor",
+          "source_var": "g_session",
+          "field_count": 9,
+          "non_padding_field_count": 7,
+          "provenance": [
+            "consume_session_sub",
+            "session_ctor"
+          ],
+          "fields": [
+            {
+              "name": "u32_0",
+              "offset": 0,
+              "size": 4,
+              "semantic": "int",
+              "type": "_DWORD",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_4",
+              "offset": 4,
+              "size": 4,
+              "semantic": "int",
+              "type": "_DWORD",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_8",
+              "offset": 8,
+              "size": 8,
+              "semantic": "int",
+              "type": "_QWORD",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "bytes_10",
+              "offset": 16,
+              "size": 16,
+              "semantic": "unknown",
+              "type": "_QWORD",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_20",
+              "offset": 32,
+              "size": 4,
+              "semantic": "int",
+              "type": "_DWORD",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "__pad_24",
+              "offset": 36,
+              "size": 4,
+              "semantic": "padding",
+              "type": "char[4]",
+              "confidence": "medium",
+              "is_padding": true,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_28",
+              "offset": 40,
+              "size": 4,
+              "semantic": "int",
+              "type": "_DWORD",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "__pad_2C",
+              "offset": 44,
+              "size": 4,
+              "semantic": "padding",
+              "type": "char[4]",
+              "confidence": "medium",
+              "is_padding": true,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_30",
+              "offset": 48,
+              "size": 8,
+              "semantic": "unknown",
+              "type": "_QWORD",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> session_ctor\nvoid __cdecl session_ctor(auto_g_session *dst, uint64_t token) {\n    dst->u32_0 = 1364411731;\n    dst->u32_4 = 33;\n    dst->u64_8 = token;\n    dst->bytes_10 = 64;\n    *(_QWORD *)&dst->u32_20 = dst;\n    dst->u32_28 = -559038737;\n    LODWORD(dst->u64_30) = 3;\n    *(_QWORD *)&dst[1].u32_0 = token ^ 0xAAAA5555AAAA5555LL;\n}\n<<<\n\n>>> consume_session\nvoid consume_session() {\n    auto_g_session *v0; // [xsp+8h] [xbp-8h]\n\n    v0 = (auto_g_session *)session_storage();\n    sink ^= v0->u32_0;\n    sink ^= v0->u64_8;\n    sink ^= (unsigned int)v0->u32_28;\n    sink ^= *(_QWORD *)&v0->u32_20;\n    consume_session_sub(sub: &v0->u64_30);\n}\n<<<\n"
+    }
+  ]
+}

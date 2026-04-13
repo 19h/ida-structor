@@ -1,0 +1,113 @@
+{
+  "fixture": "test_global_pointer_singleton",
+  "cases": [
+    {
+      "name": "g_state_storage",
+      "synth": {
+        "kind": "global",
+        "target": "g_state_storage"
+      },
+      "dump_functions": [
+        "state_ctor",
+        "use_state"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 4,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "state_ctor",
+          "use_state_leaf"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_g_state_storage",
+          "size": 36,
+          "alignment": 1,
+          "source_func_name": "state_ctor",
+          "source_var": "g_state_storage",
+          "field_count": 4,
+          "non_padding_field_count": 4,
+          "provenance": [
+            "state_ctor"
+          ],
+          "fields": [
+            {
+              "name": "u32_0",
+              "offset": 0,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_4",
+              "offset": 4,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64s_8",
+              "offset": 8,
+              "size": 24,
+              "semantic": "array",
+              "type": "unsigned __int64[3]",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": true,
+              "array_count": 3,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_20",
+              "offset": 32,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> state_ctor\nvoid __cdecl state_ctor(auto_g_state_storage *dst, uint32_t seed) {\n    dst->u32_0 = 1398030676;\n    dst->u32_4 = seed ^ 0x22;\n    dst->u64s_8[0] = seed | 0x1010101010101000LL;\n    dst->u64s_8[1] = (unsigned __int64)dst;\n    dst->u64s_8[2] = seed + 128LL;\n    dst->u32_20 = seed + 64;\n}\n<<<\n\n>>> use_state\nvoid use_state() {\n    sink ^= g_state_ptr->u32_0;\n    sink ^= g_state_ptr->u32_4;\n    sink ^= g_state_ptr->u64s_8[1];\n    sink ^= g_state_ptr->u32_20;\n    use_state_leaf(dst: g_state_ptr);\n}\n<<<\n"
+    }
+  ]
+}

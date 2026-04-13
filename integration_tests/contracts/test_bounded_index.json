@@ -1,0 +1,98 @@
+{
+  "fixture": "test_bounded_index",
+  "cases": [
+    {
+      "name": "read_indexed",
+      "synth": {
+        "kind": "function",
+        "target": "read_indexed",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "read_indexed",
+        "read_marks"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 3,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "init_indexed",
+          "main",
+          "read_indexed",
+          "read_marks"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_read_indexed",
+          "size": 24,
+          "alignment": 1,
+          "source_func_name": "read_indexed",
+          "source_var": "p",
+          "field_count": 3,
+          "non_padding_field_count": 3,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "u32s_0",
+              "offset": 0,
+              "size": 20,
+              "semantic": "array",
+              "type": "unsigned __int32[5]",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": true,
+              "array_count": 5,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u16_14",
+              "offset": 20,
+              "size": 2,
+              "semantic": "uint",
+              "type": "unsigned __int16",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u16_16",
+              "offset": 22,
+              "size": 2,
+              "semantic": "uint",
+              "type": "unsigned __int16",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> read_indexed\nvoid __cdecl read_indexed(auto_read_indexed *p, int idx) {\n    if ( (unsigned int)idx < 4 )\n        sink ^= p->u32s_0[idx + 1];\n}\n<<<\n\n>>> read_marks\nvoid __cdecl read_marks(auto_read_indexed *p) {\n    sink ^= p->u16_14;\n    sink ^= p->u16_16;\n}\n<<<\n"
+    }
+  ]
+}

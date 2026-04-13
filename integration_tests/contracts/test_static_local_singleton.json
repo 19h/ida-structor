@@ -1,0 +1,117 @@
+{
+  "fixture": "test_static_local_singleton",
+  "cases": [
+    {
+      "name": "local_cache",
+      "synth": {
+        "kind": "global",
+        "target": "__ZZL15get_local_cachevE5cache"
+      },
+      "dump_functions": [
+        "__Z16warm_local_cachev",
+        "__Z16read_local_cachev"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 4,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "__Z16read_local_cachev",
+          "__Z16warm_local_cachev",
+          "__ZN10LocalCache5touchEj",
+          "__ZN10LocalCacheC1Ej",
+          "__ZN10LocalCacheC2Ej",
+          "j___ZN10LocalCache5touchEj"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "LocalCache",
+          "size": 24,
+          "alignment": 1,
+          "source_func_name": "__ZN10LocalCacheC2Ej",
+          "source_var": "get_local_cache(void)::cache",
+          "field_count": 4,
+          "non_padding_field_count": 4,
+          "provenance": [
+            "__ZN10LocalCacheC2Ej"
+          ],
+          "fields": [
+            {
+              "name": "u32_0",
+              "offset": 0,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_4",
+              "offset": 4,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_8",
+              "offset": 8,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "ptr_10",
+              "offset": 16,
+              "size": 8,
+              "semantic": "ptr",
+              "type": "void *",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> __Z16warm_local_cachev\nvoid warm_local_cache() {\n    LocalCache *local_cache; // [xsp+8h] [xbp-8h]\n\n    local_cache = get_local_cache();\n    LocalCache::touch(this: local_cache, delta: 3u);\n    sink ^= local_cache->magic;\n}\n<<<\n\n>>> __Z16read_local_cachev\nvoid read_local_cache() {\n    LocalCache *local_cache; // [xsp+8h] [xbp-8h]\n\n    local_cache = get_local_cache();\n    sink ^= local_cache->state;\n    sink ^= local_cache->total;\n    sink ^= (volatile uint64_t)local_cache->self;\n}\n<<<\n"
+    }
+  ]
+}

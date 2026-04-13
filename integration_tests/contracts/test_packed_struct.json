@@ -1,0 +1,148 @@
+{
+  "fixture": "test_packed_struct",
+  "cases": [
+    {
+      "name": "read_packed",
+      "synth": {
+        "kind": "function",
+        "target": "read_packed",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "read_packed",
+        "read_small_array",
+        "inspect_flag_slices"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 6,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "init_packed",
+          "inspect_flag_slices",
+          "main",
+          "read_packed",
+          "read_small_array"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "PackedRecord",
+          "size": 20,
+          "alignment": 1,
+          "source_func_name": "read_packed",
+          "source_var": "p",
+          "field_count": 6,
+          "non_padding_field_count": 6,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "u8_0",
+              "offset": 0,
+              "size": 1,
+              "semantic": "uint",
+              "type": "unsigned __int8",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u16_1",
+              "offset": 1,
+              "size": 2,
+              "semantic": "uint",
+              "type": "signed __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_3",
+              "offset": 3,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u8s_7",
+              "offset": 7,
+              "size": 3,
+              "semantic": "array",
+              "type": "unsigned __int8[3]",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": true,
+              "array_count": 3,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_A",
+              "offset": 10,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u16_12",
+              "offset": 18,
+              "size": 2,
+              "semantic": "uint",
+              "type": "unsigned __int16",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> read_packed\nvoid __cdecl read_packed(PackedRecord *p) {\n    sink ^= p->kind;\n    sink ^= p->flags;\n    sink ^= p->count;\n    sink ^= p->cookie;\n    sink ^= p->tail;\n}\n<<<\n\n>>> read_small_array\nvoid __cdecl read_small_array(PackedRecord *p) {\n    sink ^= p->small[0];\n    sink ^= p->small[1];\n    sink ^= p->small[2];\n}\n<<<\n\n>>> inspect_flag_slices\nvoid __cdecl inspect_flag_slices(PackedRecord *p) {\n    uint16_t flags; // [xsp+Eh] [xbp-12h]\n\n    flags = p->flags;\n    sink ^= flags & 3;\n    sink ^= ((int)flags >> 2) & 7;\n}\n<<<\n"
+    }
+  ]
+}

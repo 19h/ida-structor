@@ -1,0 +1,163 @@
+{
+  "fixture": "test_vtable_positive",
+  "cases": [
+    {
+      "name": "call_vtable_direct",
+      "synth": {
+        "kind": "function",
+        "target": "__Z18call_vtable_directPv",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "__Z18call_vtable_directPv",
+        "__Z19call_multiple_slotsPvi"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 5,
+        "vtable_slots": 4,
+        "propagated_to": [
+          "__Z18call_vtable_directPv",
+          "__Z19call_multiple_slotsPvi",
+          "_printf",
+          "main"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_z18call_vtable_directpv",
+          "size": 32,
+          "alignment": 1,
+          "source_func_name": "__Z18call_vtable_directPv",
+          "source_var": "obj",
+          "field_count": 5,
+          "non_padding_field_count": 5,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "vtable",
+              "offset": 0,
+              "size": 8,
+              "semantic": "vtbl",
+              "type": "auto_z18call_vtable_directpv_vtbl *",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_8",
+              "offset": 8,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_C",
+              "offset": 12,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "ptr_10",
+              "offset": 16,
+              "size": 8,
+              "semantic": "ptr",
+              "type": "void *",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_18",
+              "offset": 24,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": {
+            "name": "auto_z18call_vtable_directpv_vtbl",
+            "slot_count": 4,
+            "slots": [
+              {
+                "index": 0,
+                "offset": 0,
+                "name": "slot_0",
+                "signature_hint": "",
+                "type": "void (__fastcall *)(void *a1)"
+              },
+              {
+                "index": 1,
+                "offset": 8,
+                "name": "slot_1",
+                "signature_hint": "",
+                "type": "void (*)()"
+              },
+              {
+                "index": 2,
+                "offset": 16,
+                "name": "slot_2",
+                "signature_hint": "",
+                "type": "int (__fastcall *)(void *a1, unsigned int a2)"
+              },
+              {
+                "index": 3,
+                "offset": 24,
+                "name": "slot_3",
+                "signature_hint": "",
+                "type": ""
+              }
+            ]
+          }
+        }
+      },
+      "golden_pseudocode": ">>> __Z18call_vtable_directPv\nvoid __cdecl call_vtable_direct(auto_z18call_vtable_directpv *obj) {\n    obj->vtable->slot_0(a1: obj);\n    ((void (__fastcall *)(auto_z18call_vtable_directpv *))obj->vtable->slot_1)(a1: obj);\n    printf(a1: \"data: %d\\n\", obj->u32_8);\n    printf(a1: \"data2: %d\\n\", obj->u32_C);\n    printf(a1: \"ptr: %p\\n\", obj->ptr_10);\n}\n<<<\n\n>>> __Z19call_multiple_slotsPvi\nint __cdecl call_multiple_slots(auto_z18call_vtable_directpv *obj, int arg) {\n    int r1; // [xsp+24h] [xbp-1Ch]\n\n    r1 = obj->vtable->slot_2(a1: obj, a2: arg);\n    return obj->u64_18\n           + r1\n           + ((__int64 (__fastcall *)(auto_z18call_vtable_directpv *, _QWORD))obj->vtable->slot_3)(\n               a1: obj,\n               a2: (unsigned int)(2 * arg));\n}\n<<<\n"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "fixture": "test_global_ambiguous_scratch",
+  "cases": [
+    {
+      "name": "g_scratch",
+      "synth": {
+        "kind": "global",
+        "target": "g_scratch"
+      },
+      "dump_functions": [
+        "fill_scratch",
+        "scramble_scratch",
+        "checksum_scratch"
+      ],
+      "golden_result": {
+        "success": false,
+        "error": "No dereferences found for variable",
+        "error_message": "No global/static structure accesses found",
+        "fields_created": 0,
+        "vtable_slots": 0,
+        "propagated_to": [],
+        "failed_sites": [],
+        "z3": {
+          "status": "not_used",
+          "used_z3": false,
+          "used_fallback": false
+        },
+        "structure": null
+      },
+      "golden_pseudocode": ">>> fill_scratch\nvoid __cdecl fill_scratch(uint32_t seed) {\n    unsigned int i; // [xsp+8h] [xbp-8h]\n\n    for ( i = 0; i < 0x40; ++i )\n        g_scratch[(5 * (_BYTE)i + (_BYTE)seed) & 0x3F] = seed + 3 * i;\n}\n<<<\n\n>>> scramble_scratch\nvoid __cdecl scramble_scratch(uint32_t stride) {\n    uint8_t *v1; // x9\n    unsigned int i; // [xsp+8h] [xbp-8h]\n\n    for ( i = 0; i < 0x40; i += stride ) {\n        v1 = &g_scratch[((unsigned __int8)i ^ (unsigned __int8)(7 * stride)) & 0x3F];\n        *v1 ^= (_BYTE)i + (_BYTE)stride;\n    }\n}\n<<<\n\n>>> checksum_scratch\nuint64_t __cdecl checksum_scratch(uint32_t stride) {\n    unsigned int i; // [xsp+Ch] [xbp-14h]\n    uint64_t v3; // [xsp+10h] [xbp-10h]\n\n    v3 = 0;\n    for ( i = 0; i < 0x40; i += stride )\n        v3 = g_scratch[(3 * (_BYTE)i + (_BYTE)stride) & 0x3F] ^ (2 * v3);\n    return v3;\n}\n<<<\n"
+    }
+  ]
+}

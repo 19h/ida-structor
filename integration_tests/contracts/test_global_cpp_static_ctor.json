@@ -1,0 +1,116 @@
+{
+  "fixture": "test_global_cpp_static_ctor",
+  "cases": [
+    {
+      "name": "g_engine",
+      "synth": {
+        "kind": "global",
+        "target": "g_engine"
+      },
+      "dump_functions": [
+        "__Z12drive_enginev",
+        "__Z14inspect_enginev"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 4,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "__ZN6Engine4tickEj",
+          "__ZN6EngineC1Ev",
+          "__ZN6EngineC2Ev",
+          "__ZNK6Engine8snapshotEv"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "Engine",
+          "size": 24,
+          "alignment": 1,
+          "source_func_name": "__ZNK6Engine8snapshotEv",
+          "source_var": "g_engine",
+          "field_count": 4,
+          "non_padding_field_count": 4,
+          "provenance": [
+            "__ZN6Engine4tickEj",
+            "__ZNK6Engine8snapshotEv"
+          ],
+          "fields": [
+            {
+              "name": "u32_0",
+              "offset": 0,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_4",
+              "offset": 4,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_8",
+              "offset": 8,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "ptr_10",
+              "offset": 16,
+              "size": 8,
+              "semantic": "ptr",
+              "type": "void *",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> __Z12drive_enginev\nvoid drive_engine() {\n    Engine::tick(this: &g_engine, delta: 5u);\n    sink ^= Engine::snapshot(this: &g_engine);\n}\n<<<\n\n>>> __Z14inspect_enginev\nvoid inspect_engine() {\n    sink ^= g_engine.magic;\n    sink ^= g_engine.flags;\n    sink ^= g_engine.counter;\n    sink ^= (volatile uint64_t)g_engine.self;\n}\n<<<\n"
+    }
+  ]
+}

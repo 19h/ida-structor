@@ -1,0 +1,150 @@
+{
+  "fixture": "test_global_placement_new",
+  "cases": [
+    {
+      "name": "g_gadget_storage",
+      "synth": {
+        "kind": "global",
+        "target": "g_gadget_storage"
+      },
+      "dump_functions": [
+        "__Z23construct_gadget_stage1v",
+        "__Z10use_gadgetv"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 6,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "__Z10use_gadgetv",
+          "__ZL16construct_gadgetPvj",
+          "__ZL23construct_gadget_stage2Pv",
+          "__ZN6Gadget4bumpEj",
+          "__ZN6GadgetC1EjPv",
+          "__ZN6GadgetC2EjPv",
+          "j___ZN6Gadget4bumpEj"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_g_gadget_storage",
+          "size": 28,
+          "alignment": 1,
+          "source_func_name": "__ZN6GadgetC2EjPv",
+          "source_var": "g_gadget_storage",
+          "field_count": 6,
+          "non_padding_field_count": 6,
+          "provenance": [
+            "__ZN6GadgetC2EjPv"
+          ],
+          "fields": [
+            {
+              "name": "u32_0",
+              "offset": 0,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_4",
+              "offset": 4,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_8",
+              "offset": 8,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "ptr_10",
+              "offset": 16,
+              "size": 8,
+              "semantic": "ptr",
+              "type": "void *",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u16_18",
+              "offset": 24,
+              "size": 2,
+              "semantic": "uint",
+              "type": "unsigned __int16",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u16_1A",
+              "offset": 26,
+              "size": 2,
+              "semantic": "uint",
+              "type": "unsigned __int16",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> __Z23construct_gadget_stage1v\nvoid construct_gadget_stage1() {\n    construct_gadget_stage2(storage: g_gadget_storage);\n}\n<<<\n\n>>> __Z10use_gadgetv\nvoid use_gadget() {\n    auto_g_gadget_storage *v0; // [xsp+8h] [xbp-8h]\n\n    v0 = g_gadget;\n    sink ^= g_gadget->u32_0;\n    sink ^= g_gadget->u32_4;\n    sink ^= g_gadget->u64_8;\n    sink ^= (volatile uint64_t)g_gadget->ptr_10;\n    sink ^= g_gadget->u16_18;\n    sink ^= g_gadget->u16_1A;\n    Gadget::bump(this: (Gadget *)g_gadget, delta: 4u);\n    sink ^= v0->u32_4;\n}\n<<<\n"
+    }
+  ]
+}

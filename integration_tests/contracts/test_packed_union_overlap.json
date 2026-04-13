@@ -1,0 +1,98 @@
+{
+  "fixture": "test_packed_union_overlap",
+  "cases": [
+    {
+      "name": "read_whole",
+      "synth": {
+        "kind": "function",
+        "target": "read_whole",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "read_whole",
+        "read_parts"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 3,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "init_packed_union",
+          "main",
+          "read_parts",
+          "read_whole"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "PackedUnionView",
+          "size": 7,
+          "alignment": 1,
+          "source_func_name": "read_whole",
+          "source_var": "p",
+          "field_count": 3,
+          "non_padding_field_count": 3,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "u8_0",
+              "offset": 0,
+              "size": 1,
+              "semantic": "uint",
+              "type": "unsigned __int8",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_1",
+              "offset": 1,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u16_5",
+              "offset": 5,
+              "size": 2,
+              "semantic": "uint",
+              "type": "unsigned __int16",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> read_whole\nvoid __cdecl read_whole(PackedUnionView *p) {\n    sink ^= p->tag;\n    sink ^= p->whole;\n    sink ^= p->tail;\n}\n<<<\n\n>>> read_parts\nvoid __cdecl read_parts(PackedUnionView *p) {\n    sink ^= LOWORD(p->whole);\n    sink ^= HIWORD(p->whole);\n}\n<<<\n"
+    }
+  ]
+}

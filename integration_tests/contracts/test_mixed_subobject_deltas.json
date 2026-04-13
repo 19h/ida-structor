@@ -1,0 +1,114 @@
+{
+  "fixture": "test_mixed_subobject_deltas",
+  "cases": [
+    {
+      "name": "read_mixed_anchor",
+      "synth": {
+        "kind": "function",
+        "target": "read_mixed_anchor",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "read_mixed_anchor",
+        "read_child"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 4,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "init_deltas",
+          "main",
+          "read_child",
+          "read_mixed_anchor"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_anchor_view_10",
+          "size": 44,
+          "alignment": 1,
+          "source_func_name": "read_mixed_anchor",
+          "source_var": "anchor",
+          "field_count": 4,
+          "non_padding_field_count": 4,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "u32_0",
+              "offset": 0,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "part_4",
+              "offset": 4,
+              "size": 16,
+              "semantic": "struct",
+              "type": "auto_part_neg_c",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "part_14",
+              "offset": 20,
+              "size": 16,
+              "semantic": "struct",
+              "type": "ChildDelta",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_24",
+              "offset": 36,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> read_mixed_anchor\nvoid __cdecl read_mixed_anchor(auto_anchor_view_10_tail_10 *__shifted(auto_anchor_view_10, 0x10) anchor) {\n    sink ^= ADJ(ptr: anchor)->u32_0;\n    read_child(child: &ADJ(ptr: anchor)->part_4);\n    sink ^= ADJ(ptr: anchor)->part_4.value.value_hi[1];\n    read_child(child: &ADJ(ptr: anchor)->part_14);\n    sink ^= ADJ(ptr: anchor)->u64_24;\n}\n<<<\n\n>>> read_child\nvoid __cdecl read_child(ChildDelta *child) {\n    sink ^= child->kind;\n    sink ^= child->flags;\n    sink ^= child->value;\n}\n<<<\n"
+    }
+  ]
+}

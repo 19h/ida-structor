@@ -1,0 +1,116 @@
+{
+  "fixture": "test_callback_table",
+  "cases": [
+    {
+      "name": "invoke_slot0",
+      "synth": {
+        "kind": "function",
+        "target": "invoke_slot0",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "invoke_slot0",
+        "invoke_slot2",
+        "read_states"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 4,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "init_callback_table",
+          "invoke_slot0",
+          "invoke_slot2",
+          "main",
+          "read_states"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_invoke_slot0",
+          "size": 59,
+          "alignment": 1,
+          "source_func_name": "invoke_slot0",
+          "source_var": "p",
+          "field_count": 4,
+          "non_padding_field_count": 4,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "u32_0",
+              "offset": 0,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_4",
+              "offset": 4,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "entries_8",
+              "offset": 8,
+              "size": 48,
+              "semantic": "array",
+              "type": "struct __attribute__((aligned(1))) {unsigned int u32_0;unsigned int u32_4;void (__fastcall *callback)(_QWORD, _QWORD);}[3]",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": true,
+              "array_count": 3,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u8s_38",
+              "offset": 56,
+              "size": 3,
+              "semantic": "array",
+              "type": "unsigned __int8[3]",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": true,
+              "array_count": 3,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> invoke_slot0\nvoid __cdecl invoke_slot0(auto_invoke_slot0 *p) {\n    p->entries_8[0].callback(a1: p->entries_8[0].u32_0, a2: p->entries_8[0].u32_4);\n}\n<<<\n\n>>> invoke_slot2\nvoid __cdecl invoke_slot2(auto_invoke_slot0 *p) {\n    p->entries_8[2].callback(a1: p->entries_8[2].u32_0, a2: p->entries_8[2].u32_4);\n}\n<<<\n\n>>> read_states\nvoid __cdecl read_states(auto_invoke_slot0 *p) {\n    sink ^= p->u8s_38[0];\n    sink ^= p->u8s_38[1];\n    sink ^= p->u8s_38[2];\n}\n<<<\n"
+    }
+  ]
+}

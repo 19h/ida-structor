@@ -1,0 +1,115 @@
+{
+  "fixture": "test_substructure",
+  "cases": [
+    {
+      "name": "process_data",
+      "synth": {
+        "kind": "function",
+        "target": "process_data",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "process_data",
+        "process_node_d"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 4,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "_printf",
+          "main",
+          "process_data",
+          "process_node_d",
+          "setup_links"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_data_ptr_view_10",
+          "size": 24,
+          "alignment": 1,
+          "source_func_name": "process_data",
+          "source_var": "data_ptr",
+          "field_count": 4,
+          "non_padding_field_count": 4,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "ptr_0",
+              "offset": 0,
+              "size": 8,
+              "semantic": "ptr",
+              "type": "void *",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "ptr_8",
+              "offset": 8,
+              "size": 8,
+              "semantic": "ptr",
+              "type": "void *",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_10",
+              "offset": 16,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_14",
+              "offset": 20,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> process_data\nint __cdecl process_data(auto_data_ptr_view_10_tail_10 *__shifted(auto_data_ptr_view_10, 0x10) data_ptr) {\n    unsigned __int32 u32_14; // [xsp+10h] [xbp-10h]\n    unsigned __int32 data; // [xsp+14h] [xbp-Ch]\n\n    data = ADJ(ptr: data_ptr)->u32_10;\n    u32_14 = ADJ(ptr: data_ptr)->u32_14;\n    printf(a1: \"C: data=%d, flags=%d\\n\", ADJ(ptr: data_ptr)->u32_10, u32_14);\n    return data + u32_14;\n}\n<<<\n\n>>> process_node_d\nint __cdecl process_node_d(auto_data_ptr_view_10 *node) {\n    printf(a1: \"D: next=%p, data=%d\\n\", node->ptr_0, node->u32_10);\n    return process_data(data_ptr: &node->u32_10);\n}\n<<<\n"
+    }
+  ]
+}

@@ -1,0 +1,114 @@
+{
+  "fixture": "test_nested",
+  "cases": [
+    {
+      "name": "access_nested",
+      "synth": {
+        "kind": "function",
+        "target": "access_nested",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "access_nested",
+        "modify_array"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 4,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "_printf",
+          "access_nested",
+          "main",
+          "modify_array"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_access_nested",
+          "size": 40,
+          "alignment": 1,
+          "source_func_name": "access_nested",
+          "source_var": "ptr",
+          "field_count": 4,
+          "non_padding_field_count": 4,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "ptr_0",
+              "offset": 0,
+              "size": 8,
+              "semantic": "ptr",
+              "type": "void *",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "ptr_8",
+              "offset": 8,
+              "size": 8,
+              "semantic": "ptr",
+              "type": "void *",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32s_10",
+              "offset": 16,
+              "size": 16,
+              "semantic": "array",
+              "type": "unsigned __int32[4]",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": true,
+              "array_count": 4,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_20",
+              "offset": 32,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> access_nested\nvoid __cdecl access_nested(auto_access_nested *ptr) {\n    printf(\n        a1: \"inner=%p, data=%p, array=[%d,%d,%d,%d], flags=%lx\\n\",\n        ptr->ptr_0,\n        ptr->ptr_8,\n        ptr->u32s_10[0],\n        ptr->u32s_10[1],\n        ptr->u32s_10[2],\n        ptr->u32s_10[3],\n        ptr->u64_20);\n}\n<<<\n\n>>> modify_array\nvoid __cdecl modify_array(auto_access_nested *ptr, int idx, int value) {\n    ptr->u32s_10[idx] = value;\n}\n<<<\n"
+    }
+  ]
+}

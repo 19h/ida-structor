@@ -8,9 +8,299 @@
 #include <structor/type_fixer.hpp>
 #include <expr.hpp>
 #include <auto.hpp>
+#include <name.hpp>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
 #include <unordered_set>
 
 namespace structor {
+
+namespace {
+
+constexpr const char* kResultExportEnv = "STRUCTOR_EXPORT_LAST_RESULT";
+
+static std::string json_escape(const char* text) {
+    if (!text) {
+        return std::string();
+    }
+
+    std::string escaped;
+    for (const unsigned char ch : std::string(text)) {
+        switch (ch) {
+            case '\\': escaped += "\\\\"; break;
+            case '"':  escaped += "\\\""; break;
+            case '\b': escaped += "\\b"; break;
+            case '\f': escaped += "\\f"; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default:
+                if (ch < 0x20) {
+                    char buf[7] = {0};
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", ch);
+                    escaped += buf;
+                } else {
+                    escaped += static_cast<char>(ch);
+                }
+                break;
+        }
+    }
+
+    return escaped;
+}
+
+static void append_json_string(std::string& out, const char* text) {
+    out += '"';
+    out += json_escape(text);
+    out += '"';
+}
+
+static void append_json_string(std::string& out, const qstring& text) {
+    append_json_string(out, text.c_str());
+}
+
+static void append_json_bool(std::string& out, bool value) {
+    out += value ? "true" : "false";
+}
+
+static qstring render_type_decl(const tinfo_t& type) {
+    qstring decl;
+    if (!type.empty()) {
+        type.print(&decl);
+    }
+    return decl;
+}
+
+static qstring render_func_name(ea_t ea) {
+    qstring name;
+    if (ea != BADADDR) {
+        get_func_name(&name, ea);
+    }
+    return name;
+}
+
+static void append_field_json(std::string& out, const SynthField& field) {
+    out += '{';
+
+    out += "\"name\":";
+    append_json_string(out, field.name);
+    out += ",\"offset\":" + std::to_string(static_cast<long long>(field.offset));
+    out += ",\"size\":" + std::to_string(field.size);
+    out += ",\"semantic\":";
+    append_json_string(out, semantic_type_str(field.semantic));
+    out += ",\"type\":";
+    append_json_string(out, render_type_decl(field.type));
+    out += ",\"confidence\":";
+    append_json_string(out, type_confidence_str(field.confidence));
+    out += ",\"is_padding\":";
+    append_json_bool(out, field.is_padding);
+    out += ",\"is_array\":";
+    append_json_bool(out, field.is_array);
+    out += ",\"array_count\":" + std::to_string(field.array_count);
+    out += ",\"is_union_candidate\":";
+    append_json_bool(out, field.is_union_candidate);
+    out += ",\"is_bitfield\":";
+    append_json_bool(out, field.is_bitfield);
+    out += ",\"bit_offset\":" + std::to_string(field.bit_offset);
+    out += ",\"bit_size\":" + std::to_string(field.bit_size);
+
+    out += ",\"union_members\":[";
+    for (size_t i = 0; i < field.union_members.size(); ++i) {
+        if (i != 0) {
+            out += ',';
+        }
+
+        const auto& member = field.union_members[i];
+        out += '{';
+        out += "\"name\":";
+        append_json_string(out, member.name);
+        out += ",\"offset\":" + std::to_string(static_cast<long long>(member.offset));
+        out += ",\"size\":" + std::to_string(member.size);
+        out += ",\"type\":";
+        append_json_string(out, render_type_decl(member.type));
+        out += '}';
+    }
+    out += ']';
+
+    out += '}';
+}
+
+static void append_ea_list_json(std::string& out, const qvector<ea_t>& addrs) {
+    out += '[';
+    for (size_t i = 0; i < addrs.size(); ++i) {
+        if (i != 0) {
+            out += ',';
+        }
+
+        const ea_t ea = addrs[i];
+        out += '{';
+        out += "\"ea\":" + std::to_string(static_cast<unsigned long long>(ea));
+        out += ",\"name\":";
+        append_json_string(out, render_func_name(ea));
+        out += '}';
+    }
+    out += ']';
+}
+
+static void maybe_export_last_result(const SynthResult& result, const char* mode) {
+    const char* path = std::getenv(kResultExportEnv);
+    if (!path || !*path) {
+        return;
+    }
+
+    std::string json;
+    json.reserve(4096);
+    json += '{';
+    json += "\"version\":1";
+    json += ",\"mode\":";
+    append_json_string(json, mode ? mode : "unknown");
+    json += ",\"success\":";
+    append_json_bool(json, result.success());
+    json += ",\"error\":";
+    append_json_string(json, synth_error_str(result.error));
+    json += ",\"error_message\":";
+    append_json_string(json, result.error_message);
+    json += ",\"struct_tid\":" + std::to_string(static_cast<unsigned long long>(result.struct_tid));
+    json += ",\"vtable_tid\":" + std::to_string(static_cast<unsigned long long>(result.vtable_tid));
+    json += ",\"fields_created\":" + std::to_string(result.fields_created);
+    json += ",\"vtable_slots\":" + std::to_string(result.vtable_slots);
+
+    json += ",\"z3\":{";
+    json += "\"status\":";
+    append_json_string(json, z3_status_str(result.z3_info.status));
+    json += ",\"used_z3\":";
+    append_json_bool(json, result.z3_info.used_z3());
+    json += ",\"used_fallback\":";
+    append_json_bool(json, result.z3_info.used_fallback());
+    json += ",\"solve_time_ms\":" + std::to_string(result.z3_info.solve_time_ms);
+    json += ",\"candidates_generated\":" + std::to_string(result.z3_info.candidates_generated);
+    json += ",\"candidates_selected\":" + std::to_string(result.z3_info.candidates_selected);
+    json += ",\"constraints_hard\":" + std::to_string(result.z3_info.constraints_hard);
+    json += ",\"constraints_soft\":" + std::to_string(result.z3_info.constraints_soft);
+    json += ",\"constraints_relaxed\":" + std::to_string(result.z3_info.constraints_relaxed);
+    json += ",\"arrays_detected\":" + std::to_string(result.z3_info.arrays_detected);
+    json += ",\"unions_created\":" + std::to_string(result.z3_info.unions_created);
+    json += ",\"cross_func_merged\":" + std::to_string(result.z3_info.cross_func_merged);
+    json += '}';
+
+    json += ",\"propagated_to\":";
+    append_ea_list_json(json, result.propagated_to);
+    json += ",\"failed_sites\":";
+    append_ea_list_json(json, result.failed_sites);
+
+    json += ",\"structure\":";
+    if (!result.synthesized_struct) {
+        json += "null";
+    } else {
+        const SynthStruct& synth = *result.synthesized_struct;
+        json += '{';
+        json += "\"name\":";
+        append_json_string(json, synth.name);
+        json += ",\"size\":" + std::to_string(synth.size);
+        json += ",\"alignment\":" + std::to_string(synth.alignment);
+        json += ",\"source_func_ea\":" + std::to_string(static_cast<unsigned long long>(synth.source_func));
+        json += ",\"source_func_name\":";
+        append_json_string(json, render_func_name(synth.source_func));
+        json += ",\"source_var\":";
+        append_json_string(json, synth.source_var);
+        json += ",\"provenance\":";
+        append_ea_list_json(json, synth.provenance);
+
+        size_t non_padding_count = 0;
+        for (const auto& field : synth.fields) {
+            if (!field.is_padding) {
+                ++non_padding_count;
+            }
+        }
+        json += ",\"field_count\":" + std::to_string(synth.fields.size());
+        json += ",\"non_padding_field_count\":" + std::to_string(non_padding_count);
+
+        json += ",\"fields\":[";
+        for (size_t i = 0; i < synth.fields.size(); ++i) {
+            if (i != 0) {
+                json += ',';
+            }
+            append_field_json(json, synth.fields[i]);
+        }
+        json += ']';
+
+        json += ",\"vtable\":";
+        if (!synth.vtable.has_value()) {
+            json += "null";
+        } else {
+            const SynthVTable& vtable = *synth.vtable;
+            json += '{';
+            json += "\"name\":";
+            append_json_string(json, vtable.name);
+            json += ",\"tid\":" + std::to_string(static_cast<unsigned long long>(vtable.tid));
+            json += ",\"slot_count\":" + std::to_string(vtable.slot_count());
+            json += ",\"slots\":[";
+            for (size_t i = 0; i < vtable.slots.size(); ++i) {
+                if (i != 0) {
+                    json += ',';
+                }
+
+                const auto& slot = vtable.slots[i];
+                json += '{';
+                json += "\"index\":" + std::to_string(slot.index);
+                json += ",\"offset\":" + std::to_string(static_cast<long long>(slot.offset));
+                json += ",\"name\":";
+                append_json_string(json, slot.name);
+                json += ",\"signature_hint\":";
+                append_json_string(json, slot.signature_hint);
+                json += ",\"type\":";
+                append_json_string(json, render_type_decl(slot.func_type));
+                json += '}';
+            }
+            json += ']';
+            json += '}';
+        }
+
+        json += '}';
+    }
+
+    json += '}';
+    json += '\n';
+
+    std::FILE* fp = std::fopen(path, "wb");
+    if (!fp) {
+        msg("Structor: Failed to open result export path: %s\n", path);
+        return;
+    }
+
+    const size_t written = std::fwrite(json.data(), 1, json.size(), fp);
+    std::fclose(fp);
+    if (written != json.size()) {
+        msg("Structor: Failed to write full result export: %s\n", path);
+    }
+}
+
+static bool resolve_function_target(const qstring& requested_name, ea_t& resolved_ea) {
+    resolved_ea = BADADDR;
+    if (requested_name.empty()) {
+        return false;
+    }
+
+    resolved_ea = get_name_ea(BADADDR, requested_name.c_str());
+    if (resolved_ea != BADADDR) {
+        return true;
+    }
+
+    if (requested_name[0] != '_') {
+        qstring alt_name("_");
+        alt_name.append(requested_name);
+        resolved_ea = get_name_ea(BADADDR, alt_name.c_str());
+        if (resolved_ea != BADADDR) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+} // namespace
 
 // Thread-local storage for last result info (must be defined before use)
 static thread_local qstring g_last_error;
@@ -343,6 +633,7 @@ private:
 
     // Pending auto-synthesis from env var
     ea_t pending_synth_ea_ = BADADDR;
+    qstring pending_synth_func_name_;
     int pending_synth_var_idx_ = 0;
     qstring pending_synth_var_name_;
     ea_t pending_global_synth_ea_ = BADADDR;
@@ -417,21 +708,45 @@ StructorPlugin::StructorPlugin() {
         msg("Structor: Failed to initialize UI\n");
     }
 
-    // Check for auto-synthesis env var: STRUCTOR_AUTO_SYNTH=func_ea or func_ea:var_idx or func_ea:var_name
+    // Check for auto-synthesis env var:
+    // STRUCTOR_AUTO_SYNTH=func_ea or func_ea:var_idx or func_ea:var_name
+    // STRUCTOR_AUTO_SYNTH=func_name or func_name:var_idx or func_name:var_name
     const char* env = getenv("STRUCTOR_AUTO_SYNTH");
-    if (env) {
+    if (env && *env) {
+        qstring requested = env;
+        qstring target = requested;
+        const char* selector = nullptr;
+
         char* endptr = nullptr;
-        pending_synth_ea_ = strtoull(env, &endptr, 0);
-        if (endptr && *endptr == ':') {
+        pending_synth_ea_ = BADADDR;
+        pending_synth_func_name_.clear();
+        pending_synth_var_name_.clear();
+        pending_synth_var_idx_ = 0;
+
+        const char* colon = std::strchr(env, ':');
+        if (colon) {
+            target = qstring(env, static_cast<size_t>(colon - env));
+            selector = colon + 1;
+        }
+
+        unsigned long long parsed = std::strtoull(target.c_str(), &endptr, 0);
+        if (endptr && *endptr == '\0') {
+            pending_synth_ea_ = static_cast<ea_t>(parsed);
+        } else {
+            pending_synth_func_name_ = target;
+        }
+
+        if (selector && *selector) {
             char* idx_end = nullptr;
-            long idx = strtol(endptr + 1, &idx_end, 0);
+            long idx = std::strtol(selector, &idx_end, 0);
             if (idx_end && *idx_end == '\0') {
                 pending_synth_var_idx_ = static_cast<int>(idx);
             } else {
-                pending_synth_var_name_ = endptr + 1;
+                pending_synth_var_name_ = selector;
             }
         }
-        if (pending_synth_ea_ != BADADDR) {
+
+        if (pending_synth_ea_ != BADADDR || !pending_synth_func_name_.empty()) {
             // Run synthesis immediately (auto_wait() is called internally)
             run_pending_auto_synth();
         }
@@ -452,7 +767,10 @@ StructorPlugin::StructorPlugin() {
 
 void StructorPlugin::run_pending_auto_synth() {
     if (auto_synth_done_) return;
-    if (pending_synth_ea_ == BADADDR && pending_global_synth_ea_ == BADADDR && pending_global_synth_name_.empty()) {
+    if (pending_synth_ea_ == BADADDR
+        && pending_synth_func_name_.empty()
+        && pending_global_synth_ea_ == BADADDR
+        && pending_global_synth_name_.empty()) {
         return;
     }
     auto_synth_done_ = true;
@@ -466,6 +784,12 @@ void StructorPlugin::run_pending_auto_synth() {
     } else if (pending_global_synth_ea_ != BADADDR) {
         msg("Structor: Running auto global synthesis for ea=0x%llx\n",
             (unsigned long long)pending_global_synth_ea_);
+    } else if (!pending_synth_func_name_.empty() && !pending_synth_var_name_.empty()) {
+        msg("Structor: Running auto-synthesis for func=%s var_name=%s\n",
+            pending_synth_func_name_.c_str(), pending_synth_var_name_.c_str());
+    } else if (!pending_synth_func_name_.empty()) {
+        msg("Structor: Running auto-synthesis for func=%s var_idx=%d\n",
+            pending_synth_func_name_.c_str(), pending_synth_var_idx_);
     } else if (!pending_synth_var_name_.empty()) {
         msg("Structor: Running auto-synthesis for func=0x%llx var_name=%s\n",
             (unsigned long long)pending_synth_ea_, pending_synth_var_name_.c_str());
@@ -480,6 +804,21 @@ void StructorPlugin::run_pending_auto_synth() {
     opts.highlight_changes = false;
 
     SynthResult result;
+    ea_t synth_ea = pending_synth_ea_;
+    if (synth_ea == BADADDR && !pending_synth_func_name_.empty()) {
+        if (!resolve_function_target(pending_synth_func_name_, synth_ea)) {
+            qstring err;
+            err.sprnt("Function '%s' not found", pending_synth_func_name_.c_str());
+            result = SynthResult::make_error(SynthError::InternalError, err);
+            g_last_error = result.error_message;
+            g_last_field_count = 0;
+            g_last_vtable_tid = BADADDR;
+            maybe_export_last_result(result, "auto");
+            msg("Structor: Auto-synthesis FAILED - %s\n", result.error_message.c_str());
+            return;
+        }
+    }
+
     if (!pending_global_synth_name_.empty()) {
         result = StructorAPI::instance().synthesize_global_structure(
             pending_global_synth_name_.c_str(), &opts);
@@ -488,15 +827,16 @@ void StructorPlugin::run_pending_auto_synth() {
             pending_global_synth_ea_, &opts);
     } else if (pending_synth_var_name_.empty()) {
         result = StructorAPI::instance().synthesize_structure(
-            pending_synth_ea_, pending_synth_var_idx_, &opts);
+            synth_ea, pending_synth_var_idx_, &opts);
     } else {
         result = StructorAPI::instance().synthesize_structure(
-            pending_synth_ea_, pending_synth_var_name_.c_str(), &opts);
+            synth_ea, pending_synth_var_name_.c_str(), &opts);
     }
 
     g_last_error = result.error_message;
     g_last_field_count = result.fields_created;
     g_last_vtable_tid = result.vtable_tid;
+    maybe_export_last_result(result, "auto");
 
     if (result.success()) {
         msg("Structor: Auto-synthesis OK - tid=0x%llx fields=%d\n",
@@ -558,7 +898,10 @@ void StructorPlugin::on_decompilation_complete(cfunc_t* cfunc) {
     // When running an explicit non-interactive auto-synthesis session
     // (used by idump verification), do not let the background type fixer
     // mutate the database at the same time.
-    if (pending_synth_ea_ != BADADDR || pending_global_synth_ea_ != BADADDR || !pending_global_synth_name_.empty()) {
+    if (pending_synth_ea_ != BADADDR
+        || !pending_synth_func_name_.empty()
+        || pending_global_synth_ea_ != BADADDR
+        || !pending_global_synth_name_.empty()) {
         return;
     }
 

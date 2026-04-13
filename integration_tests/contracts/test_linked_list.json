@@ -1,0 +1,100 @@
+{
+  "fixture": "test_linked_list",
+  "cases": [
+    {
+      "name": "traverse_list",
+      "synth": {
+        "kind": "function",
+        "target": "traverse_list",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "traverse_list",
+        "sum_list",
+        "insert_after"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 3,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "main",
+          "sum_list",
+          "traverse_list"
+        ],
+        "failed_sites": [
+          "_printf"
+        ],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_head",
+          "size": 20,
+          "alignment": 1,
+          "source_func_name": "traverse_list",
+          "source_var": "head",
+          "field_count": 3,
+          "non_padding_field_count": 2,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "ptr_0",
+              "offset": 0,
+              "size": 8,
+              "semantic": "ptr",
+              "type": "void *",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "__pad_8",
+              "offset": 8,
+              "size": 8,
+              "semantic": "padding",
+              "type": "char[8]",
+              "confidence": "medium",
+              "is_padding": true,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_10",
+              "offset": 16,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> traverse_list\nvoid __cdecl traverse_list(auto_head *head) {\n    bool v1; // [xsp+14h] [xbp-1Ch]\n    int count; // [xsp+1Ch] [xbp-14h]\n\n    for ( count = 0; ; ++count ) {\n        v1 = false;\n        if ( head )\n            v1 = count < 100;\n        if ( !v1 )\n            break;\n        printf(a1: \"Node %d: data=%d\\n\", count, head->u32_10);\n        head = (auto_head *)head->ptr_0;\n    }\n}\n<<<\n\n>>> sum_list\nint __cdecl sum_list(auto_head *head) {\n    int v2; // [xsp+Ch] [xbp-14h]\n\n    v2 = 0;\n    while ( head ) {\n        v2 += head->u32_10;\n        head = (auto_head *)head->ptr_0;\n    }\n    return v2;\n}\n<<<\n\n>>> insert_after\nvoid __cdecl insert_after(void *node, void *new_node) {\n    __int64 v2; // [xsp+8h] [xbp-18h]\n\n    v2 = *(_QWORD *)node;\n    *(_QWORD *)new_node = *(_QWORD *)node;\n    *((_QWORD *)new_node + 1) = node;\n    *(_QWORD *)node = new_node;\n    if ( v2 )\n        *(_QWORD *)(v2 + 8) = new_node;\n}\n<<<\n"
+    }
+  ]
+}

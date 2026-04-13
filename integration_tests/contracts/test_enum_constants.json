@@ -1,0 +1,33 @@
+{
+  "fixture": "test_enum_constants",
+  "cases": [
+    {
+      "name": "inspect_mode",
+      "synth": {
+        "kind": "function",
+        "target": "inspect_mode",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "inspect_mode",
+        "inspect_state"
+      ],
+      "golden_result": {
+        "success": false,
+        "error": "Insufficient accesses for synthesis",
+        "error_message": "Only 1 accesses found (minimum: 2)",
+        "fields_created": 0,
+        "vtable_slots": 0,
+        "propagated_to": [],
+        "failed_sites": [],
+        "z3": {
+          "status": "not_used",
+          "used_z3": false,
+          "used_fallback": false
+        },
+        "structure": null
+      },
+      "golden_pseudocode": ">>> inspect_mode\nvoid __cdecl inspect_mode(void *p) {\n    int v1; // [xsp+Ch] [xbp-14h]\n\n    v1 = *(_DWORD *)p;\n    if ( *(_DWORD *)p == 1 ) {\n        sink ^= 1uLL;\n    } else if ( v1 == 2 ) {\n        sink ^= 2uLL;\n    } else if ( v1 == 3 ) {\n        sink ^= 3uLL;\n    }\n}\n<<<\n\n>>> inspect_state\nvoid __cdecl inspect_state(void *p) {\n    int v1; // [xsp+Ch] [xbp-14h]\n\n    v1 = *((_DWORD *)p + 1);\n    if ( v1 == 16 )\n        sink ^= 0x10uLL;\n    if ( v1 == 32 )\n        sink ^= 0x20uLL;\n    if ( v1 == 64 )\n        sink ^= 0x40uLL;\n    sink ^= *((unsigned __int16 *)p + 4);\n    sink ^= *((unsigned __int8 *)p + 10);\n}\n<<<\n"
+    }
+  ]
+}

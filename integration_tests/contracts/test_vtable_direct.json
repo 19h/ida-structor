@@ -1,0 +1,116 @@
+{
+  "fixture": "test_vtable_direct",
+  "cases": [
+    {
+      "name": "access_object_fields",
+      "synth": {
+        "kind": "function",
+        "target": "access_object_fields",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "access_object_fields",
+        "modify_object_fields",
+        "increment_fields"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 4,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "_printf",
+          "access_object_fields",
+          "increment_fields",
+          "main",
+          "modify_object_fields"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_access_object_fields",
+          "size": 32,
+          "alignment": 1,
+          "source_func_name": "access_object_fields",
+          "source_var": "obj",
+          "field_count": 4,
+          "non_padding_field_count": 4,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "ptr_0",
+              "offset": 0,
+              "size": 8,
+              "semantic": "ptr",
+              "type": "void *",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_8",
+              "offset": 8,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "ptr_10",
+              "offset": 16,
+              "size": 8,
+              "semantic": "ptr",
+              "type": "void *",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_18",
+              "offset": 24,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> access_object_fields\nvoid __cdecl access_object_fields(auto_access_object_fields *obj) {\n    printf(\n        a1: \"vtable=%p, data1=%d, data2=%d, data3=%p, data4=%ld\\n\",\n        obj->ptr_0,\n        LODWORD(obj->u64_8),\n        HIDWORD(obj->u64_8),\n        obj->ptr_10,\n        obj->u64_18);\n}\n<<<\n\n>>> modify_object_fields\nvoid __cdecl modify_object_fields(auto_access_object_fields *obj, int new_data1, int new_data2) {\n    LODWORD(obj->u64_8) = new_data1;\n    HIDWORD(obj->u64_8) = new_data2;\n    obj->u64_18 = new_data1 + new_data2;\n}\n<<<\n\n>>> increment_fields\nvoid __cdecl increment_fields(auto_access_object_fields *obj) {\n    ++LODWORD(obj->u64_8);\n    ++HIDWORD(obj->u64_8);\n    obj->u64_18 *= 2LL;\n}\n<<<\n"
+    }
+  ]
+}

@@ -1,0 +1,130 @@
+{
+  "fixture": "test_local_alias_positive",
+  "cases": [
+    {
+      "name": "use_alias_read",
+      "synth": {
+        "kind": "function",
+        "target": "use_alias_read",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "use_alias_read",
+        "use_alias_chain"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 5,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "init_alias_record",
+          "main",
+          "use_alias_chain",
+          "use_alias_read"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_use_alias_read",
+          "size": 21,
+          "alignment": 1,
+          "source_func_name": "use_alias_read",
+          "source_var": "p",
+          "field_count": 5,
+          "non_padding_field_count": 4,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "u32_0",
+              "offset": 0,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "__pad_4",
+              "offset": 4,
+              "size": 4,
+              "semantic": "padding",
+              "type": "char[4]",
+              "confidence": "medium",
+              "is_padding": true,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_8",
+              "offset": 8,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u16_10",
+              "offset": 16,
+              "size": 2,
+              "semantic": "uint",
+              "type": "unsigned __int16",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u8s_12",
+              "offset": 18,
+              "size": 3,
+              "semantic": "array",
+              "type": "unsigned __int8[3]",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": true,
+              "array_count": 3,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> use_alias_read\nvoid __cdecl use_alias_read(auto_use_alias_read *p) {\n    sink ^= p->u32_0;\n    sink ^= p->u64_8;\n    sink ^= p->u16_10;\n}\n<<<\n\n>>> use_alias_chain\nvoid __cdecl use_alias_chain(auto_use_alias_read *p) {\n    sink ^= p->u8s_12[0];\n    sink ^= p->u8s_12[1];\n    sink ^= p->u8s_12[2];\n}\n<<<\n"
+    }
+  ]
+}

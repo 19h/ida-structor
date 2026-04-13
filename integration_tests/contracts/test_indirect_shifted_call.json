@@ -1,0 +1,146 @@
+{
+  "fixture": "test_indirect_shifted_call",
+  "cases": [
+    {
+      "name": "dispatch_parent",
+      "synth": {
+        "kind": "function",
+        "target": "dispatch_parent",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "dispatch_parent",
+        "invoke_child"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 6,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "dispatch_parent",
+          "init_indirect",
+          "invoke_child",
+          "main"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_dispatch_parent",
+          "size": 42,
+          "alignment": 1,
+          "source_func_name": "dispatch_parent",
+          "source_var": "p",
+          "field_count": 6,
+          "non_padding_field_count": 6,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "u32_0",
+              "offset": 0,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_4",
+              "offset": 4,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "part_8",
+              "offset": 8,
+              "size": 16,
+              "semantic": "struct",
+              "type": "auto_part_8",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "part_18",
+              "offset": 24,
+              "size": 16,
+              "semantic": "struct",
+              "type": "auto_part_8",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u8_28",
+              "offset": 40,
+              "size": 1,
+              "semantic": "uint",
+              "type": "unsigned __int8",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u8_29",
+              "offset": 41,
+              "size": 1,
+              "semantic": "uint",
+              "type": "unsigned __int8",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> dispatch_parent\nvoid __cdecl dispatch_parent(auto_dispatch_parent *p) {\n    sink ^= p->u32_0;\n    sink ^= p->u32_4;\n    invoke_child(child: &p->part_8);\n    invoke_child(child: &p->part_18);\n    sink ^= p->u8_28;\n    sink ^= p->u8_29;\n}\n<<<\n\n>>> invoke_child\nvoid __cdecl invoke_child(auto_part_8 *child) {\n    child->fn_0(a1: child->u32_8, a2: child->u32_C);\n}\n<<<\n"
+    }
+  ]
+}

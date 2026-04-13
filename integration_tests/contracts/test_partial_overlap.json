@@ -1,0 +1,82 @@
+{
+  "fixture": "test_partial_overlap",
+  "cases": [
+    {
+      "name": "read_overlap",
+      "synth": {
+        "kind": "function",
+        "target": "read_overlap",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "read_overlap",
+        "read_shifted_overlap"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 2,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "init_overlap",
+          "main",
+          "read_overlap",
+          "read_shifted_overlap"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_read_overlap",
+          "size": 12,
+          "alignment": 1,
+          "source_func_name": "read_overlap",
+          "source_var": "p",
+          "field_count": 2,
+          "non_padding_field_count": 2,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "u64_0",
+              "offset": 0,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_8",
+              "offset": 8,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> read_overlap\nvoid __cdecl read_overlap(auto_read_overlap *p) {\n    sink ^= p->u64_0;\n    sink ^= LODWORD(p->u64_0);\n    sink ^= WORD1(p->u64_0);\n    sink ^= p->u32_8;\n}\n<<<\n\n>>> read_shifted_overlap\nvoid __cdecl read_shifted_overlap(auto_read_overlap *p) {\n    sink ^= *(unsigned int *)((char *)&p->u64_0 + 2);\n    sink ^= WORD2(p->u64_0);\n}\n<<<\n"
+    }
+  ]
+}

@@ -9,11 +9,14 @@
 #   IDA_SDK_DIR/IDASDK - path to IDA SDK (required, or set in environment)
 #   BUILD_TYPE         - Release or Debug (default: Release)
 #   INSTALL_DIR        - override install location (default: ~/.idapro/plugins)
+#   TEST_IDUMP         - idump executable path (default: idump)
 
 BUILD_DIR     := build
 BUILD_TYPE    ?= Release
 INSTALL_DIR   ?= $(HOME)/.idapro/plugins
 PLUGIN_NAME   := structor.dylib
+TEST_IDUMP    ?= idump
+PYTHON        ?= python3
 
 # Support both IDA_SDK_DIR and IDASDK env vars
 # Also handle case where SDK is in $IDASDK/src/ subdirectory
@@ -38,7 +41,7 @@ ifdef IDA_SDK_DIR
     CMAKE_FLAGS += -DIDA_SDK_DIR=$(IDA_SDK_DIR)
 endif
 
-.PHONY: all build configure clean rebuild install uninstall
+.PHONY: all build configure clean rebuild install uninstall test
 
 all: build
 
@@ -48,6 +51,9 @@ configure:
 
 build: configure
 	@cmake --build $(BUILD_DIR) --parallel
+
+test: build
+	@$(PYTHON) integration_tests/check_full_integrity_suite.py --repo-root "$(CURDIR)" --plugin "$(CURDIR)/$(BUILD_DIR)/structor$(PLUGIN_EXT)" --idump "$(TEST_IDUMP)"
 
 clean:
 	@rm -rf $(BUILD_DIR)
