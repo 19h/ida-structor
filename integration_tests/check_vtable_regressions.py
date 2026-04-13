@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -15,6 +16,14 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 def strip_ansi(text: str) -> str:
     return ANSI_ESCAPE_RE.sub("", text)
+
+
+def log(message: str) -> None:
+    print(message, flush=True)
+
+
+def hr(char: str = "-", width: int = 78) -> str:
+    return char * width
 
 
 def run(cmd, *, cwd=None, env=None):
@@ -30,6 +39,9 @@ def require_success(proc, description: str) -> None:
 
 
 def build_vtable_fixture(repo_root: Path) -> Path:
+    log(hr("="))
+    log("Building vtable regression fixture")
+    log("  test_vtable_positive")
     proc = run(
         [
             "sh",
@@ -44,6 +56,7 @@ def build_vtable_fixture(repo_root: Path) -> Path:
     if not binary.exists():
         raise RuntimeError(f"expected fixture binary was not created: {binary}")
 
+    log("Build complete")
     return binary
 
 
@@ -105,6 +118,7 @@ def run_idump(
     binary: Path,
     function_names: list[str],
     auto_synth: str,
+    target_description: str,
 ) -> str:
     real_home = Path.home()
     sandbox_home = prepare_plugin_home(plugin_path, real_home)
@@ -119,6 +133,9 @@ def run_idump(
         shutil.copytree(dsym_src, dsym_dst)
 
     try:
+        log(f"Fixture binary: {binary.name}")
+        log(f"Auto-synth target: {target_description}")
+        log("Pseudocode checked: " + ", ".join(function_names))
         env = os.environ.copy()
         env["HOME"] = str(sandbox_home)
         env["STRUCTOR_AUTO_SYNTH"] = auto_synth
@@ -175,6 +192,7 @@ def run_vtable_positive_regression(
         binary,
         ["__Z18call_vtable_directPv", "__Z19call_multiple_slotsPvi"],
         "0x100000530:0",
+        "function `call_vtable_direct`, variable #0",
     )
 
     require_substrings(
@@ -220,8 +238,16 @@ def main() -> int:
     if not plugin_path.exists():
         raise RuntimeError(f"plugin not found: {plugin_path}")
 
+    start = time.monotonic()
+    log(hr("="))
+    log("Vtable regressions")
+    log(hr())
+    log("Regression: positive vtable recovery")
     run_vtable_positive_regression(repo_root, plugin_path, args.idump)
-    print("[PASS] vtable positive regression")
+    elapsed = time.monotonic() - start
+    log("Status: PASS")
+    log(hr("="))
+    log(f"Vtable regression suite: PASS ({elapsed:.1f}s)")
     return 0
 
 

@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
+import time
 from pathlib import Path
 
 
@@ -17,6 +19,28 @@ FUNCTION_HEADER_RE = re.compile(r"^Function: (?P<name>.+?) \(")
 
 def strip_ansi(text: str) -> str:
     return ANSI_ESCAPE_RE.sub("", text)
+
+
+def log(message: str) -> None:
+    print(message, flush=True)
+
+
+def hr(char: str = "-", width: int = 78) -> str:
+    return char * width
+
+
+def format_name_list(names: list[str], *, indent: str = "  ") -> str:
+    if not names:
+        return f"{indent}<none>"
+
+    return textwrap.fill(
+        ", ".join(names),
+        width=100,
+        initial_indent=indent,
+        subsequent_indent=indent,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
 
 
 def run(cmd, *, cwd=None, env=None):
@@ -32,11 +56,15 @@ def require_success(proc, description: str) -> None:
 
 
 def build_fixtures(repo_root: Path, *names: str) -> None:
+    log(hr("="))
+    log("Building fixture binaries")
+    log(format_name_list(list(names)))
     proc = run(
         ["sh", str(repo_root / "integration_tests" / "build_fixtures.sh"), *names],
         cwd=repo_root,
     )
     require_success(proc, "building fixtures")
+    log("Build complete")
 
 
 def link_license_files(real_home: Path, sandbox_home: Path) -> None:
@@ -274,6 +302,63 @@ def make_auto_synth_value(spec: dict) -> tuple[str, str]:
 
     selector = spec.get("var_idx", 0)
     return "STRUCTOR_AUTO_SYNTH", f"{target}:{selector}"
+
+
+def describe_synth(spec: dict) -> str:
+    kind = spec.get("kind")
+    target = spec.get("target")
+    if kind == "global":
+        return f"global symbol `{target}`"
+
+    if "var_name" in spec:
+        return f"function `{target}`, variable `{spec['var_name']}`"
+
+    return f"function `{target}`, variable #{spec.get('var_idx', 0)}"
+
+
+def describe_solver_status(status: str | None) -> str:
+    mapping = {
+        "success": "Z3 solved the layout directly",
+        "success_relaxed": "Z3 solved the layout after relaxing constraints",
+        "fallback_heuristic": "heuristic fallback synthesis was used",
+        "fallback_raw_bytes": "raw-byte fallback synthesis was used",
+        "not_used": "the solver was not used",
+    }
+    return mapping.get(status, status or "unknown")
+
+
+def log_case_header(
+    case_label: str, synth_desc: str, dump_functions: list[str]
+) -> None:
+    log(hr())
+    log(f"Case: {case_label}")
+    log(f"Target: {synth_desc}")
+    log("Pseudocode checked:")
+    log(format_name_list(dump_functions))
+
+
+def log_case_result(normalized_result: dict) -> None:
+    structure = normalized_result.get("structure")
+    z3 = normalized_result.get("z3", {})
+    if structure is None:
+        log("Outcome: no structure synthesized")
+        log(
+            f"Reason: {normalized_result.get('error_message') or normalized_result.get('error')}"
+        )
+        log(f"Solver: {describe_solver_status(z3.get('status'))}")
+        return
+
+    log(f"Outcome: synthesized `{structure.get('name')}`")
+    log(f"Solver: {describe_solver_status(z3.get('status'))}")
+    log(
+        "Layout: "
+        f"{structure.get('size')} bytes, "
+        f"{structure.get('field_count')} total fields, "
+        f"{structure.get('non_padding_field_count')} non-padding fields, "
+        f"{normalized_result.get('vtable_slots', 0)} vtable slots"
+    )
+    log("Propagated to:")
+    log(format_name_list(normalized_result.get("propagated_to") or []))
 
 
 def run_case(
@@ -669,6 +754,13 @@ def main() -> int:
     if not contracts:
         raise RuntimeError(f"no contracts found in {contracts_dir}")
 
+    total_cases = sum(len(contract.get("cases", [])) for contract in contracts)
+    log(hr("="))
+    log("Exact fixture contracts")
+    log(f"Contract directory: {contracts_dir}")
+    log(f"Fixture files: {len(contracts)}")
+    log(f"Cases: {total_cases}")
+
     build_fixtures(
         repo_root, *(sorted({contract["fixture"] for contract in contracts}))
     )
@@ -676,10 +768,18 @@ def main() -> int:
     record_dir = None if not args.record_dir else Path(args.record_dir).resolve()
 
     case_count = 0
+    total_start = time.monotonic()
     for contract in contracts:
         fixture_name = contract["fixture"]
         for case in contract.get("cases", []):
             case_count += 1
+            case_label = f"{fixture_name}/{case['name']}"
+            log_case_header(
+                case_label,
+                describe_synth(case["synth"]),
+                case.get("dump_functions") or [],
+            )
+            case_start = time.monotonic()
             result, output = run_case(
                 repo_root,
                 plugin_path,
@@ -693,6 +793,7 @@ def main() -> int:
                 output,
                 case.get("snapshot_functions") or case.get("dump_functions") or [],
             )
+            log_case_result(normalized_result)
             if record_dir is not None:
                 record_case(
                     record_dir,
@@ -709,9 +810,12 @@ def main() -> int:
                 normalized_result,
                 pseudocode_snapshot,
             )
-            print(f"[PASS] {fixture_name}/{case['name']}")
+            elapsed = time.monotonic() - case_start
+            log(f"Status: PASS ({elapsed:.1f}s)")
 
-    print(f"[PASS] verified {case_count} fixture contract(s)")
+    total_elapsed = time.monotonic() - total_start
+    log(hr("="))
+    log(f"Verified {case_count} fixture contract case(s) in {total_elapsed:.1f}s")
     return 0
 
 

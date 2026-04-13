@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -15,6 +16,14 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 def strip_ansi(text: str) -> str:
     return ANSI_ESCAPE_RE.sub("", text)
+
+
+def log(message: str) -> None:
+    print(message, flush=True)
+
+
+def hr(char: str = "-", width: int = 78) -> str:
+    return char * width
 
 
 def run(cmd, *, cwd=None, env=None):
@@ -30,11 +39,15 @@ def require_success(proc, description: str) -> None:
 
 
 def build_fixtures(repo_root: Path, *names: str) -> None:
+    log(hr("="))
+    log("Building global recovery fixtures")
+    log("  " + ", ".join(names))
     proc = run(
         ["sh", str(repo_root / "integration_tests" / "build_fixtures.sh"), *names],
         cwd=repo_root,
     )
     require_success(proc, "building global recovery fixtures")
+    log("Build complete")
 
 
 def link_license_files(real_home: Path, sandbox_home: Path) -> None:
@@ -108,6 +121,9 @@ def run_idump(
         shutil.copytree(dsym_src, dsym_dst)
 
     try:
+        log(f"Fixture binary: {binary.name}")
+        log(f"Auto-synth target: global `{auto_global}`")
+        log("Pseudocode checked: " + ", ".join(functions))
         env = os.environ.copy()
         env["HOME"] = str(sandbox_home)
         env["STRUCTOR_AUTO_SYNTH_GLOBAL"] = auto_global
@@ -344,21 +360,49 @@ def main() -> int:
         "test_global_ambiguous_scratch",
     )
 
-    run_ctor_chain_regression(repo_root, plugin_path, args.idump)
-    run_return_helper_regression(repo_root, plugin_path, args.idump)
-    run_split_init_regression(repo_root, plugin_path, args.idump)
-    run_pointer_singleton_regression(repo_root, plugin_path, args.idump)
-    run_subobject_regression(repo_root, plugin_path, args.idump)
-    run_negative_scratch_regression(repo_root, plugin_path, args.idump)
-    run_cpp_static_lookup_regression(repo_root, plugin_path, args.idump)
+    start = time.monotonic()
 
-    print("[PASS] global ctor chain regression")
-    print("[PASS] global return helper regression")
-    print("[PASS] global split init regression")
-    print("[PASS] pointer singleton rewrite regression")
-    print("[PASS] global subobject regression")
-    print("[PASS] global negative scratch regression")
-    print("[PASS] cpp static global lookup regression")
+    log(hr("="))
+    log("Global recovery regressions")
+
+    log(hr())
+    log("Regression: global ctor chain")
+    run_ctor_chain_regression(repo_root, plugin_path, args.idump)
+    log("Status: PASS")
+
+    log(hr())
+    log("Regression: global return helper")
+    run_return_helper_regression(repo_root, plugin_path, args.idump)
+    log("Status: PASS")
+
+    log(hr())
+    log("Regression: global split init")
+    run_split_init_regression(repo_root, plugin_path, args.idump)
+    log("Status: PASS")
+
+    log(hr())
+    log("Regression: pointer singleton rewrite")
+    run_pointer_singleton_regression(repo_root, plugin_path, args.idump)
+    log("Status: PASS")
+
+    log(hr())
+    log("Regression: global subobject")
+    run_subobject_regression(repo_root, plugin_path, args.idump)
+    log("Status: PASS")
+
+    log(hr())
+    log("Regression: global negative scratch")
+    run_negative_scratch_regression(repo_root, plugin_path, args.idump)
+    log("Status: PASS")
+
+    log(hr())
+    log("Regression: C++ static global lookup")
+    run_cpp_static_lookup_regression(repo_root, plugin_path, args.idump)
+    log("Status: PASS")
+
+    elapsed = time.monotonic() - start
+    log(hr("="))
+    log(f"Global recovery regression suite: PASS ({elapsed:.1f}s)")
     return 0
 
 

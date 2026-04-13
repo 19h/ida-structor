@@ -3,16 +3,33 @@
 import argparse
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
-def run(cmd: list[str], *, cwd: Path) -> None:
-    proc = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
+def log(message: str) -> None:
+    print(message, flush=True)
+
+
+def hr(char: str = "=", width: int = 78) -> str:
+    return char * width
+
+
+def run(cmd: list[str], *, cwd: Path, label: str) -> None:
+    start = time.monotonic()
+    log(hr())
+    log(f"Suite: {label}")
+    log(f"Command: {' '.join(cmd)}")
+
+    proc = subprocess.run(cmd, cwd=cwd, text=True)
+    elapsed = time.monotonic() - start
     if proc.returncode == 0:
+        log(f"Suite result: PASS ({elapsed:.1f}s)")
         return
 
-    output = (proc.stdout or "") + (proc.stderr or "")
-    raise RuntimeError(f"command failed: {' '.join(cmd)}\n{output}")
+    raise RuntimeError(
+        f"command failed: {' '.join(cmd)} (exit={proc.returncode}, elapsed={elapsed:.1f}s)"
+    )
 
 
 def main() -> int:
@@ -28,6 +45,13 @@ def main() -> int:
     plugin_path = Path(args.plugin).resolve()
     if not plugin_path.exists():
         raise RuntimeError(f"plugin not found: {plugin_path}")
+
+    total_start = time.monotonic()
+    log(hr())
+    log("Structor live integrity suite")
+    log(f"Repository: {repo_root}")
+    log(f"Plugin: {plugin_path}")
+    log(f"idump: {args.idump}")
 
     common = [
         "--repo-root",
@@ -45,11 +69,19 @@ def main() -> int:
         ["python3", "integration_tests/check_type_fixer_regressions.py", *common],
     ]
 
-    for cmd in suites:
-        run(cmd, cwd=repo_root)
-        print(f"[PASS] {' '.join(cmd[0:2])}")
+    labels = [
+        "exact fixture contracts",
+        "global recovery regressions",
+        "vtable regressions",
+        "type-fixer regressions",
+    ]
 
-    print("[PASS] full live integrity suite")
+    for cmd, label in zip(suites, labels, strict=True):
+        run(cmd, cwd=repo_root, label=label)
+
+    total_elapsed = time.monotonic() - total_start
+    log(hr())
+    log(f"Full live integrity suite: PASS ({total_elapsed:.1f}s)")
     return 0
 
 

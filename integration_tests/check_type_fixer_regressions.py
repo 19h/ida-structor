@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -16,6 +17,14 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 def strip_ansi(text: str) -> str:
     return ANSI_ESCAPE_RE.sub("", text)
+
+
+def log(message: str) -> None:
+    print(message, flush=True)
+
+
+def hr(char: str = "-", width: int = 78) -> str:
+    return char * width
 
 
 def run(cmd, *, cwd=None, env=None):
@@ -44,6 +53,9 @@ def build_missing_regarg_fixture(repo_root: Path) -> Path:
             f"missing-regarg fixture requires arm64/aarch64, found {arch}"
         )
 
+    log(hr("="))
+    log("Building type-fixer fixture")
+    log("  test_missing_regarg")
     proc = run(
         [
             "sh",
@@ -58,10 +70,14 @@ def build_missing_regarg_fixture(repo_root: Path) -> Path:
     if not binary.exists():
         raise RuntimeError(f"expected fixture binary was not created: {binary}")
 
+    log("Build complete")
     return binary
 
 
 def build_overlap_scope_fixture(repo_root: Path) -> Path:
+    log(hr("="))
+    log("Building type-fixer fixture")
+    log("  test_overlap_scope")
     proc = run(
         [
             "sh",
@@ -76,6 +92,7 @@ def build_overlap_scope_fixture(repo_root: Path) -> Path:
     if not binary.exists():
         raise RuntimeError(f"expected fixture binary was not created: {binary}")
 
+    log("Build complete")
     return binary
 
 
@@ -144,6 +161,13 @@ def run_idump(
     )
 
     try:
+        log(f"Fixture binary: {binary.name}")
+        log(f"Function checked: {function_name}")
+        log(
+            "Config: "
+            f"debug_mode={str(debug_mode).lower()}, "
+            f"auto_fix_verbose={str(auto_fix_verbose).lower()}"
+        )
         env = os.environ.copy()
         env["HOME"] = str(sandbox_home)
         proc = run(
@@ -245,10 +269,22 @@ def main() -> int:
     if not plugin_path.exists():
         raise RuntimeError(f"plugin not found: {plugin_path}")
 
+    start = time.monotonic()
+    log(hr("="))
+    log("Type-fixer regressions")
+    log(hr())
+    log("Regression: missing register argument inference")
     run_missing_regarg_regression(repo_root, plugin_path, args.idump)
+    log("Status: PASS")
+
+    log(hr())
+    log("Regression: overlap recovery")
     run_overlap_regression(repo_root, plugin_path, args.idump)
-    print("[PASS] missing register argument regression")
-    print("[PASS] overlap recovery regression")
+    log("Status: PASS")
+
+    elapsed = time.monotonic() - start
+    log(hr("="))
+    log(f"Type-fixer regression suite: PASS ({elapsed:.1f}s)")
     return 0
 
 
