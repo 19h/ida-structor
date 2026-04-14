@@ -153,6 +153,9 @@ struct TypeFixerConfig {
     
     /// Whether to force fixes even if confidence is lower
     bool force_apply = false;
+
+    /// Whether to run cross-function diagnostics for likely missing arguments
+    bool collect_missing_argument_warnings = true;
     
     /// Specific difference reasons to auto-fix (empty = all significant)
     qvector<DifferenceReason> auto_fix_reasons;
@@ -972,6 +975,7 @@ public:
 private:
     TypeFixerConfig config_;
     qvector<qstring> diagnostics_;
+    std::unordered_map<ea_t, cfuncptr_t> cfunc_cache_;
     
     /// Infer type for a variable by analyzing access patterns
     [[nodiscard]] tinfo_t infer_variable_type(cfunc_t* cfunc, int var_idx, TypeConfidence& out_confidence);
@@ -1028,6 +1032,7 @@ inline TypeFixResult TypeFixer::fix_function_types(ea_t func_ea) {
 inline TypeFixResult TypeFixer::fix_function_types(cfunc_t* cfunc) {
     TypeFixResult result;
     diagnostics_.clear();
+    cfunc_cache_.clear();
     
     if (!cfunc) {
         result.errors.push_back(qstring("Null cfunc pointer"));
@@ -1146,16 +1151,19 @@ inline TypeFixResult TypeFixer::fix_function_types(cfunc_t* cfunc) {
         result.variable_fixes.push_back(std::move(fix));
     }
 
-    qvector<qstring> missing_arg_warnings = collect_missing_argument_warnings(cfunc);
-    for (auto& warning : missing_arg_warnings) {
-        result.warnings.push_back(std::move(warning));
+    if (config_.collect_missing_argument_warnings) {
+        qvector<qstring> missing_arg_warnings = collect_missing_argument_warnings(cfunc);
+        for (auto& warning : missing_arg_warnings) {
+            result.warnings.push_back(std::move(warning));
+        }
     }
 
     for (auto& diagnostic : diagnostics_) {
         result.diagnostics.push_back(std::move(diagnostic));
     }
     diagnostics_.clear();
-    
+    cfunc_cache_.clear();
+
     return result;
 }
 
@@ -1725,7 +1733,7 @@ inline bool TypeFixer::apply_fix(
     if (out_propagation && allow_propagation) {
         SynthOptions opts = Config::instance().options();
         opts.max_propagation_depth = config_.max_propagation_depth;
-        TypePropagator propagator(opts);
+        TypePropagator propagator(opts, &cfunc_cache_);
         *out_propagation = propagator.propagate(
             cfunc->entry_ea,
             var_idx,

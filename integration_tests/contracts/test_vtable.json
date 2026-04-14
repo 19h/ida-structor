@@ -13,21 +13,191 @@
         "__Z12access_valuePv"
       ],
       "golden_result": {
-        "success": false,
-        "error": "Insufficient accesses for synthesis",
-        "error_message": "Only 1 accesses found (minimum: 2)",
-        "fields_created": 0,
-        "vtable_slots": 0,
-        "propagated_to": [],
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 2,
+        "vtable_slots": 2,
+        "propagated_to": [
+          "__Z12access_valuePv",
+          "__Z19call_through_vtablePv",
+          "__ZN7DerivedC1Ev",
+          "__ZN7DerivedC2Ev",
+          "_main",
+          "_printf"
+        ],
         "failed_sites": [],
         "z3": {
-          "status": "not_used",
-          "used_z3": false,
+          "status": "success",
+          "used_z3": true,
           "used_fallback": false
         },
-        "structure": null
+        "structure": {
+          "name": "auto_z19call_through_vtablepv",
+          "size": 16,
+          "alignment": 1,
+          "source_func_name": "__Z19call_through_vtablePv",
+          "source_var": "a1",
+          "field_count": 2,
+          "non_padding_field_count": 2,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "vtable",
+              "offset": 0,
+              "size": 8,
+              "semantic": "vtbl",
+              "type": "auto_z19call_through_vtablepv_vtbl *",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_8",
+              "offset": 8,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": {
+            "name": "auto_z19call_through_vtablepv_vtbl",
+            "slot_count": 2,
+            "slots": [
+              {
+                "index": 0,
+                "offset": 0,
+                "name": "slot_0",
+                "signature_hint": "",
+                "type": "void (*)()"
+              },
+              {
+                "index": 1,
+                "offset": 8,
+                "name": "slot_1",
+                "signature_hint": "",
+                "type": ""
+              }
+            ]
+          }
+        }
       },
-      "golden_pseudocode": ">>> __Z19call_through_vtablePv\n__int64 __fastcall call_through_vtable(__int64 *a1) {\n    int v2; // [xsp+Ch] [xbp-24h]\n    __int64 v3; // [xsp+20h] [xbp-10h]\n\n    v3 = *a1;\n    (*(void (__fastcall **)(__int64 *))(*a1 + 8))(a1);\n    v2 = (*(__int64 (__fastcall **)(__int64 *, __int64))(v3 + 16))(a1, a2: 10);\n    return printf(a1: \"method2 result: %d\\n\", v2);\n}\n<<<\n\n>>> __Z12access_valuePv\n__int64 __fastcall access_value(_DWORD *a1) {\n    return printf(a1: \"value: %d\\n\", a1[2]);\n}\n<<<\n"
+      "golden_pseudocode": ">>> __Z19call_through_vtablePv\n__int64 __fastcall call_through_vtable(auto_z19call_through_vtablepv *a1) {\n    int v2; // [xsp+Ch] [xbp-24h]\n    auto_z19call_through_vtablepv_vtbl *vtable; // [xsp+20h] [xbp-10h]\n\n    vtable = a1->vtable;\n    ((void (__fastcall *)(auto_z19call_through_vtablepv *))a1->vtable->slot_1)(a1);\n    v2 = ((__int64 (__fastcall *)(auto_z19call_through_vtablepv *, __int64))vtable[1].slot_0)(a1, a2: 10);\n    return printf(a1: \"method2 result: %d\\n\", v2);\n}\n<<<\n\n>>> __Z12access_valuePv\n__int64 __fastcall access_value(auto_z19call_through_vtablepv *a1) {\n    return printf(a1: \"value: %d\\n\", LODWORD(a1->u64_8));\n}\n<<<\n"
+    },
+    {
+      "name": "main_dispatch_object",
+      "synth": {
+        "kind": "function",
+        "target": "main",
+        "var_idx": 4
+      },
+      "dump_functions": [
+        "main",
+        "__Z19call_through_vtablePv",
+        "__Z12access_valuePv"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 2,
+        "vtable_slots": 2,
+        "propagated_to": [
+          "__Z12access_valuePv",
+          "__Z19call_through_vtablePv",
+          "__ZN4BaseC2Ev",
+          "__ZN7DerivedC1Ev",
+          "__ZN7DerivedC2Ev",
+          "_main",
+          "_printf"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_main",
+          "size": 16,
+          "alignment": 1,
+          "source_func_name": "_main",
+          "source_var": "v4",
+          "field_count": 2,
+          "non_padding_field_count": 2,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "vtable",
+              "offset": 0,
+              "size": 8,
+              "semantic": "vtbl",
+              "type": "auto_main_vtbl *",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_8",
+              "offset": 8,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": {
+            "name": "auto_main_vtbl",
+            "slot_count": 2,
+            "slots": [
+              {
+                "index": 0,
+                "offset": 0,
+                "name": "slot_0",
+                "signature_hint": "",
+                "type": "void (*)()"
+              },
+              {
+                "index": 1,
+                "offset": 8,
+                "name": "slot_1",
+                "signature_hint": "",
+                "type": ""
+              }
+            ]
+          }
+        }
+      },
+      "golden_pseudocode": ">>> main\nint __fastcall main(int argc, const char **argv, const char **envp) {\n    auto_main *v4; // [xsp+0h] [xbp-20h]\n\n    v4 = (auto_main *)operator new(__sz: 0x10u);\n    v4->vtable = nullptr;\n    v4->u64_8 = 0;\n    Derived::Derived(this: (Derived *)v4);\n    v4->u64_8 = 0xC800000064LL;\n    call_through_vtable(a1: (__int64 *)v4);\n    access_value(a1: v4);\n    if ( v4 )\n        ((void (__fastcall *)(auto_main *))v4->vtable->slot_1)(a1: v4);\n    return 0;\n}\n<<<\n\n>>> __Z19call_through_vtablePv\n__int64 __fastcall call_through_vtable(auto_main *a1) {\n    int v2; // [xsp+Ch] [xbp-24h]\n    auto_main_vtbl *vtable; // [xsp+20h] [xbp-10h]\n\n    vtable = a1->vtable;\n    ((void (__fastcall *)(auto_main *))a1->vtable->slot_1)(a1);\n    v2 = ((__int64 (__fastcall *)(auto_main *, __int64))vtable[1].slot_0)(a1, a2: 10);\n    return printf(a1: \"method2 result: %d\\n\", v2);\n}\n<<<\n\n>>> __Z12access_valuePv\n__int64 __fastcall access_value(auto_main *a1) {\n    return printf(a1: \"value: %d\\n\", LODWORD(a1->u64_8));\n}\n<<<\n"
     }
   ]
 }

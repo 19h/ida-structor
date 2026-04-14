@@ -1,7 +1,7 @@
 # Structor Plugin Makefile
 # Usage:
 #   make              - build the plugin
-#   make install      - build and install to ~/.idapro/plugins
+#   make install      - build, install, and codesign on macOS
 #   make clean        - remove build directory
 #   make rebuild      - clean and build
 #
@@ -62,7 +62,11 @@ rebuild: clean build
 
 install: build
 	@mkdir -p $(INSTALL_DIR)
-	@cp $(BUILD_DIR)/structor$(PLUGIN_EXT) $(INSTALL_DIR)/
+	@cp -f $(BUILD_DIR)/structor$(PLUGIN_EXT) $(INSTALL_DIR)/
+	@if [ "$(UNAME_S)" = "Darwin" ]; then \
+		codesign -s - -f "$(INSTALL_DIR)/structor$(PLUGIN_EXT)"; \
+		echo "Codesigned $(INSTALL_DIR)/structor$(PLUGIN_EXT)"; \
+	fi
 	@echo "Installed to $(INSTALL_DIR)/structor$(PLUGIN_EXT)"
 
 uninstall:

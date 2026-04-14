@@ -4,14 +4,20 @@
 #include "config.hpp"
 #include "utils.hpp"
 #include <queue>
+#include <unordered_map>
 
 namespace structor {
 
 /// Propagates synthesized types to related functions and variables
 class TypePropagator {
 public:
-    explicit TypePropagator(const SynthOptions& opts = Config::instance().options())
-        : options_(opts) {}
+    using CfuncCache = std::unordered_map<ea_t, cfuncptr_t>;
+
+    explicit TypePropagator(
+        const SynthOptions& opts = Config::instance().options(),
+        CfuncCache* shared_cfunc_cache = nullptr)
+        : options_(opts)
+        , shared_cfunc_cache_(shared_cfunc_cache) {}
 
     /// Propagate type to related functions
     [[nodiscard]] PropagationResult propagate(
@@ -96,9 +102,12 @@ private:
 
     [[nodiscard]] bool is_parameter(cfunc_t* cfunc, int var_idx);
     [[nodiscard]] int get_param_index(cfunc_t* cfunc, int var_idx);
+    [[nodiscard]] cfuncptr_t get_cfunc(ea_t func_ea);
 
     const SynthOptions& options_;
     std::unordered_set<std::uint64_t> visited_;
+    CfuncCache* shared_cfunc_cache_ = nullptr;
+    CfuncCache local_cfunc_cache_;
 
     std::uint64_t make_visit_key(ea_t func_ea, int var_idx) {
         return (static_cast<std::uint64_t>(func_ea) << 16) | static_cast<std::uint64_t>(var_idx & 0xFFFF);

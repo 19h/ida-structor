@@ -3,6 +3,7 @@
 
 #include <structor/synth_types.hpp>
 #include <structor/config.hpp>
+#include <structor/host_integration.hpp>
 #include <structor/ui_integration.hpp>
 #include <structor/api.hpp>
 #include <structor/type_fixer.hpp>
@@ -13,7 +14,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 namespace structor {
@@ -1678,20 +1678,14 @@ public:
     bool idaapi run(size_t arg) override;
     ssize_t idaapi on_event(ssize_t code, va_list va) override;
 
-    /// Called when decompilation completes - fix types automatically
-    void on_decompilation_complete(cfunc_t* cfunc);
-
 private:
     void cleanup();
     void run_pending_auto_synth();
 
     SynthActionHandler action_handler_;  // Owned by plugin, passed to IDA
+    HostIntegration host_integration_;
     bool initialized_ = false;
     bool cleaned_up_ = false;
-    bool hexrays_hooked_ = false;
-
-    // Track which functions we've already processed to avoid re-fixing
-    std::unordered_set<ea_t> processed_functions_;
 
     // Pending auto-synthesis from env var
     ea_t pending_synth_ea_ = BADADDR;
@@ -1704,46 +1698,7 @@ private:
     bool auto_synth_done_ = false;
 };
 
-// Global plugin instance for callback access
-static StructorPlugin* g_plugin = nullptr;
-
-// Hex-Rays callback implementation
-static ssize_t idaapi hexrays_callback(void* /*ud*/, hexrays_event_t event, va_list va) {
-    if (!g_plugin) return 0;
-    
-    switch (event) {
-        case hxe_maturity: {
-            cfunc_t* cfunc = va_arg(va, cfunc_t*);
-            ctree_maturity_t maturity = va_argi(va, ctree_maturity_t);
-            if (cfunc && maturity == CMAT_FINAL) {
-                if (Config::instance().options().debug_mode) {
-                    qstring func_name;
-                    get_func_name(&func_name, cfunc->entry_ea);
-                    msg("Structor: hxe_maturity final for %s\n", func_name.c_str());
-                }
-                (void)rewrite_registered_global_uses(cfunc);
-            }
-            break;
-        }
-        case hxe_func_printed: {
-            // Called after the function pseudocode is generated
-            cfunc_t* cfunc = va_arg(va, cfunc_t*);
-            if (cfunc && Config::instance().options().auto_fix_types) {
-                g_plugin->on_decompilation_complete(cfunc);
-            }
-            break;
-        }
-        default:
-            break;
-    }
-    
-    return 0;
-}
-
 StructorPlugin::StructorPlugin() {
-    // Set global plugin pointer for callback access
-    g_plugin = this;
-
     // Load configuration
     Config::instance().load();
 
@@ -1753,9 +1708,8 @@ StructorPlugin::StructorPlugin() {
     // Hook UI notifications to cleanup before widget destruction
     hook_event_listener(HT_UI, this);
 
-    // Install Hex-Rays callback for automatic type fixing
-    if (install_hexrays_callback(hexrays_callback, nullptr)) {
-        hexrays_hooked_ = true;
+    // Install Hex-Rays callback for automatic type fixing/global rewrites
+    if (host_integration_.install_hexrays_hooks()) {
         msg("Structor: Hex-Rays callback installed (auto_fix_types=%s)\n",
             Config::instance().options().auto_fix_types ? "true" : "false");
     } else {
@@ -1774,6 +1728,7 @@ StructorPlugin::StructorPlugin() {
     const char* api_env = getenv(kApiCommandEnv);
     if (api_env && *api_env) {
         pending_api_command_ = api_env;
+        host_integration_.set_auto_type_fixing_suppressed(true);
         auto_synth_done_ = true;
         msg("Structor: Running auto API command: %s\n", pending_api_command_.c_str());
         (void)run_pending_api_command(pending_api_command_);
@@ -1784,6 +1739,7 @@ StructorPlugin::StructorPlugin() {
     // STRUCTOR_AUTO_SYNTH=func_name or func_name:var_idx or func_name:var_name
     const char* env = getenv("STRUCTOR_AUTO_SYNTH");
     if (env && *env) {
+        host_integration_.set_auto_type_fixing_suppressed(true);
         qstring requested = env;
         qstring target = requested;
         const char* selector = nullptr;
@@ -1826,6 +1782,7 @@ StructorPlugin::StructorPlugin() {
     // Check for global/static auto-synthesis env var: STRUCTOR_AUTO_SYNTH_GLOBAL=ea_or_name
     const char* global_env = getenv("STRUCTOR_AUTO_SYNTH_GLOBAL");
     if (global_env && *global_env) {
+        host_integration_.set_auto_type_fixing_suppressed(true);
         char* endptr = nullptr;
         pending_global_synth_ea_ = strtoull(global_env, &endptr, 0);
         if (!endptr || *endptr != '\0') {
@@ -1927,15 +1884,7 @@ void StructorPlugin::cleanup() {
     if (cleaned_up_) return;
     cleaned_up_ = true;
 
-    // Remove Hex-Rays callback
-    if (hexrays_hooked_) {
-        remove_hexrays_callback(hexrays_callback, nullptr);
-        hexrays_hooked_ = false;
-    }
-
-    // Clear global plugin pointer
-    g_plugin = nullptr;
-    clear_registered_global_rewrite_info();
+    host_integration_.shutdown();
 
     // Unregister IDC functions
     unregister_idc_funcs();
@@ -1961,78 +1910,6 @@ ssize_t StructorPlugin::on_event(ssize_t code, va_list /*va*/) {
             break;
     }
     return 0;
-}
-
-void StructorPlugin::on_decompilation_complete(cfunc_t* cfunc) {
-    if (!cfunc) return;
-
-    // When running an explicit non-interactive auto-synthesis session
-    // (used by idump verification), do not let the background type fixer
-    // mutate the database at the same time.
-    if (pending_synth_ea_ != BADADDR
-        || !pending_synth_func_name_.empty()
-        || pending_global_synth_ea_ != BADADDR
-        || !pending_global_synth_name_.empty()
-        || !pending_api_command_.empty()) {
-        return;
-    }
-
-    ea_t func_ea = cfunc->entry_ea;
-
-    // Check if we've already processed this function
-    if (processed_functions_.count(func_ea) > 0) {
-        return;
-    }
-
-    // Mark as processed to avoid re-processing
-    processed_functions_.insert(func_ea);
-
-    // Debug: always log that we're processing
-    if (Config::instance().options().debug_mode) {
-        qstring func_name;
-        get_func_name(&func_name, func_ea);
-        msg("Structor: Processing function %s (0x%llx)\n", 
-            func_name.c_str(), (unsigned long long)func_ea);
-    }
-
-    // Run type fixer
-    TypeFixerConfig fix_config;
-    fix_config.dry_run = false;
-    fix_config.synthesize_structures = true;
-    fix_config.propagate_fixes = Config::instance().options().auto_propagate;
-    fix_config.max_propagation_depth = Config::instance().options().max_propagation_depth;
-
-    TypeFixer fixer(fix_config);
-    TypeFixResult result = fixer.fix_function_types(cfunc);
-
-    // Report results
-    bool verbose = Config::instance().options().auto_fix_verbose;
-    bool debug = Config::instance().options().debug_mode;
-    
-    if (debug) {
-        msg("Structor: %s - analyzed %u vars, %u differences, %u fixed\n",
-            result.func_name.c_str(),
-            result.analyzed,
-            result.differences_found,
-            result.fixes_applied);
-    }
-
-    print_type_fix_messages(result, debug);
-    
-    if (verbose && result.fixes_applied > 0) {
-        msg("Structor: Auto-fixed %u types in %s\n",
-            result.fixes_applied, 
-            result.func_name.c_str());
-
-        // Report individual fixes
-        for (const auto& fix : result.variable_fixes) {
-            if (fix.applied) {
-                msg("  - %s: %s\n", 
-                    fix.var_name.c_str(),
-                    fix.comparison.description.c_str());
-            }
-        }
-    }
 }
 
 bool StructorPlugin::run(size_t arg) {

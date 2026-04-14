@@ -29,6 +29,17 @@ namespace ui {
 
 inline bool g_initialized = false;
 
+[[nodiscard]] inline std::size_t synthesis_evidence_count(
+    const AccessPattern& local_pattern,
+    const std::optional<UnifiedAccessPattern>& unified_pattern)
+{
+    if (unified_pattern.has_value()) {
+        return unified_pattern->unique_access_locations();
+    }
+
+    return local_pattern.access_count();
+}
+
 /// Execute synthesis on selected variable
 inline SynthResult do_synthesis(cfunc_t* cfunc, int var_idx, const SynthOptions& opts) {
     SynthResult result;
@@ -42,15 +53,17 @@ inline SynthResult do_synthesis(cfunc_t* cfunc, int var_idx, const SynthOptions&
             "No dereferences found for variable");
     }
 
-    if (static_cast<int>(pattern.access_count()) < opts.min_accesses) {
-        qstring msg;
-        msg.sprnt("Only %zu accesses found (minimum: %d)", pattern.access_count(), opts.min_accesses);
-        return SynthResult::make_error(SynthError::InsufficientAccesses, msg);
-    }
-
     // Step 2: Synthesize structure layout
     LayoutSynthesizer synthesizer(opts);
     SynthesisResult synth_result = synthesizer.synthesize(pattern, opts);
+    const std::size_t evidence_count =
+        synthesis_evidence_count(pattern, synth_result.unified_pattern);
+    if (static_cast<int>(evidence_count) < opts.min_accesses) {
+        qstring msg;
+        msg.sprnt("Only %zu accesses found (minimum: %d)", evidence_count, opts.min_accesses);
+        return SynthResult::make_error(SynthError::InsufficientAccesses, msg);
+    }
+
     SynthStruct synth_struct = std::move(synth_result.structure);
     qvector<SubStructInfo> sub_structs = std::move(synth_result.sub_structs);
 

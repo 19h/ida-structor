@@ -579,6 +579,17 @@ inline void populate_z3_info_from_synthesis(SynthResult& dst, const SynthesisRes
     return result;
 }
 
+[[nodiscard]] inline std::size_t synthesis_evidence_count(
+    const AccessPattern& local_pattern,
+    const std::optional<UnifiedAccessPattern>& unified_pattern)
+{
+    if (unified_pattern.has_value()) {
+        return unified_pattern->unique_access_locations();
+    }
+
+    return local_pattern.access_count();
+}
+
 [[nodiscard]] inline bool try_reuse_generated_struct(cfunc_t* cfunc, int var_idx, SynthResult& result) {
     if (!cfunc) {
         return false;
@@ -1210,17 +1221,19 @@ inline VariableStructureAnalysisResult StructorAPI::do_analyze_structure(
             return result;
         }
 
-        if (static_cast<int>(result.local_pattern.access_count()) < opts.min_accesses) {
-            result.error = SynthError::InsufficientAccesses;
-            result.error_message.sprnt("Only %zu accesses found (minimum: %d)",
-                                       result.local_pattern.access_count(),
-                                       opts.min_accesses);
-            return result;
-        }
-
         LayoutSynthesizer synthesizer(opts);
         result.synthesis = synthesizer.synthesize(result.local_pattern, opts);
         result.unified_pattern = result.synthesis.unified_pattern;
+
+        const std::size_t evidence_count =
+            synthesis_evidence_count(result.local_pattern, result.unified_pattern);
+        if (static_cast<int>(evidence_count) < opts.min_accesses) {
+            result.error = SynthError::InsufficientAccesses;
+            result.error_message.sprnt("Only %zu accesses found (minimum: %d)",
+                                       evidence_count,
+                                       opts.min_accesses);
+            return result;
+        }
 
         if (result.synthesis.structure.fields.empty()) {
             result.error = SynthError::TypeCreationFailed;
@@ -1524,14 +1537,16 @@ inline SynthResult StructorAPI::do_synthesis(
             "No dereferences found for variable");
     }
 
-    if (static_cast<int>(pattern.access_count()) < opts.min_accesses) {
+    LayoutSynthesizer synthesizer(opts);
+    SynthesisResult synth_result = synthesizer.synthesize(pattern, opts);
+    const std::size_t evidence_count =
+        synthesis_evidence_count(pattern, synth_result.unified_pattern);
+    if (static_cast<int>(evidence_count) < opts.min_accesses) {
         qstring msg_str;
-        msg_str.sprnt("Only %zu accesses found (minimum: %d)", pattern.access_count(), opts.min_accesses);
+        msg_str.sprnt("Only %zu accesses found (minimum: %d)", evidence_count, opts.min_accesses);
         return SynthResult::make_error(SynthError::InsufficientAccesses, msg_str);
     }
 
-    LayoutSynthesizer synthesizer(opts);
-    SynthesisResult synth_result = synthesizer.synthesize(pattern, opts);
     populate_z3_info_from_synthesis(result, synth_result);
     SynthStruct synth_struct = std::move(synth_result.structure);
     qvector<SubStructInfo> sub_structs = std::move(synth_result.sub_structs);

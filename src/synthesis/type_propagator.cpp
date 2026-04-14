@@ -352,6 +352,27 @@ bool synthesize_callee_param_type(ea_t func_ea,
 
 } // namespace
 
+cfuncptr_t TypePropagator::get_cfunc(ea_t func_ea) {
+    if (shared_cfunc_cache_ != nullptr) {
+        auto shared_it = shared_cfunc_cache_->find(func_ea);
+        if (shared_it != shared_cfunc_cache_->end()) {
+            return shared_it->second;
+        }
+    }
+
+    auto local_it = local_cfunc_cache_.find(func_ea);
+    if (local_it != local_cfunc_cache_.end()) {
+        return local_it->second;
+    }
+
+    cfuncptr_t cfunc = utils::get_cfunc(func_ea);
+    local_cfunc_cache_.emplace(func_ea, cfunc);
+    if (shared_cfunc_cache_ != nullptr) {
+        shared_cfunc_cache_->emplace(func_ea, cfunc);
+    }
+    return cfunc;
+}
+
 PropagationResult TypePropagator::propagate(
     ea_t origin_func,
     int origin_var_idx,
@@ -365,7 +386,7 @@ PropagationResult TypePropagator::propagate(
     visited_.insert(make_visit_key(origin_func, origin_var_idx));
 
     // Apply to origin first
-    cfuncptr_t cfunc = utils::get_cfunc(origin_func);
+    cfuncptr_t cfunc = get_cfunc(origin_func);
     if (cfunc) {
         if (apply_type(cfunc, origin_var_idx, new_type)) {
             PropagationSite site;
@@ -508,7 +529,7 @@ void TypePropagator::propagate_forward(
 {
     if (depth >= options_.max_propagation_depth) return;
 
-    cfuncptr_t cfunc = utils::get_cfunc(func_ea);
+    cfuncptr_t cfunc = get_cfunc(func_ea);
     if (!cfunc) return;
 
     // Find all callees where this variable is passed as an argument
@@ -542,7 +563,7 @@ void TypePropagator::propagate_forward(
         if (visited_.count(key)) continue;
         visited_.insert(key);
 
-        cfuncptr_t callee_cfunc = utils::get_cfunc(group.callee_ea);
+        cfuncptr_t callee_cfunc = get_cfunc(group.callee_ea);
         if (!callee_cfunc) continue;
 
         qvector<tinfo_t> candidate_types;
@@ -602,7 +623,7 @@ void TypePropagator::propagate_forward(
     find_assigned_from(cfunc, var_idx, return_sources);
     for (const auto& [callee_ea, ret_marker] : return_sources) {
         (void)ret_marker;
-        cfuncptr_t callee_cfunc = utils::get_cfunc(callee_ea);
+        cfuncptr_t callee_cfunc = get_cfunc(callee_ea);
         if (!callee_cfunc) continue;
 
         qvector<std::pair<int, sval_t>> return_vars;
@@ -648,7 +669,7 @@ void TypePropagator::propagate_backward(
 {
     if (depth >= options_.max_propagation_depth) return;
 
-    cfuncptr_t cfunc = utils::get_cfunc(func_ea);
+    cfuncptr_t cfunc = get_cfunc(func_ea);
     if (!cfunc) return;
 
     // Propagate through return-value assignments: caller_var = func()
@@ -666,7 +687,7 @@ void TypePropagator::propagate_backward(
             if (visited_.count(key)) continue;
             visited_.insert(key);
 
-            cfuncptr_t caller_cfunc = utils::get_cfunc(caller_ea);
+            cfuncptr_t caller_cfunc = get_cfunc(caller_ea);
             if (!caller_cfunc) continue;
 
             PropagationSite site;
@@ -711,7 +732,7 @@ void TypePropagator::propagate_backward(
         if (visited_.count(key)) continue;
         visited_.insert(key);
 
-        cfuncptr_t caller_cfunc = utils::get_cfunc(info.caller_ea);
+        cfuncptr_t caller_cfunc = get_cfunc(info.caller_ea);
         if (!caller_cfunc) continue;
 
         tinfo_t caller_type = type;
@@ -998,7 +1019,7 @@ void TypePropagator::find_callers_with_param(
     qvector<ea_t> caller_funcs = utils::get_callers(func_ea);
 
     for (ea_t caller_ea : caller_funcs) {
-        cfuncptr_t caller_cfunc = utils::get_cfunc(caller_ea);
+        cfuncptr_t caller_cfunc = get_cfunc(caller_ea);
         if (!caller_cfunc) continue;
 
         // Find calls to our function
@@ -1308,7 +1329,7 @@ void TypePropagator::find_callers_with_return(
     qvector<ea_t> caller_funcs = utils::get_callers(func_ea);
 
     for (ea_t caller_ea : caller_funcs) {
-        cfuncptr_t caller_cfunc = utils::get_cfunc(caller_ea);
+        cfuncptr_t caller_cfunc = get_cfunc(caller_ea);
         if (!caller_cfunc) continue;
 
         struct ReturnCallerFinder : public ctree_visitor_t {

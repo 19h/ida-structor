@@ -110,6 +110,8 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+option(STRUCTOR_BUILD_PLUGIN "Build the standalone Structor IDA plugin wrapper" ON)
+
 # IDA SDK configuration
 if(NOT DEFINED IDA_SDK_DIR)
     if(DEFINED ENV{IDA_SDK_DIR})
@@ -195,19 +197,25 @@ if(NOT IDA_LIB)
 endif()
 
 # Common compile definitions
-add_compile_definitions(
+set(STRUCTOR_PUBLIC_COMPILE_DEFINITIONS
     __IDP__
     USE_STANDARD_FILE_FUNCTIONS
     USE_DANGEROUS_FUNCTIONS
 )
 
 if(WIN32)
-    add_compile_definitions(__NT__)
+    list(APPEND STRUCTOR_PUBLIC_COMPILE_DEFINITIONS __NT__)
 elseif(APPLE)
-    add_compile_definitions(__MAC__)
+    list(APPEND STRUCTOR_PUBLIC_COMPILE_DEFINITIONS __MAC__)
 else()
-    add_compile_definitions(__LINUX__)
+    list(APPEND STRUCTOR_PUBLIC_COMPILE_DEFINITIONS __LINUX__)
 endif()
+
+if(IDA_EA64)
+    list(APPEND STRUCTOR_PUBLIC_COMPILE_DEFINITIONS __EA64__)
+endif()
+
+add_compile_definitions(${STRUCTOR_PUBLIC_COMPILE_DEFINITIONS})
 
 # Compiler flags
 if(MSVC)
@@ -229,13 +237,14 @@ endif()
 
 # Include directories (structor include only - IDA includes added per-target)
 include_directories(
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 
 # Source files - organized by module
-set(STRUCTOR_SOURCES
+set(STRUCTOR_CORE_SOURCES
     # Core module
     src/core/config.cpp
+    src/core/host_integration.cpp
     
     # Analysis module
     src/analysis/access_collector.cpp
@@ -249,10 +258,8 @@ set(STRUCTOR_SOURCES
     src/synthesis/structure_persistence.cpp
     src/synthesis/type_propagator.cpp
     
-    # UI module
-    src/ui/plugin.cpp
+    # Rewriter module
     src/ui/pseudocode_rewriter.cpp
-    src/ui/ui_integration.cpp
     
     # Z3 module
     src/z3/context.cpp
@@ -268,9 +275,10 @@ set(STRUCTOR_SOURCES
     src/z3/type_applicator.cpp
 )
 
-set(STRUCTOR_HEADERS
+set(STRUCTOR_CORE_HEADERS
     include/structor/synth_types.hpp
     include/structor/config.hpp
+    include/structor/host_integration.hpp
     include/structor/access_collector.hpp
     include/structor/layout_synthesizer.hpp
     include/structor/vtable_detector.hpp
@@ -298,48 +306,88 @@ set(STRUCTOR_HEADERS
     include/structor/z3/type_applicator.hpp
 )
 
-# Plugin shared library
-add_library(structor${IDA_SUFFIX} SHARED ${STRUCTOR_SOURCES} ${STRUCTOR_HEADERS})
+set(STRUCTOR_PLUGIN_SOURCES
+    src/ui/plugin.cpp
+    src/ui/ui_integration.cpp
+)
 
-# Add IDA SDK includes to structor target (not globally, to avoid contaminating tests)
-target_include_directories(structor${IDA_SUFFIX} PRIVATE ${IDA_INCLUDE_DIR})
+set(STRUCTOR_PLUGIN_HEADERS
+    include/structor/ui_integration.hpp
+)
+
+# Embeddable Structor core library
+add_library(structor_core STATIC ${STRUCTOR_CORE_SOURCES} ${STRUCTOR_CORE_HEADERS})
+add_library(structor::core ALIAS structor_core)
+
+set_target_properties(structor_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+target_include_directories(structor_core
+    PUBLIC
+        ${PROJECT_SOURCE_DIR}/include
+        ${IDA_INCLUDE_DIR}
+)
+
+target_compile_definitions(structor_core PUBLIC ${STRUCTOR_PUBLIC_COMPILE_DEFINITIONS})
 
 if(IDA_LIB)
-    target_link_libraries(structor${IDA_SUFFIX} PRIVATE ${IDA_LIB})
+    target_link_libraries(structor_core PUBLIC ${IDA_LIB})
 endif()
 
 if(HEXRAYS_LIB)
-    target_link_libraries(structor${IDA_SUFFIX} PRIVATE ${HEXRAYS_LIB})
+    target_link_libraries(structor_core PUBLIC ${HEXRAYS_LIB})
 endif()
 
-# Link Z3 to structor
+# Link Z3 to structor core
 if(Z3_CUSTOM)
-    target_link_libraries(structor${IDA_SUFFIX} PRIVATE z3_custom)
+    target_link_libraries(structor_core PUBLIC z3_custom)
 elseif(Z3_USE_SYSTEM)
-    target_link_libraries(structor${IDA_SUFFIX} PRIVATE z3::libz3)
+    target_link_libraries(structor_core PUBLIC z3::libz3)
     # System Z3 includes are handled by the imported target
 else()
-    target_link_libraries(structor${IDA_SUFFIX} PRIVATE libz3)
-    target_include_directories(structor${IDA_SUFFIX} PRIVATE
+    target_link_libraries(structor_core PUBLIC libz3)
+    target_include_directories(structor_core PRIVATE
         ${z3_SOURCE_DIR}/src/api      # C API headers (z3.h)
         ${z3_SOURCE_DIR}/src/api/c++  # C++ API headers (z3++.h)
         ${z3_BINARY_DIR}/src/api      # Generated headers
     )
 endif()
 
-# Set plugin output name and properties
-set_target_properties(structor${IDA_SUFFIX} PROPERTIES
-    OUTPUT_NAME "structor"
-    SUFFIX ${PLUGIN_EXT}
-    PREFIX ""
-)
+if(STRUCTOR_BUILD_PLUGIN)
+    # Plugin shared library wrapper
+    add_library(structor${IDA_SUFFIX} SHARED ${STRUCTOR_PLUGIN_SOURCES} ${STRUCTOR_PLUGIN_HEADERS})
+    add_library(structor::plugin ALIAS structor${IDA_SUFFIX})
 
-# Install target
-if(IDA_INSTALL_DIR)
-    install(TARGETS structor${IDA_SUFFIX}
-        LIBRARY DESTINATION "${IDA_INSTALL_DIR}/plugins"
-        RUNTIME DESTINATION "${IDA_INSTALL_DIR}/plugins"
+    target_link_libraries(structor${IDA_SUFFIX} PRIVATE structor_core)
+
+    target_include_directories(structor${IDA_SUFFIX} PRIVATE ${IDA_INCLUDE_DIR})
+    target_compile_definitions(structor${IDA_SUFFIX} PRIVATE ${STRUCTOR_PUBLIC_COMPILE_DEFINITIONS})
+
+    # Set plugin output name and properties
+    set_target_properties(structor${IDA_SUFFIX} PROPERTIES
+        OUTPUT_NAME "structor"
+        SUFFIX ${PLUGIN_EXT}
+        PREFIX ""
     )
+
+    # Install target
+    if(IDA_INSTALL_DIR)
+        install(TARGETS structor${IDA_SUFFIX}
+            LIBRARY DESTINATION "${IDA_INSTALL_DIR}/plugins"
+            RUNTIME DESTINATION "${IDA_INSTALL_DIR}/plugins"
+        )
+        if(APPLE)
+            install(CODE
+                "set(_structor_installed_plugin \"${IDA_INSTALL_DIR}/plugins/structor${PLUGIN_EXT}\")\n"
+                "if(EXISTS \"\${_structor_installed_plugin}\")\n"
+                "  execute_process(COMMAND codesign -s - -f \"\${_structor_installed_plugin}\" RESULT_VARIABLE _structor_codesign_result)\n"
+                "  if(NOT _structor_codesign_result EQUAL 0)\n"
+                "    message(FATAL_ERROR \"Failed to codesign installed plugin: \${_structor_installed_plugin}\")\n"
+                "  endif()\n"
+                "  message(STATUS \"Codesigned installed plugin: \${_structor_installed_plugin}\")\n"
+                "endif()\n"
+            )
+        endif()
+    endif()
 endif()
 
 # Tests

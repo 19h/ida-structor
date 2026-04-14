@@ -301,7 +301,13 @@ CONTRACT_MANIFEST = [
                 "call_through_vtable",
                 "__Z19call_through_vtablePv",
                 ["__Z19call_through_vtablePv", "__Z12access_valuePv"],
-            )
+            ),
+            function_case(
+                "main_dispatch_object",
+                "main",
+                ["main", "__Z19call_through_vtablePv", "__Z12access_valuePv"],
+                var_idx=4,
+            ),
         ],
     },
     {

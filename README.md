@@ -313,6 +313,41 @@ for (const auto &diagnostic : result.diagnostics) {
 }
 ```
 
+### Embedding in another plugin
+
+Structor can now be consumed as a normal CMake subproject without going through Structor's plugin init path.
+
+```cmake
+set(STRUCTOR_BUILD_PLUGIN OFF CACHE BOOL "" FORCE)
+add_subdirectory(path/to/structor)
+
+target_link_libraries(my_plugin PRIVATE structor::core)
+```
+
+```cpp
+#include <structor/api.hpp>
+#include <structor/host_integration.hpp>
+
+structor::HostIntegration host;
+
+// Optional: if your plugin wants Structor's callback-driven behavior,
+// either install Structor's Hex-Rays hooks...
+host.install_hexrays_hooks();
+
+// ...or forward events from your own Hex-Rays callback.
+host.handle_ctree_maturity(cfunc, maturity);
+host.handle_func_printed(cfunc);
+
+auto preview = structor::StructorAPI::instance().synthesize_structure(
+    func_ea,
+    var_idx,
+    structor::MaterializationMode::Preview,
+    &opts);
+```
+
+Use `structor::core` when another plugin wants to orchestrate Structor directly.
+The `structor` plugin target remains the UI/IDC/plugin-wrapper build.
+
 ## Configuration
 
 Structor stores configuration in `~/.idapro/structor.cfg` and creates the file automatically on first run.

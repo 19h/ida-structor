@@ -63,6 +63,12 @@ def main() -> int:
     ]
 
     suites = [
+        [
+            "python3",
+            "integration_tests/check_cmake_embed_consumer.py",
+            "--repo-root",
+            str(repo_root),
+        ],
         ["python3", "integration_tests/check_cpp_api_surface.py", *common],
         ["python3", "integration_tests/check_fixture_contracts.py", *common],
         ["python3", "integration_tests/check_global_recovery_regressions.py", *common],
@@ -71,6 +77,7 @@ def main() -> int:
     ]
 
     labels = [
+        "external CMake consumer",
         "C++ API surface",
         "exact fixture contracts",
         "global recovery regressions",
