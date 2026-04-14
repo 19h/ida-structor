@@ -99,6 +99,13 @@ bool union_has_relative_members(const qvector<SynthField>& members) {
     return false;
 }
 
+tid_t create_substruct_recursive(StructurePersistence& persistence, SubStructInfo& sub) {
+    if (!sub.children.empty()) {
+        return persistence.create_struct_with_substructs(sub.structure, sub.children);
+    }
+    return persistence.create_struct(sub.structure);
+}
+
 tinfo_t make_member_storage_type(const SynthField& member) {
     if (!member.type.empty()) {
         return member.type;
@@ -516,7 +523,7 @@ tid_t StructurePersistence::create_struct_with_substructs(
 {
     if (!sub_structs.empty()) {
         for (auto& sub : sub_structs) {
-            tid_t sub_tid = create_struct(sub.structure);
+            tid_t sub_tid = create_substruct_recursive(*this, sub);
             if (sub_tid == BADADDR) {
                 continue;
             }

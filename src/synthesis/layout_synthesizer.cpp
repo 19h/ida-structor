@@ -4,12 +4,111 @@
 #include <structor/layout_synthesizer.hpp>
 #include <structor/naming.hpp>
 
+#include <string>
+
 namespace structor {
 
 namespace {
 
 bool is_generated_padding_name(const qstring& name) {
     return name.find("__pad_") == 0;
+}
+
+bool ends_with_text(const qstring& value, const char* suffix) {
+    const size_t value_len = value.length();
+    const size_t suffix_len = strlen(suffix);
+    if (suffix_len > value_len) {
+        return false;
+    }
+
+    return strcmp(value.c_str() + value_len - suffix_len, suffix) == 0;
+}
+
+qstring qstring_slice(const char* text, size_t len) {
+    std::string tmp(text, len);
+    qstring out;
+    out = tmp.c_str();
+    return out;
+}
+
+qstring erase_suffix(const qstring& value, size_t suffix_len) {
+    std::string tmp = value.c_str();
+    tmp.erase(tmp.size() - suffix_len, suffix_len);
+    qstring out;
+    out = tmp.c_str();
+    return out;
+}
+
+qstring suggest_subobject_stem(ea_t func_ea) {
+    qstring func_name = utils::get_func_name(func_ea);
+    if (func_name.empty() || is_placeholder_identifier(func_name)) {
+        return qstring();
+    }
+
+    const char* raw = func_name.c_str();
+    const char* scope = strstr(raw, "::");
+    qstring stem_source;
+    bool member_owner = false;
+    if (scope != nullptr && scope != raw) {
+        stem_source = qstring_slice(raw, static_cast<size_t>(scope - raw));
+        member_owner = true;
+    } else {
+        stem_source = func_name;
+    }
+
+    qstring stem = sanitize_identifier(stem_source, "");
+    if (stem.empty()) {
+        return qstring();
+    }
+
+    bool recognized_factory = member_owner;
+    constexpr const char* kFactorySuffixes[] = {
+        "_copy_params",
+        "_copyparams",
+        "_constructor",
+        "_construct",
+        "_ctor",
+        "_init",
+        "_copy",
+    };
+    for (const char* suffix : kFactorySuffixes) {
+        if (!ends_with_text(stem, suffix)) {
+            continue;
+        }
+        stem = erase_suffix(stem, strlen(suffix));
+        recognized_factory = true;
+        break;
+    }
+
+    if (ends_with_text(stem, "_recovered")) {
+        stem = erase_suffix(stem, strlen("_recovered"));
+    }
+
+    if (!recognized_factory || stem.empty() || is_placeholder_identifier(stem)) {
+        return qstring();
+    }
+
+    return stem;
+}
+
+qstring suggest_subobject_type_name(ea_t func_ea) {
+    const qstring stem = suggest_subobject_stem(func_ea);
+    if (stem.empty()) {
+        return qstring();
+    }
+
+    qstring name;
+    name.sprnt("auto_%s", stem.c_str());
+    return name;
+}
+
+qstring suggest_subobject_field_name(ea_t func_ea) {
+    const qstring stem = suggest_subobject_stem(func_ea);
+    if (stem.empty()) {
+        return qstring();
+    }
+
+    return singularize_identifier(stem);
 }
 
 bool should_rebase_generated_name(const SynthField& field, sval_t old_offset) {
@@ -1220,6 +1319,15 @@ void LayoutSynthesizer::detect_subobjects(
                 continue;
             }
 
+            sval_t caller_delta = 0;
+            if (auto caller_it = pattern.function_deltas.find(edge.caller_ea);
+                caller_it != pattern.function_deltas.end()) {
+                caller_delta = caller_it->second;
+            }
+            if (caller_delta != 0) {
+                continue;
+            }
+
             for (const auto& fn_pattern : pattern.per_function_patterns) {
                 if (fn_pattern.func_ea == result.structure.source_func &&
                     edge.callee_ea == result.structure.source_func) {
@@ -1229,8 +1337,15 @@ void LayoutSynthesizer::detect_subobjects(
                     continue;
                 }
 
-                auto& group = groups[edge.delta];
-                group.offset = edge.delta;
+                auto delta_it = pattern.function_deltas.find(fn_pattern.func_ea);
+                const sval_t group_delta =
+                    delta_it != pattern.function_deltas.end() ? delta_it->second : edge.delta;
+                if (group_delta <= 0) {
+                    continue;
+                }
+
+                auto& group = groups[group_delta];
+                group.offset = group_delta;
                 group.patterns.push_back(fn_pattern);
                 group.funcs.insert(fn_pattern.func_ea);
             }
@@ -1263,11 +1378,44 @@ void LayoutSynthesizer::detect_subobjects(
     }
     std::sort(ordered_deltas.begin(), ordered_deltas.end());
 
-    LayoutSynthConfig sub_config = config_;
-    sub_config.cross_function = false;
-    sub_config.emit_substructs = false;
+    LayoutSynthConfig recursive_sub_config = config_;
+    recursive_sub_config.cross_function = true;
+    recursive_sub_config.emit_substructs = true;
+    recursive_sub_config.cross_function_depth =
+        std::max(1, recursive_sub_config.cross_function_depth - 1);
 
-    LayoutSynthesizer sub_synth(sub_config);
+    LayoutSynthConfig flat_sub_config = config_;
+    flat_sub_config.cross_function = false;
+    flat_sub_config.emit_substructs = false;
+
+    LayoutSynthesizer recursive_sub_synth(recursive_sub_config);
+    LayoutSynthesizer flat_sub_synth(flat_sub_config);
+
+    auto choose_recursive_seed = [](const SubGroup& group) -> std::optional<AccessPattern> {
+        const AccessPattern* best = nullptr;
+        int best_score = -1;
+        for (const auto& candidate : group.patterns) {
+            if (candidate.var_idx < 0 || candidate.accesses.empty()) {
+                continue;
+            }
+
+            int score = static_cast<int>(candidate.accesses.size());
+            if (type_has_named_udt_details(candidate.original_type)) {
+                score += 1000;
+            }
+
+            if (score > best_score) {
+                best = &candidate;
+                best_score = score;
+            }
+        }
+
+        if (best == nullptr) {
+            return std::nullopt;
+        }
+
+        return *best;
+    };
 
     auto access_covered_by_other_fields = [&](const FieldAccess& access, size_t skip_index) {
         const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
@@ -1293,21 +1441,12 @@ void LayoutSynthesizer::detect_subobjects(
             return true;
         }
 
-        bool touched_by_access = false;
-        for (const auto& access : pattern.all_accesses) {
+        auto access_covered_in_region = [&](const FieldAccess& access) {
             const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
-            if (access.offset < end && access_end > start) {
-                touched_by_access = true;
-                break;
+            if (access.offset >= end || access_end <= start) {
+                return true;
             }
-        }
-        if (!touched_by_access) {
-            return true;
-        }
 
-        sval_t cursor = start;
-        while (cursor < end) {
-            sval_t covered_until = cursor;
             for (size_t i = 0; i < result.structure.fields.size(); ++i) {
                 if (i == skip_index) {
                     continue;
@@ -1315,28 +1454,29 @@ void LayoutSynthesizer::detect_subobjects(
 
                 const auto& other = result.structure.fields[i];
                 const sval_t other_end = other.offset + static_cast<sval_t>(other.size);
-                if (other.offset > cursor || other_end <= cursor) {
+                if (access.offset < other.offset || access_end > other_end) {
                     continue;
                 }
 
-                covered_until = std::max(covered_until, std::min(other_end, end));
+                return true;
             }
 
             if (extra_accesses) {
-                for (const auto& access : *extra_accesses) {
-                    const sval_t access_end = access.offset + static_cast<sval_t>(access.size);
-                    if (access.offset > cursor || access_end <= cursor) {
-                        continue;
+                for (const auto& extra : *extra_accesses) {
+                    const sval_t extra_end = extra.offset + static_cast<sval_t>(extra.size);
+                    if (access.offset >= extra.offset && access_end <= extra_end) {
+                        return true;
                     }
-
-                    covered_until = std::max(covered_until, std::min(access_end, end));
                 }
             }
 
-            if (covered_until == cursor) {
+            return false;
+        };
+
+        for (const auto& access : pattern.all_accesses) {
+            if (!access_covered_in_region(access)) {
                 return false;
             }
-            cursor = covered_until;
         }
 
         return true;
@@ -1402,8 +1542,48 @@ void LayoutSynthesizer::detect_subobjects(
             continue;
         }
 
-        SynthesisResult sub_result = sub_synth.synthesize(sub_pattern, opts);
-        if (!sub_result.success()) continue;
+        qstring suggested_type_name;
+        qstring suggested_field_name;
+        SynthesisResult sub_result;
+        bool have_sub_result = false;
+
+        if (auto recursive_seed = choose_recursive_seed(group)) {
+            if (recursive_seed->original_type.empty() && !sub_pattern.original_type.empty()) {
+                recursive_seed->original_type = sub_pattern.original_type;
+            }
+
+            suggested_type_name = suggest_subobject_type_name(recursive_seed->func_ea);
+            suggested_field_name = suggest_subobject_field_name(recursive_seed->func_ea);
+
+            SynthOptions child_opts = opts;
+            child_opts.propagate_to_callers = false;
+            child_opts.max_propagation_depth = std::max(1, child_opts.max_propagation_depth - 1);
+            sub_result = recursive_sub_synth.synthesize(*recursive_seed, child_opts);
+            have_sub_result = sub_result.success();
+        }
+
+        if (!have_sub_result) {
+            if (suggested_type_name.empty()) {
+                suggested_type_name = suggest_subobject_type_name(sub_pattern.func_ea);
+            }
+            if (suggested_field_name.empty()) {
+                suggested_field_name = suggest_subobject_field_name(sub_pattern.func_ea);
+            }
+            sub_result = flat_sub_synth.synthesize(sub_pattern, opts);
+            have_sub_result = sub_result.success();
+        }
+
+        if (!have_sub_result) continue;
+
+        if (!suggested_type_name.empty()) {
+            set_adopted_name(sub_result.structure.name,
+                             sub_result.structure.naming,
+                             suggested_type_name,
+                             GeneratedNameKind::RootStruct,
+                             NameOrigin::HeuristicRole,
+                             NameConfidence::Medium,
+                             false);
+        }
 
         adopt_field_names_from_original_type(sub_result.structure, sub_pattern.original_type);
         adopt_field_names_from_access_contexts(sub_result.structure, sub_pattern.accesses);
@@ -1545,11 +1725,21 @@ void LayoutSynthesizer::detect_subobjects(
         sub_field.size = sub_size;
         sub_field.semantic = SemanticType::NestedStruct;
         sub_field.confidence = TypeConfidence::Medium;
-        set_generated_name(sub_field.name,
-                           sub_field.naming,
-                           make_substruct_field_name(delta),
-                           GeneratedNameKind::SubStructField,
-                           NameConfidence::Medium);
+        if (!suggested_field_name.empty() && !is_placeholder_identifier(suggested_field_name)) {
+            set_adopted_name(sub_field.name,
+                             sub_field.naming,
+                             suggested_field_name,
+                             GeneratedNameKind::SubStructField,
+                             NameOrigin::HeuristicRole,
+                             NameConfidence::Medium,
+                             false);
+        } else {
+            set_generated_name(sub_field.name,
+                               sub_field.naming,
+                               make_substruct_field_name(delta),
+                               GeneratedNameKind::SubStructField,
+                               NameConfidence::Medium);
+        }
 
         result.structure.fields.push_back(sub_field);
 
@@ -1558,6 +1748,7 @@ void LayoutSynthesizer::detect_subobjects(
         info.parent_offset = delta;
         info.field_name = sub_field.name;
         info.field_naming = sub_field.naming;
+        info.children = std::move(sub_result.sub_structs);
         result.sub_structs.push_back(std::move(info));
     }
 

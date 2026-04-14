@@ -1,0 +1,134 @@
+{
+  "fixture": "test_recursive_ctor_chain",
+  "cases": [
+    {
+      "name": "root_init",
+      "synth": {
+        "kind": "function",
+        "target": "root_init",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "root_init",
+        "child_init",
+        "leaf_init",
+        "use_root"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 5,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "_child_init",
+          "_leaf_init",
+          "_main",
+          "_memset",
+          "_root_init",
+          "_use_root"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_root_init",
+          "size": 60,
+          "alignment": 1,
+          "source_func_name": "_root_init",
+          "source_var": "a1",
+          "field_count": 5,
+          "non_padding_field_count": 4,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "u32_0",
+              "offset": 0,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "__pad_4",
+              "offset": 4,
+              "size": 4,
+              "semantic": "padding",
+              "type": "char[4]",
+              "confidence": "medium",
+              "is_padding": true,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "child",
+              "offset": 8,
+              "size": 40,
+              "semantic": "struct",
+              "type": "auto_child",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_30",
+              "offset": 48,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u32_38",
+              "offset": 56,
+              "size": 4,
+              "semantic": "uint",
+              "type": "unsigned __int32",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> root_init\n__int64 *__fastcall root_init(auto_root_init *a1) {\n    __int64 *result; // x0\n\n    a1->u32_0 = 1380929364;\n    result = child_init(a1: &a1->child);\n    *(unsigned __int64 *)((char *)&a1->u64_30 + 4) = 0x123456789ABCDEFLL;\n    a1[1].u32_0 = 9;\n    return result;\n}\n<<<\n\n>>> child_init\n__int64 *__fastcall child_init(auto_child *a1) {\n    __int64 *result; // x0\n\n    a1->0 = 1128810828;\n    result = leaf_init(result: (__int64 *)&a1->leaf.cmdsize);\n    *(unsigned __int64 *)((char *)&a1->u64_20 + 4) = 0xAAAABBBBCCCCDDDDLL;\n    return result;\n}\n<<<\n\n>>> leaf_init\n__int64 *__fastcall leaf_init(__int64 *result) {\n    *(_DWORD *)result = 3;\n    *((_DWORD *)result + 1) = 7;\n    result[1] = 0x1111222233334444LL;\n    return result;\n}\n<<<\n\n>>> use_root\nauto_root_init *__fastcall use_root(auto_root_init *result) {\n    sink ^= result->u32_0;\n    sink ^= (unsigned int)result->child.0;\n    sink ^= result->child.leaf.cmdsize;\n    sink ^= LODWORD(result->child.leaf.version);\n    sink ^= *(uint64_t *)((char *)&result->child.leaf.version + 4);\n    sink ^= *(unsigned __int64 *)((char *)&result->child.u64_20 + 4);\n    sink ^= *(unsigned __int64 *)((char *)&result->u64_30 + 4);\n    sink ^= result[1].u32_0;\n    return result;\n}\n<<<\n"
+    }
+  ]
+}

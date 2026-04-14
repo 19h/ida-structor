@@ -255,6 +255,16 @@ CONTRACT_MANIFEST = [
         ],
     },
     {
+        "fixture": "test_recursive_ctor_chain",
+        "cases": [
+            function_case(
+                "root_init",
+                "root_init",
+                ["root_init", "child_init", "leaf_init", "use_root"],
+            )
+        ],
+    },
+    {
         "fixture": "test_tree_struct",
         "cases": [
             function_case(

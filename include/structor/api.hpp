@@ -1709,6 +1709,10 @@ inline SynthResult StructorAPI::do_synthesis(
                     if (sub.structure.tid == BADADDR || !struct_needs_name_refinement(sub.structure)) {
                         continue;
                     }
+                    if (sub.structure.naming.is_semantic() ||
+                        sub.structure.naming.origin == NameOrigin::HeuristicRole) {
+                        continue;
+                    }
 
                     int match_count = 0;
                     tinfo_t matched_donor;

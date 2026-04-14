@@ -580,6 +580,7 @@ struct SubStructInfo {
     sval_t          parent_offset = 0;
     qstring         field_name;
     NameMetadata    field_naming;
+    qvector<SubStructInfo> children;
 };
 
 // ============================================================================
