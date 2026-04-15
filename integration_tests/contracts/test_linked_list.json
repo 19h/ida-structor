@@ -14,21 +14,87 @@
         "insert_after"
       ],
       "golden_result": {
-        "success": false,
-        "error": "No dereferences found for variable",
-        "error_message": "No dereferences found for variable",
-        "fields_created": 0,
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 3,
         "vtable_slots": 0,
-        "propagated_to": [],
-        "failed_sites": [],
+        "propagated_to": [
+          "_main",
+          "_sum_list",
+          "_traverse_list"
+        ],
+        "failed_sites": [
+          "_printf"
+        ],
         "z3": {
-          "status": "not_used",
-          "used_z3": false,
+          "status": "success",
+          "used_z3": true,
           "used_fallback": false
         },
-        "structure": null
+        "structure": {
+          "name": "auto_result",
+          "size": 24,
+          "alignment": 1,
+          "source_func_name": "_traverse_list",
+          "source_var": "result",
+          "field_count": 3,
+          "non_padding_field_count": 3,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "u64_0",
+              "offset": 0,
+              "size": 8,
+              "semantic": "int",
+              "type": "signed __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_8",
+              "offset": 8,
+              "size": 8,
+              "semantic": "int",
+              "type": "signed __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_10",
+              "offset": 16,
+              "size": 8,
+              "semantic": "int",
+              "type": "signed __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
       },
-      "golden_pseudocode": ">>> traverse_list\n__int64 *__fastcall traverse_list(__int64 *result) {\n    bool v1; // [xsp+14h] [xbp-1Ch]\n    int i; // [xsp+1Ch] [xbp-14h]\n    __int64 *v3; // [xsp+20h] [xbp-10h]\n\n    v3 = result;\n    for ( i = 0; ; ++i ) {\n        v1 = false;\n        if ( v3 )\n            v1 = i < 100;\n        if ( !v1 )\n            break;\n        result = (__int64 *)printf(a1: \"Node %d: data=%d\\n\", i, *((_DWORD *)v3 + 4));\n        v3 = (__int64 *)*v3;\n    }\n    return result;\n}\n<<<\n\n>>> sum_list\n__int64 __fastcall sum_list(__int64 *a1) {\n    unsigned int v2; // [xsp+Ch] [xbp-14h]\n\n    v2 = 0;\n    while ( a1 ) {\n        v2 += *((_DWORD *)a1 + 4);\n        a1 = (__int64 *)*a1;\n    }\n    return v2;\n}\n<<<\n\n>>> insert_after\n__int64 *__fastcall insert_after(__int64 *result, __int64 *a2) {\n    __int64 v2; // [xsp+8h] [xbp-18h]\n\n    v2 = *result;\n    *a2 = *result;\n    a2[1] = (__int64)result;\n    *result = (__int64)a2;\n    if ( v2 )\n        *(_QWORD *)(v2 + 8) = a2;\n    return result;\n}\n<<<\n"
+      "golden_pseudocode": ">>> traverse_list\nauto_result *__fastcall traverse_list(auto_result *result) {\n    bool v1; // [xsp+14h] [xbp-1Ch]\n    int i; // [xsp+1Ch] [xbp-14h]\n    auto_result *v3; // [xsp+20h] [xbp-10h]\n\n    v3 = result;\n    for ( i = 0; ; ++i ) {\n        v1 = false;\n        if ( v3 )\n            v1 = i < 100;\n        if ( !v1 )\n            break;\n        result = (auto_result *)printf(a1: \"Node %d: data=%d\\n\", i, LODWORD(v3->u64_10));\n        v3 = (auto_result *)v3->u64_0;\n    }\n    return result;\n}\n<<<\n\n>>> sum_list\n__int64 __fastcall sum_list(auto_result *a1) {\n    unsigned int v2; // [xsp+Ch] [xbp-14h]\n\n    v2 = 0;\n    while ( a1 ) {\n        v2 += LODWORD(a1->u64_10);\n        a1 = (auto_result *)a1->u64_0;\n    }\n    return v2;\n}\n<<<\n\n>>> insert_after\n__int64 *__fastcall insert_after(__int64 *result, __int64 *a2) {\n    __int64 v2; // [xsp+8h] [xbp-18h]\n\n    v2 = *result;\n    *a2 = *result;\n    a2[1] = (__int64)result;\n    *result = (__int64)a2;\n    if ( v2 )\n        *(_QWORD *)(v2 + 8) = a2;\n    return result;\n}\n<<<\n"
     }
   ]
 }

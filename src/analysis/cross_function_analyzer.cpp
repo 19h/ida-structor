@@ -483,6 +483,15 @@ CallSiteFinder::CallSiteFinder(int target_var_idx)
 int CallSiteFinder::visit_expr(cexpr_t* e) {
     if (!e) return 0;
 
+    if (e->op == cot_asg && e->x && e->x->op == cot_var && e->y) {
+        int base_var = -1;
+        sval_t delta = 0;
+        if (resolve_var_delta(e->y, base_var, delta)) {
+            aliases_[e->x->v.idx] = {base_var, delta};
+        }
+        return 0;
+    }
+
     if (e->op == cot_call) {
         process_call(e);
     }
@@ -497,23 +506,91 @@ void CallSiteFinder::process_call(cexpr_t* call_expr) {
 
     for (size_t i = 0; i < args.size(); ++i) {
         carg_t& arg = args[i];
-
-        // Check if this argument involves our target variable
-        ArgDeltaExtractor extractor(target_var_idx_);
-        extractor.apply_to(&arg, nullptr);
-
-        if (extractor.found()) {
+        int base_var = -1;
+        sval_t delta = 0;
+        if (resolve_var_delta(&arg, base_var, delta) && base_var == target_var_idx_) {
             CallInfo info;
             info.call_ea = call_expr->ea;
             info.callee_ea = get_callee_address(call_expr);
             info.arg_idx = static_cast<int>(i);
-            info.delta = extractor.delta().value_or(0);
+            info.delta = delta;
             info.is_direct = is_direct_call(call_expr);
-            info.by_ref = extractor.by_ref();
+            info.by_ref = contains_ref(&arg);
             info.funcptr_type = get_call_funcptr_type(call_expr);
 
             calls_.push_back(info);
         }
+    }
+}
+
+bool CallSiteFinder::contains_ref(const cexpr_t* expr) const {
+    if (!expr) {
+        return false;
+    }
+    if (expr->op == cot_ref) {
+        return true;
+    }
+
+    switch (expr->op) {
+        case cot_cast:
+        case cot_ptr:
+        case cot_memref:
+        case cot_memptr:
+        case cot_idx:
+            return contains_ref(expr->x);
+        case cot_add:
+        case cot_sub:
+            return contains_ref(expr->x) || contains_ref(expr->y);
+        default:
+            return false;
+    }
+}
+
+bool CallSiteFinder::resolve_var_delta(const cexpr_t* expr, int& var_idx, sval_t& delta) const {
+    if (!expr) {
+        return false;
+    }
+
+    switch (expr->op) {
+        case cot_var: {
+            auto it = aliases_.find(expr->v.idx);
+            if (it != aliases_.end()) {
+                var_idx = it->second.first;
+                delta += it->second.second;
+            } else {
+                var_idx = expr->v.idx;
+            }
+            return true;
+        }
+        case cot_cast:
+        case cot_ref:
+        case cot_ptr:
+            return resolve_var_delta(expr->x, var_idx, delta);
+        case cot_add:
+            if (expr->y && expr->y->op == cot_num && resolve_var_delta(expr->x, var_idx, delta)) {
+                delta += scale_pointer_delta(expr->x, static_cast<sval_t>(expr->y->numval()));
+                return true;
+            }
+            if (expr->x && expr->x->op == cot_num && resolve_var_delta(expr->y, var_idx, delta)) {
+                delta += scale_pointer_delta(expr->y, static_cast<sval_t>(expr->x->numval()));
+                return true;
+            }
+            return false;
+        case cot_sub:
+            if (expr->y && expr->y->op == cot_num && resolve_var_delta(expr->x, var_idx, delta)) {
+                delta -= scale_pointer_delta(expr->x, static_cast<sval_t>(expr->y->numval()));
+                return true;
+            }
+            return false;
+        case cot_memptr:
+        case cot_memref:
+            if (resolve_var_delta(expr->x, var_idx, delta)) {
+                delta += expr->m;
+                return true;
+            }
+            return false;
+        default:
+            return false;
     }
 }
 

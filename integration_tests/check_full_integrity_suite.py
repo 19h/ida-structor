@@ -72,6 +72,7 @@ def main() -> int:
         ["python3", "integration_tests/check_cpp_api_surface.py", *common],
         ["python3", "integration_tests/check_fixture_contracts.py", *common],
         ["python3", "integration_tests/check_global_recovery_regressions.py", *common],
+        ["python3", "integration_tests/check_weaponstats_regressions.py", *common],
         ["python3", "integration_tests/check_vtable_regressions.py", *common],
         ["python3", "integration_tests/check_type_fixer_regressions.py", *common],
     ]
@@ -81,6 +82,7 @@ def main() -> int:
         "C++ API surface",
         "exact fixture contracts",
         "global recovery regressions",
+        "WeaponStats regressions",
         "vtable regressions",
         "type-fixer regressions",
     ]

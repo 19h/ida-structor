@@ -4,6 +4,7 @@
 #include <pro.h>
 #include <hexrays.hpp>
 #endif
+#include <utility>
 #include <unordered_set>
 #include <unordered_map>
 #include <chrono>
@@ -381,9 +382,13 @@ public:
 private:
     int target_var_idx_;
     qvector<CallInfo> calls_;
+    std::unordered_map<int, std::pair<int, sval_t>> aliases_;
 
     /// Process a call expression
     void process_call(cexpr_t* call_expr);
+
+    [[nodiscard]] bool contains_ref(const cexpr_t* expr) const;
+    [[nodiscard]] bool resolve_var_delta(const cexpr_t* expr, int& var_idx, sval_t& delta) const;
 
     /// Extract callee address from call expression
     [[nodiscard]] ea_t get_callee_address(cexpr_t* call_expr) const;

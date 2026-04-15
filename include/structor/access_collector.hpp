@@ -56,6 +56,7 @@ private:
                                 const std::optional<std::uint8_t>& base_indirection);
     [[nodiscard]] bool extract_access(const cexpr_t* expr, sval_t& offset, uint32_t& size,
                                       std::optional<std::uint8_t>* base_indirection) const;
+    [[nodiscard]] utils::PtrArithInfo resolve_ptr_arith(const cexpr_t* expr) const;
     [[nodiscard]] bool compute_bitfield(std::uint64_t mask, int shift,
                                         std::uint16_t& bit_offset,
                                         std::uint16_t& bit_size) const;

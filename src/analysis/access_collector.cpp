@@ -182,6 +182,16 @@ void AccessPatternVisitor::process_assignment(cexpr_t* expr) {
         if (it != local_aliases_.end()) {
             alias = it->second;
             resolved = true;
+        } else if (rhs->v.idx == target_var_idx_) {
+            alias.insn_ea = expr->ea;
+            alias.source_func_ea = cfunc_->entry_ea;
+            alias.offset = 0;
+            alias.size = get_ptr_size();
+            alias.access_type = AccessType::Read;
+            alias.semantic_type = infer_semantic_from_usage(rhs, parent_expr());
+            alias.context_expr = utils::expr_to_string(rhs, cfunc_);
+            alias.inferred_type = rhs->type;
+            resolved = true;
         }
     }
 
@@ -197,6 +207,30 @@ void AccessPatternVisitor::process_assignment(cexpr_t* expr) {
         }
         local_aliases_[lhs->v.idx] = std::move(alias);
     }
+}
+
+utils::PtrArithInfo AccessPatternVisitor::resolve_ptr_arith(const cexpr_t* expr) const {
+    utils::PtrArithInfo info = utils::extract_ptr_arith(expr);
+    if (!info.valid) {
+        return info;
+    }
+
+    if (info.var_idx == target_var_idx_) {
+        return info;
+    }
+
+    auto it = local_aliases_.find(info.var_idx);
+    if (it == local_aliases_.end()) {
+        return info;
+    }
+
+    info.var_idx = target_var_idx_;
+    info.offset += it->second.offset;
+    if (it->second.base_indirection.has_value()) {
+        info.base_indirection = static_cast<std::uint8_t>(
+            std::min<int>(0xFF, info.base_indirection + *it->second.base_indirection));
+    }
+    return info;
 }
 
 void AccessPatternVisitor::process_constant_comparison(cexpr_t* expr) {
@@ -335,7 +369,7 @@ void AccessPatternVisitor::flush_pending_symbolic_accesses(int index_var, std::u
 }
 
 void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr_expr) {
-    auto arith = utils::extract_ptr_arith(expr);
+    auto arith = resolve_ptr_arith(expr);
 
     if (!arith.valid && ptr_expr) {
         struct SymbolicPtrInfo {
@@ -490,7 +524,7 @@ void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr
     }
 
     if (slot_base && slot_base->op == cot_ptr) {
-        auto inner_arith = utils::extract_ptr_arith(slot_base->x);
+        auto inner_arith = resolve_ptr_arith(slot_base->x);
         const bool function_slot_like =
             expr->type.is_funcptr() ||
             access.semantic_type == SemanticType::FunctionPointer;
@@ -532,7 +566,7 @@ void AccessPatternVisitor::process_memptr_access(cexpr_t* expr) {
         }
     }
 
-    auto arith = utils::extract_ptr_arith(expr->x);
+    auto arith = resolve_ptr_arith(expr->x);
     if (!arith.valid || arith.var_idx != target_var_idx_) {
         return;
     }
@@ -561,7 +595,7 @@ void AccessPatternVisitor::process_memptr_access(cexpr_t* expr) {
 }
 
 void AccessPatternVisitor::process_array_access(cexpr_t* expr) {
-    auto arith = utils::extract_ptr_arith(expr->x);
+    auto arith = resolve_ptr_arith(expr->x);
     if (!arith.valid || arith.var_idx != target_var_idx_) {
         return;
     }
@@ -860,7 +894,7 @@ void AccessPatternVisitor::record_bitfield_access(const cexpr_t* expr, sval_t of
 
 
 bool AccessPatternVisitor::extract_access(const cexpr_t* expr, sval_t& offset, uint32_t& size,
-                                              std::optional<std::uint8_t>* base_indirection) const {
+                                               std::optional<std::uint8_t>* base_indirection) const {
     if (base_indirection) {
         base_indirection->reset();
     }
@@ -868,7 +902,7 @@ bool AccessPatternVisitor::extract_access(const cexpr_t* expr, sval_t& offset, u
     if (!expr) return false;
 
     if (expr->op == cot_ptr) {
-        auto arith = utils::extract_ptr_arith(expr);
+        auto arith = resolve_ptr_arith(expr);
         if (!arith.valid || arith.var_idx != target_var_idx_) return false;
         offset = arith.offset;
         size = expr->type.empty() ? get_ptr_size() : utils::get_type_size(expr->type, get_ptr_size());
@@ -879,7 +913,7 @@ bool AccessPatternVisitor::extract_access(const cexpr_t* expr, sval_t& offset, u
     }
 
     if (expr->op == cot_memptr || expr->op == cot_memref) {
-        auto arith = utils::extract_ptr_arith(expr->x);
+        auto arith = resolve_ptr_arith(expr->x);
         if (!arith.valid || arith.var_idx != target_var_idx_) return false;
         offset = arith.offset + expr->m;
         size = expr->type.empty() ? get_ptr_size() : utils::get_type_size(expr->type, get_ptr_size());
@@ -955,8 +989,16 @@ tinfo_t AccessPatternVisitor::build_funcptr_type(const cexpr_t* call_expr) const
 bool AccessPatternVisitor::involves_target_var(const cexpr_t* expr) const {
     if (!expr) return false;
 
+    auto arith = resolve_ptr_arith(expr);
+    if (arith.valid && arith.var_idx == target_var_idx_) {
+        return true;
+    }
+
     if (expr->op == cot_var) {
-        return expr->v.idx == target_var_idx_;
+        if (expr->v.idx == target_var_idx_) {
+            return true;
+        }
+        return local_aliases_.find(expr->v.idx) != local_aliases_.end();
     }
 
     // Recurse through common operations
