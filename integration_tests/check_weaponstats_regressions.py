@@ -104,8 +104,31 @@ def run_weaponstats_case(repo_root: Path, plugin_path: Path, idump_path: str) ->
             output,
         )
         require(
-            normalized.get("fields_created", 0) < 30,
+            normalized.get("fields_created", 0) <= 12,
             f"weaponstats regression: expected factored layout, got {normalized.get('fields_created')} fields",
+            output,
+        )
+        require(
+            fields.get(0x28, {}).get("name") == "f32s_28",
+            f"weaponstats regression: expected float array naming at 0x28, got {fields.get(0x28, {}).get('name')!r}",
+            output,
+        )
+        for tail_offset in (0x350, 0x370, 0x390, 0x3A8):
+            tail_field = fields.get(tail_offset)
+            require(
+                tail_field is not None,
+                f"weaponstats regression: missing inline tail subobject at {tail_offset:#x}",
+                output,
+            )
+            require(
+                tail_field.get("semantic") == "struct"
+                and "auto_part_" in (tail_field.get("type") or ""),
+                f"weaponstats regression: tail field at {tail_offset:#x} was not factored into a subobject",
+                output,
+            )
+        require(
+            all(offset not in fields for offset in (0x358, 0x378, 0x398)),
+            "weaponstats regression: flat tail scalar fields leaked back into the root layout",
             output,
         )
         require(

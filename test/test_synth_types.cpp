@@ -233,9 +233,12 @@ TEST_F(SynthTypesTest, GenerateFieldName) {
 
 TEST_F(SynthTypesTest, ArrayAndSubobjectFallbackNames) {
     tinfo_t empty_type;
+    tinfo_t float_type;
+    float_type.create_simple_type(BTF_FLOAT);
 
     EXPECT_STREQ(make_substruct_field_name(0x18).c_str(), "part_18");
     EXPECT_STREQ(make_array_field_name(0x10, empty_type, SemanticType::Unknown, 4).c_str(), "u32s_10");
+    EXPECT_STREQ(make_array_field_name(0x28, float_type, SemanticType::Double, 4).c_str(), "f32s_28");
     EXPECT_STREQ(make_array_element_type_name("auto_anchor", "entries_10", 0x10).c_str(),
                  "auto_anchor_entry_10");
 }

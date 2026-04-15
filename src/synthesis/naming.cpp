@@ -428,7 +428,22 @@ qstring make_array_field_name(sval_t offset,
         return name;
     }
 
-    name.sprnt("%s_%s", scalar_prefix(semantic, element_size, true), make_offset_suffix(offset).c_str());
+    SemanticType preferred_semantic = semantic;
+    if (!element_type.empty()) {
+        if (element_type.is_func() || element_type.is_funcptr()) {
+            preferred_semantic = SemanticType::FunctionPointer;
+        } else if (element_type.is_ptr()) {
+            preferred_semantic = SemanticType::Pointer;
+        } else if (element_type.is_floating()) {
+            preferred_semantic = element_type.get_size() == 4
+                ? SemanticType::Float
+                : SemanticType::Double;
+        }
+    }
+
+    name.sprnt("%s_%s",
+               scalar_prefix(preferred_semantic, element_size, true),
+               make_offset_suffix(offset).c_str());
     return name;
 }
 

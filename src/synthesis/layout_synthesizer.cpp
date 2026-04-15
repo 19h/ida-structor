@@ -2093,6 +2093,196 @@ void LayoutSynthesizer::detect_subobjects(
         }
     }
 
+    auto field_has_local_write = [&](const SynthField& field) {
+        for (const auto& access : field.source_accesses) {
+            if (access.source_func_ea != result.structure.source_func) {
+                continue;
+            }
+            if (access.access_type == AccessType::Write ||
+                access.access_type == AccessType::ReadWrite) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto field_is_inline_anchor = [&](const SynthField& field) {
+        if (field.is_padding || field.is_array || field.is_union_candidate || field.is_bitfield ||
+            field.semantic == SemanticType::NestedStruct) {
+            return false;
+        }
+        if (field.offset <= 0 || field.size != get_ptr_size()) {
+            return false;
+        }
+        return field_has_local_write(field);
+    };
+
+    auto make_inline_window_substruct = [&](const qvector<SynthField>& window_fields,
+                                            sval_t start,
+                                            sval_t end)
+        -> std::optional<SubStructInfo> {
+        if (window_fields.empty() || start >= end) {
+            return std::nullopt;
+        }
+
+        int non_padding_fields = 0;
+        int locally_written_fields = 0;
+        qvector<FieldAccess> window_accesses;
+
+        SynthStruct child;
+        child.alignment = result.structure.alignment;
+        child.source_func = result.structure.source_func;
+        child.add_provenance(result.structure.source_func);
+
+        for (const auto& original : window_fields) {
+            SynthField copied = original;
+            const sval_t old_offset = copied.offset;
+            copied.offset -= start;
+            for (auto& access : copied.source_accesses) {
+                access.offset -= start;
+                window_accesses.push_back(access);
+            }
+            rebase_field_name(copied, old_offset);
+            child.fields.push_back(std::move(copied));
+
+            if (!original.is_padding) {
+                ++non_padding_fields;
+                if (field_has_local_write(original)) {
+                    ++locally_written_fields;
+                }
+            }
+        }
+
+        if (non_padding_fields < 2 || locally_written_fields < 2) {
+            return std::nullopt;
+        }
+
+        child.size = static_cast<std::uint32_t>(end - start);
+        qstring field_name = make_substruct_field_name(start);
+        qstring type_name;
+        type_name.sprnt("auto_%s", field_name.c_str());
+        set_generated_name(child.name,
+                           child.naming,
+                           type_name,
+                           GeneratedNameKind::RootStruct,
+                           NameConfidence::Medium);
+
+        apply_inner_scalar_overlay_recovery(child, window_accesses);
+        adopt_field_names_from_access_contexts(child, window_accesses);
+        generate_field_names(child);
+        compute_struct_size(child);
+        if (child.size < static_cast<std::uint32_t>(end - start)) {
+            child.size = static_cast<std::uint32_t>(end - start);
+        }
+
+        SubStructInfo info;
+        info.structure = std::move(child);
+        info.parent_offset = start;
+        set_generated_name(info.field_name,
+                           info.field_naming,
+                           field_name,
+                           GeneratedNameKind::SubStructField,
+                           NameConfidence::Medium);
+        return info;
+    };
+
+    {
+        qvector<SynthField> sorted_fields = result.structure.fields;
+        std::sort(sorted_fields.begin(), sorted_fields.end(),
+                  [](const SynthField& a, const SynthField& b) {
+                      if (a.offset != b.offset) return a.offset < b.offset;
+                      if (a.is_bitfield != b.is_bitfield) return a.is_bitfield;
+                      return a.bit_offset < b.bit_offset;
+                  });
+
+        qvector<SynthField> rebuilt_fields;
+        qvector<SubStructInfo> inline_sub_structs;
+
+        size_t index = 0;
+        while (index < sorted_fields.size()) {
+            if (sorted_fields[index].semantic == SemanticType::NestedStruct) {
+                rebuilt_fields.push_back(sorted_fields[index]);
+                ++index;
+                continue;
+            }
+
+            const size_t run_start = index;
+            while (index < sorted_fields.size() &&
+                   sorted_fields[index].semantic != SemanticType::NestedStruct) {
+                ++index;
+            }
+            const size_t run_end = index;
+
+            qvector<size_t> anchors;
+            for (size_t i = run_start; i < run_end; ++i) {
+                if (field_is_inline_anchor(sorted_fields[i])) {
+                    anchors.push_back(i);
+                }
+            }
+
+            if (anchors.size() < 2) {
+                for (size_t i = run_start; i < run_end; ++i) {
+                    rebuilt_fields.push_back(sorted_fields[i]);
+                }
+                continue;
+            }
+
+            qvector<SubStructInfo> run_subs;
+            bool valid_run = true;
+            for (size_t anchor_idx = 0; anchor_idx < anchors.size(); ++anchor_idx) {
+                const size_t first = anchors[anchor_idx];
+                const size_t limit = anchor_idx + 1 < anchors.size() ? anchors[anchor_idx + 1] : run_end;
+                const sval_t window_start = sorted_fields[first].offset;
+                const SynthField& last_field = sorted_fields[limit - 1];
+                const sval_t window_end = anchor_idx + 1 < anchors.size()
+                    ? sorted_fields[anchors[anchor_idx + 1]].offset
+                    : last_field.offset + static_cast<sval_t>(last_field.size);
+
+                qvector<SynthField> window_fields;
+                for (size_t i = first; i < limit; ++i) {
+                    window_fields.push_back(sorted_fields[i]);
+                }
+
+                auto maybe_sub = make_inline_window_substruct(window_fields, window_start, window_end);
+                if (!maybe_sub.has_value()) {
+                    valid_run = false;
+                    break;
+                }
+                run_subs.push_back(std::move(*maybe_sub));
+            }
+
+            if (!valid_run || run_subs.size() < 2) {
+                for (size_t i = run_start; i < run_end; ++i) {
+                    rebuilt_fields.push_back(sorted_fields[i]);
+                }
+                continue;
+            }
+
+            for (size_t i = run_start; i < anchors.front(); ++i) {
+                rebuilt_fields.push_back(sorted_fields[i]);
+            }
+
+            for (auto& sub : run_subs) {
+                SynthField nested;
+                nested.offset = sub.parent_offset;
+                nested.size = sub.structure.size;
+                nested.semantic = SemanticType::NestedStruct;
+                nested.confidence = TypeConfidence::Medium;
+                nested.name = sub.field_name;
+                nested.naming = sub.field_naming;
+                rebuilt_fields.push_back(std::move(nested));
+                inline_sub_structs.push_back(std::move(sub));
+            }
+        }
+
+        if (!inline_sub_structs.empty()) {
+            result.structure.fields = std::move(rebuilt_fields);
+            for (auto& sub : inline_sub_structs) {
+                result.sub_structs.push_back(std::move(sub));
+            }
+        }
+    }
+
     if (!result.structure.fields.empty()) {
         const AccessPattern* source_pattern = nullptr;
         for (const auto& fn_pattern : pattern.per_function_patterns) {
