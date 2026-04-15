@@ -170,6 +170,7 @@ public:
         qvector<FieldAccess> direct_accesses;
         qvector<FunctionVariable> var_seeds;
         qvector<FunctionVariable> param_seeds;
+        qvector<PointerFlowEdge> flow_edges;
         std::unordered_map<ea_t, sval_t> pointer_alias_globals;
         std::optional<sval_t> return_delta;
     };
@@ -269,6 +270,11 @@ private:
 
             case cot_obj:
                 if (expr->obj_ea == root_ea_ || expr->obj_ea == root_head_ea_) {
+                    result.delta = static_cast<sval_t>(expr->obj_ea - root_ea_);
+                    result.origin = AliasOrigin::RootObject;
+                    return result;
+                }
+                if (expr->obj_ea != BADADDR && get_item_head(expr->obj_ea) == root_head_ea_) {
                     result.delta = static_cast<sval_t>(expr->obj_ea - root_ea_);
                     result.origin = AliasOrigin::RootObject;
                     return result;
@@ -465,9 +471,19 @@ private:
         for (size_t i = 0; i < expr->a->size(); ++i) {
             const carg_t& arg = expr->a->at(i);
             const AliasInfo alias = extract_alias(&arg);
-            if (!alias.valid() || alias.origin == AliasOrigin::LocalVar || alias.delta < 0) {
+            if (!alias.valid() || alias.delta < 0) {
                 continue;
             }
+
+            PointerFlowEdge edge;
+            edge.caller_ea = cfunc_->entry_ea;
+            edge.callee_ea = callee_ea;
+            edge.call_site = expr->ea;
+            edge.caller_var_idx = -1;
+            edge.callee_param_idx = static_cast<int>(i);
+            edge.delta = alias.delta;
+            edge.is_direct_call = true;
+            result_.flow_edges.push_back(edge);
 
             result_.param_seeds.emplace_back(callee_ea, static_cast<int>(i), alias.delta);
         }
@@ -812,6 +828,59 @@ private:
         return true;
     }
 
+    [[nodiscard]] bool merge_function_delta(ea_t func_ea, sval_t delta) {
+        auto it = function_deltas_.find(func_ea);
+        if (it == function_deltas_.end()) {
+            function_deltas_.emplace(func_ea, delta);
+            return true;
+        }
+
+        if (it->second == delta) {
+            return false;
+        }
+
+        if (it->second != 0 && delta == 0) {
+            it->second = 0;
+            return true;
+        }
+
+        return false;
+    }
+
+    [[nodiscard]] bool merge_function_var_index(ea_t func_ea, int var_idx) {
+        if (var_idx < 0) {
+            return false;
+        }
+
+        auto it = function_var_indices_.find(func_ea);
+        if (it == function_var_indices_.end()) {
+            function_var_indices_.emplace(func_ea, var_idx);
+            return true;
+        }
+
+        if (it->second == var_idx) {
+            return false;
+        }
+
+        return false;
+    }
+
+    [[nodiscard]] bool merge_flow_edge(const PointerFlowEdge& edge) {
+        for (const auto& existing : flow_edges_) {
+            if (existing.caller_ea == edge.caller_ea &&
+                existing.callee_ea == edge.callee_ea &&
+                existing.call_site == edge.call_site &&
+                existing.caller_var_idx == edge.caller_var_idx &&
+                existing.callee_param_idx == edge.callee_param_idx &&
+                existing.delta == edge.delta) {
+                return false;
+            }
+        }
+
+        flow_edges_.push_back(edge);
+        return true;
+    }
+
     [[nodiscard]] bool add_zero_delta_variable(const FunctionVariable& fv) {
         return zero_delta_variables_.insert(VarKey{fv.func_ea, fv.var_idx}).second;
     }
@@ -873,6 +942,18 @@ private:
         UnifiedAccessPattern unified = analyzer.analyze(func_ea, var_idx, options_);
 
         bool progress = false;
+        for (const auto& [seed_func_ea, delta] : unified.function_deltas) {
+            progress |= merge_function_delta(seed_func_ea, seed_delta + delta);
+        }
+
+        for (const auto& fn_pattern : unified.per_function_patterns) {
+            progress |= merge_function_var_index(fn_pattern.func_ea, fn_pattern.var_idx);
+        }
+
+        for (const auto& edge : unified.flow_edges) {
+            progress |= merge_flow_edge(edge);
+        }
+
         for (const auto& access : unified.all_accesses) {
             FieldAccess normalized = access;
             normalized.offset += seed_delta;
@@ -904,8 +985,13 @@ private:
         scanner.apply_to(&cfunc->body, nullptr);
 
         bool progress = false;
+        progress |= merge_function_delta(func_ea, 0);
         for (const auto& access : scanner.result().direct_accesses) {
             progress |= merge_access(access);
+        }
+
+        for (const auto& edge : scanner.result().flow_edges) {
+            progress |= merge_flow_edge(edge);
         }
 
         for (const auto& seed : scanner.result().var_seeds) {
@@ -969,10 +1055,13 @@ private:
                 AccessPattern fn_pattern;
                 fn_pattern.func_ea = access.source_func_ea;
                 fn_pattern.var_name = root_name_;
-                fn_pattern.var_idx = -1;
+                auto var_it = function_var_indices_.find(access.source_func_ea);
+                fn_pattern.var_idx = var_it != function_var_indices_.end() ? var_it->second : -1;
                 pattern.per_function_patterns.push_back(std::move(fn_pattern));
                 pattern.contributing_functions.push_back(access.source_func_ea);
-                pattern.function_deltas[access.source_func_ea] = 0;
+                auto delta_it = function_deltas_.find(access.source_func_ea);
+                pattern.function_deltas[access.source_func_ea] =
+                    delta_it != function_deltas_.end() ? delta_it->second : 0;
             }
 
             AccessPattern& fn_pattern = pattern.per_function_patterns[it->second];
@@ -981,6 +1070,15 @@ private:
 
         for (auto& fn_pattern : pattern.per_function_patterns) {
             fn_pattern.sort_by_offset();
+        }
+
+        std::unordered_set<ea_t> contributing(pattern.contributing_functions.begin(),
+                                              pattern.contributing_functions.end());
+        for (const auto& edge : flow_edges_) {
+            if (!contributing.contains(edge.caller_ea) || !contributing.contains(edge.callee_ea)) {
+                continue;
+            }
+            pattern.flow_edges.push_back(edge);
         }
 
         return pattern;
@@ -996,6 +1094,9 @@ private:
     std::unordered_set<SeedKey, SeedKeyHash> seed_keys_;
     std::unordered_set<VarKey, VarKeyHash> zero_delta_variables_;
     std::unordered_set<VarKey, VarKeyHash> var_usage_scanned_;
+    std::unordered_map<ea_t, sval_t> function_deltas_;
+    std::unordered_map<ea_t, int> function_var_indices_;
+    qvector<PointerFlowEdge> flow_edges_;
     qvector<FieldAccess> merged_accesses_;
 };
 

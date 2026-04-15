@@ -172,6 +172,13 @@ public:
 
     /// Synthesize struct from pre-computed unified pattern
     [[nodiscard]] SynthesisResult synthesize(
+        const UnifiedAccessPattern& unified_pattern,
+        const SynthOptions& opts,
+        ea_t source_func_hint = BADADDR
+    );
+
+    /// Synthesize struct from pre-computed unified pattern
+    [[nodiscard]] SynthesisResult synthesize(
         const UnifiedAccessPattern& unified_pattern
     );
 

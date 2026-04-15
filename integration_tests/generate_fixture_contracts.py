@@ -351,6 +351,16 @@ CONTRACT_MANIFEST = [
         "cases": [global_case("g_manager", "g_manager", ["manager_ctor"])],
     },
     {
+        "fixture": "test_global_recursive_ctor_chain",
+        "cases": [
+            global_case(
+                "g_root",
+                "g_root",
+                ["install_root", "root_ctor", "child_ctor", "leaf_ctor", "use_root"],
+            )
+        ],
+    },
+    {
         "fixture": "test_global_pointer_singleton",
         "cases": [
             global_case(

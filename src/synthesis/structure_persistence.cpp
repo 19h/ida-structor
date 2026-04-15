@@ -322,8 +322,10 @@ void apply_array_element_role_names(udt_type_data_t& udt) {
 
 tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
     constexpr double kReuseThreshold = 0.85;
+    const bool allow_reuse = synth_struct.naming.origin != NameOrigin::HeuristicRole;
 
-    if (!synth_has_nontrivial_unions(synth_struct) &&
+    if (allow_reuse &&
+        !synth_has_nontrivial_unions(synth_struct) &&
         !synth_struct.fields.empty() && synth_struct.size > 0) {
         auto reuse_candidate = find_reuse_candidate(synth_struct, kReuseThreshold);
         if (reuse_candidate.has_value()) {

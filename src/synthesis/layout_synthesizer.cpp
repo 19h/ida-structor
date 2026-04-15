@@ -10,6 +10,10 @@ namespace structor {
 
 namespace {
 
+bool synth_debug_enabled() {
+    return Config::instance().options().debug_mode;
+}
+
 bool is_generated_padding_name(const qstring& name) {
     return name.find("__pad_") == 0;
 }
@@ -611,7 +615,7 @@ SynthesisResult LayoutSynthesizer::synthesize(
     }
 
     // Synthesize from unified pattern
-    SynthesisResult synth_result = synthesize(unified_pattern);
+    SynthesisResult synth_result = synthesize(unified_pattern, opts, pattern.func_ea);
 
     // Copy metadata
     synth_result.structure.source_func = pattern.func_ea;
@@ -629,17 +633,10 @@ SynthesisResult LayoutSynthesizer::synthesize(
         source_delta = it->second;
     }
 
-    if (config_.emit_substructs) {
-        detect_subobjects(unified_pattern, opts, synth_result);
-    }
-    apply_bitfield_recovery(unified_pattern, synth_result.structure);
-    synth_result.unified_pattern = unified_pattern;
-    rebase_negative_offsets(synth_result.structure, &synth_result.sub_structs);
     if (source_delta > 0 && !extract_shifted_view_delta(synth_result.structure.name).has_value()) {
         synth_result.structure.name = make_shifted_view_type_name(synth_result.structure.name,
                                                                   source_delta);
     }
-    compute_struct_size(synth_result.structure);
 
     auto end_time = std::chrono::steady_clock::now();
     synth_result.synthesis_time = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -654,7 +651,9 @@ SynthesisResult LayoutSynthesizer::synthesize(const AccessPattern& pattern) {
 }
 
 SynthesisResult LayoutSynthesizer::synthesize(
-    const UnifiedAccessPattern& unified_pattern)
+    const UnifiedAccessPattern& unified_pattern,
+    const SynthOptions& opts,
+    ea_t source_func_hint)
 {
     auto start_time = std::chrono::steady_clock::now();
 
@@ -670,16 +669,11 @@ SynthesisResult LayoutSynthesizer::synthesize(
         if (z3_result.has_value()) {
             result = std::move(*z3_result);
             result.used_z3 = true;
-
-            auto end_time = std::chrono::steady_clock::now();
-            result.synthesis_time = std::chrono::duration_cast<std::chrono::milliseconds>(
-                end_time - start_time);
-            return result;
         }
     }
 
     // Fallback to heuristic synthesis
-    if (config_.fallback_to_heuristics) {
+    if (result.structure.fields.empty() && config_.fallback_to_heuristics) {
         result = synthesize_heuristic(unified_pattern);
         result.fell_back_to_heuristic = true;
         if (result.fallback_reason.empty()) {
@@ -687,11 +681,29 @@ SynthesisResult LayoutSynthesizer::synthesize(
         }
     }
 
+    if (!result.structure.fields.empty()) {
+        result.structure.source_func = source_func_hint;
+        if (config_.emit_substructs) {
+            detect_subobjects(unified_pattern, opts, result);
+        }
+        apply_bitfield_recovery(unified_pattern, result.structure);
+        result.unified_pattern = unified_pattern;
+        result.functions_analyzed = static_cast<int>(unified_pattern.contributing_functions.size());
+        rebase_negative_offsets(result.structure, &result.sub_structs);
+        compute_struct_size(result.structure);
+    }
+
     auto end_time = std::chrono::steady_clock::now();
     result.synthesis_time = std::chrono::duration_cast<std::chrono::milliseconds>(
         end_time - start_time);
 
     return result;
+}
+
+SynthesisResult LayoutSynthesizer::synthesize(
+    const UnifiedAccessPattern& unified_pattern)
+{
+    return synthesize(unified_pattern, Config::instance().options(), BADADDR);
 }
 
 std::optional<SynthesisResult> LayoutSynthesizer::synthesize_z3(
@@ -1337,9 +1349,7 @@ void LayoutSynthesizer::detect_subobjects(
                     continue;
                 }
 
-                auto delta_it = pattern.function_deltas.find(fn_pattern.func_ea);
-                const sval_t group_delta =
-                    delta_it != pattern.function_deltas.end() ? delta_it->second : edge.delta;
+                const sval_t group_delta = caller_delta + edge.delta;
                 if (group_delta <= 0) {
                     continue;
                 }
@@ -1371,6 +1381,10 @@ void LayoutSynthesizer::detect_subobjects(
 
     if (groups.empty()) return;
 
+    if (synth_debug_enabled()) {
+        detail::synth_log("[Structor] detect_subobjects: %zu candidate group(s)\n", groups.size());
+    }
+
     qvector<sval_t> ordered_deltas;
     ordered_deltas.reserve(groups.size());
     for (const auto& [delta, _] : groups) {
@@ -1391,7 +1405,7 @@ void LayoutSynthesizer::detect_subobjects(
     LayoutSynthesizer recursive_sub_synth(recursive_sub_config);
     LayoutSynthesizer flat_sub_synth(flat_sub_config);
 
-    auto choose_recursive_seed = [](const SubGroup& group) -> std::optional<AccessPattern> {
+    auto choose_recursive_seed = [&](const SubGroup& group) -> std::optional<AccessPattern> {
         const AccessPattern* best = nullptr;
         int best_score = -1;
         for (const auto& candidate : group.patterns) {
@@ -1400,8 +1414,23 @@ void LayoutSynthesizer::detect_subobjects(
             }
 
             int score = static_cast<int>(candidate.accesses.size());
+            const sval_t span = candidate.max_offset - candidate.min_offset;
+            if (span > 0) {
+                score += static_cast<int>(span) * 10;
+            }
             if (type_has_named_udt_details(candidate.original_type)) {
                 score += 1000;
+            }
+
+            bool has_outgoing_child = false;
+            for (const auto& edge : pattern.flow_edges) {
+                if (edge.caller_ea == candidate.func_ea && edge.callee_param_idx >= 0) {
+                    has_outgoing_child = true;
+                    break;
+                }
+            }
+            if (has_outgoing_child) {
+                score += 5000;
             }
 
             if (score > best_score) {
@@ -1500,6 +1529,22 @@ void LayoutSynthesizer::detect_subobjects(
         }
         auto& group = group_it->second;
 
+        if (synth_debug_enabled()) {
+            detail::synth_log("[Structor] detect_subobjects: delta=0x%llX funcs=",
+                              static_cast<unsigned long long>(delta));
+            bool first_func = true;
+            for (const auto& fn_pattern : group.patterns) {
+                if (!first_func) {
+                    detail::synth_log(", ");
+                }
+                first_func = false;
+                detail::synth_log("%s(var=%d)",
+                                  utils::get_func_name(fn_pattern.func_ea).c_str(),
+                                  fn_pattern.var_idx);
+            }
+            detail::synth_log("\n");
+        }
+
         AccessPattern sub_pattern;
         sub_pattern.func_ea = group.patterns.front().func_ea;
         sub_pattern.var_name = make_substruct_field_name(delta);
@@ -1548,12 +1593,21 @@ void LayoutSynthesizer::detect_subobjects(
         bool have_sub_result = false;
 
         if (auto recursive_seed = choose_recursive_seed(group)) {
+            if (recursive_seed->func_ea == result.structure.source_func) {
+                continue;
+            }
             if (recursive_seed->original_type.empty() && !sub_pattern.original_type.empty()) {
                 recursive_seed->original_type = sub_pattern.original_type;
             }
 
             suggested_type_name = suggest_subobject_type_name(recursive_seed->func_ea);
             suggested_field_name = suggest_subobject_field_name(recursive_seed->func_ea);
+
+            if (synth_debug_enabled()) {
+                detail::synth_log("[Structor] detect_subobjects: recursive seed=%s delta=0x%llX\n",
+                                  utils::get_func_name(recursive_seed->func_ea).c_str(),
+                                  static_cast<unsigned long long>(delta));
+            }
 
             SynthOptions child_opts = opts;
             child_opts.propagate_to_callers = false;
@@ -1574,6 +1628,28 @@ void LayoutSynthesizer::detect_subobjects(
         }
 
         if (!have_sub_result) continue;
+
+        int sub_non_padding_fields = 0;
+        bool sub_has_nested_fields = false;
+        for (const auto& field : sub_result.structure.fields) {
+            if (field.is_padding) {
+                continue;
+            }
+            ++sub_non_padding_fields;
+            if (field.semantic == SemanticType::NestedStruct) {
+                sub_has_nested_fields = true;
+            }
+        }
+        if (!sub_has_nested_fields && sub_non_padding_fields < 2) {
+            continue;
+        }
+
+        if (synth_debug_enabled()) {
+            detail::synth_log("[Structor] detect_subobjects: sub_result name=%s size=%u fields=%zu\n",
+                              sub_result.structure.name.c_str(),
+                              sub_result.structure.size,
+                              sub_result.structure.fields.size());
+        }
 
         if (!suggested_type_name.empty()) {
             set_adopted_name(sub_result.structure.name,
@@ -1707,6 +1783,10 @@ void LayoutSynthesizer::detect_subobjects(
         }
 
         if (conflict) {
+            if (synth_debug_enabled()) {
+                detail::synth_log("[Structor] detect_subobjects: rejected delta=0x%llX due to overlap conflict\n",
+                                  static_cast<unsigned long long>(delta));
+            }
             continue;
         }
 
@@ -1750,6 +1830,14 @@ void LayoutSynthesizer::detect_subobjects(
         info.field_naming = sub_field.naming;
         info.children = std::move(sub_result.sub_structs);
         result.sub_structs.push_back(std::move(info));
+
+        if (synth_debug_enabled()) {
+            detail::synth_log("[Structor] detect_subobjects: accepted delta=0x%llX field=%s type=%s size=%u\n",
+                              static_cast<unsigned long long>(delta),
+                              sub_field.name.c_str(),
+                              sub_result.structure.name.c_str(),
+                              sub_size);
+        }
     }
 
     const qvector<SubStructInfo> explicit_sub_structs = result.sub_structs;
@@ -1759,6 +1847,21 @@ void LayoutSynthesizer::detect_subobjects(
     for (const auto& existing_sub : explicit_sub_structs) {
         const std::uint32_t sub_size = existing_sub.structure.size;
         if (sub_size == 0) {
+            continue;
+        }
+
+        int non_padding_fields = 0;
+        bool has_nested_fields = false;
+        for (const auto& field : existing_sub.structure.fields) {
+            if (field.is_padding) {
+                continue;
+            }
+            ++non_padding_fields;
+            if (field.semantic == SemanticType::NestedStruct) {
+                has_nested_fields = true;
+            }
+        }
+        if (!has_nested_fields && non_padding_fields < 2) {
             continue;
         }
 

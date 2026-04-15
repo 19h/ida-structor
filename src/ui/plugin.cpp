@@ -207,6 +207,51 @@ static void append_unified_pattern_json(std::string& out, const UnifiedAccessPat
         append_access_json(out, pattern.all_accesses[i]);
     }
     out += ']';
+    out += ",\"per_function_patterns\":[";
+    for (size_t i = 0; i < pattern.per_function_patterns.size(); ++i) {
+        if (i != 0) {
+            out += ',';
+        }
+        append_access_pattern_json(out, pattern.per_function_patterns[i]);
+    }
+    out += ']';
+    out += ",\"function_deltas\":[";
+    bool first_delta = true;
+    for (const auto& [func_ea, delta] : pattern.function_deltas) {
+        if (!first_delta) {
+            out += ',';
+        }
+        first_delta = false;
+        out += '{';
+        out += "\"func_ea\":" + std::to_string(static_cast<unsigned long long>(func_ea));
+        out += ",\"func_name\":";
+        append_json_string(out, render_func_name(func_ea));
+        out += ",\"delta\":" + std::to_string(static_cast<long long>(delta));
+        out += '}';
+    }
+    out += ']';
+    out += ",\"flow_edges\":[";
+    for (size_t i = 0; i < pattern.flow_edges.size(); ++i) {
+        if (i != 0) {
+            out += ',';
+        }
+        const auto& edge = pattern.flow_edges[i];
+        out += '{';
+        out += "\"caller_ea\":" + std::to_string(static_cast<unsigned long long>(edge.caller_ea));
+        out += ",\"caller_name\":";
+        append_json_string(out, render_func_name(edge.caller_ea));
+        out += ",\"callee_ea\":" + std::to_string(static_cast<unsigned long long>(edge.callee_ea));
+        out += ",\"callee_name\":";
+        append_json_string(out, render_func_name(edge.callee_ea));
+        out += ",\"call_site\":" + std::to_string(static_cast<unsigned long long>(edge.call_site));
+        out += ",\"caller_var_idx\":" + std::to_string(edge.caller_var_idx);
+        out += ",\"callee_param_idx\":" + std::to_string(edge.callee_param_idx);
+        out += ",\"delta\":" + std::to_string(static_cast<long long>(edge.delta));
+        out += ",\"is_direct_call\":";
+        append_json_bool(out, edge.is_direct_call);
+        out += '}';
+    }
+    out += ']';
     out += '}';
 }
 

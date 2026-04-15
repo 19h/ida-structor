@@ -380,6 +380,28 @@ std::size_t UnifiedAccessPattern::unique_access_locations() const {
 // ArgDeltaExtractor Implementation
 // ============================================================================
 
+namespace {
+
+[[nodiscard]] static sval_t scale_pointer_delta(const cexpr_t* pointer_expr, sval_t value) {
+    if (!pointer_expr || !pointer_expr->type.is_ptr()) {
+        return value;
+    }
+
+    tinfo_t pointed = pointer_expr->type.get_pointed_object();
+    if (pointed.empty()) {
+        return value;
+    }
+
+    const size_t elem_size = pointed.get_size();
+    if (elem_size == BADSIZE || elem_size == 0) {
+        return value;
+    }
+
+    return value * static_cast<sval_t>(elem_size);
+}
+
+} // namespace
+
 ArgDeltaExtractor::ArgDeltaExtractor(int target_var_idx)
     : ctree_visitor_t(CV_FAST)
     , target_var_idx_(target_var_idx) {}
@@ -398,12 +420,12 @@ int ArgDeltaExtractor::visit_expr(cexpr_t* e) {
     if (e->op == cot_add) {
         if (is_target_var(e->x) && e->y && e->y->op == cot_num) {
             found_ = true;
-            delta_ = e->y->numval();
+            delta_ = scale_pointer_delta(e->x, static_cast<sval_t>(e->y->numval()));
             return 1;
         }
         if (is_target_var(e->y) && e->x && e->x->op == cot_num) {
             found_ = true;
-            delta_ = e->x->numval();
+            delta_ = scale_pointer_delta(e->y, static_cast<sval_t>(e->x->numval()));
             return 1;
         }
     }
@@ -412,7 +434,7 @@ int ArgDeltaExtractor::visit_expr(cexpr_t* e) {
     if (e->op == cot_sub) {
         if (is_target_var(e->x) && e->y && e->y->op == cot_num) {
             found_ = true;
-            delta_ = -static_cast<sval_t>(e->y->numval());
+            delta_ = -scale_pointer_delta(e->x, static_cast<sval_t>(e->y->numval()));
             return 1;
         }
     }
@@ -622,18 +644,18 @@ void CallerFinder::process_caller(ea_t caller_ea, ea_t call_site, qvector<Caller
                     return resolve_var_delta(expr->x, var_idx, delta);
                 case cot_add: {
                     if (expr->y && expr->y->op == cot_num && resolve_var_delta(expr->x, var_idx, delta)) {
-                        delta += static_cast<sval_t>(expr->y->numval());
+                        delta += scale_pointer_delta(expr->x, static_cast<sval_t>(expr->y->numval()));
                         return true;
                     }
                     if (expr->x && expr->x->op == cot_num && resolve_var_delta(expr->y, var_idx, delta)) {
-                        delta += static_cast<sval_t>(expr->x->numval());
+                        delta += scale_pointer_delta(expr->y, static_cast<sval_t>(expr->x->numval()));
                         return true;
                     }
                     return false;
                 }
                 case cot_sub:
                     if (expr->y && expr->y->op == cot_num && resolve_var_delta(expr->x, var_idx, delta)) {
-                        delta -= static_cast<sval_t>(expr->y->numval());
+                        delta -= scale_pointer_delta(expr->x, static_cast<sval_t>(expr->y->numval()));
                         return true;
                     }
                     return false;

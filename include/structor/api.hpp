@@ -1306,7 +1306,7 @@ inline GlobalStructureAnalysisResult StructorAPI::do_analyze_global_structure(
         }
 
         LayoutSynthesizer synthesizer(opts);
-        result.synthesis = synthesizer.synthesize(result.analysis.pattern);
+        result.synthesis = synthesizer.synthesize(result.analysis.pattern, opts);
         if (result.synthesis.structure.fields.empty()) {
             result.error = SynthError::TypeCreationFailed;
             result.error_message = "Failed to synthesize structure fields";
@@ -1388,7 +1388,30 @@ inline SynthResult StructorAPI::do_global_synthesis(
         }
 
         LayoutSynthesizer synthesizer(opts);
-        SynthesisResult synth_result = synthesizer.synthesize(analysis.pattern);
+        if (opts.debug_mode) {
+            msg("Structor: global analysis produced %zu function delta(s), %zu flow edge(s)\n",
+                analysis.pattern.function_deltas.size(),
+                analysis.pattern.flow_edges.size());
+            for (const auto& [func_ea, delta] : analysis.pattern.function_deltas) {
+                qstring fname;
+                get_func_name(&fname, func_ea);
+                msg("Structor:   delta %s = 0x%llX\n",
+                    fname.c_str(),
+                    static_cast<unsigned long long>(delta));
+            }
+            for (const auto& edge : analysis.pattern.flow_edges) {
+                qstring caller_name;
+                qstring callee_name;
+                get_func_name(&caller_name, edge.caller_ea);
+                get_func_name(&callee_name, edge.callee_ea);
+                msg("Structor:   edge %s -> %s delta=0x%llX param=%d\n",
+                    caller_name.c_str(),
+                    callee_name.c_str(),
+                    static_cast<unsigned long long>(edge.delta),
+                    edge.callee_param_idx);
+            }
+        }
+        SynthesisResult synth_result = synthesizer.synthesize(analysis.pattern, opts);
         SynthResult result;
         result.conflicts = synth_result.conflicts;
         populate_z3_info_from_synthesis(result, synth_result);

@@ -1,17 +1,17 @@
 {
-  "fixture": "test_recursive_ctor_chain",
+  "fixture": "test_global_recursive_ctor_chain",
   "cases": [
     {
-      "name": "root_init",
+      "name": "g_root",
       "synth": {
-        "kind": "function",
-        "target": "root_init",
-        "var_idx": 0
+        "kind": "global",
+        "target": "g_root"
       },
       "dump_functions": [
-        "root_init",
-        "child_init",
-        "leaf_init",
+        "install_root",
+        "root_ctor",
+        "child_ctor",
+        "leaf_ctor",
         "use_root"
       ],
       "golden_result": {
@@ -21,12 +21,7 @@
         "fields_created": 5,
         "vtable_slots": 0,
         "propagated_to": [
-          "_child_init",
-          "_leaf_init",
-          "_main",
-          "_memset",
-          "_root_init",
-          "_use_root"
+          "_root_ctor"
         ],
         "failed_sites": [],
         "z3": {
@@ -35,14 +30,18 @@
           "used_fallback": false
         },
         "structure": {
-          "name": "auto_root_init",
+          "name": "auto_g_root",
           "size": 60,
           "alignment": 1,
-          "source_func_name": "_root_init",
-          "source_var": "a1",
+          "source_func_name": "_root_ctor",
+          "source_var": "_g_root",
           "field_count": 5,
           "non_padding_field_count": 4,
-          "provenance": [],
+          "provenance": [
+            "_child_ctor",
+            "_leaf_ctor",
+            "_root_ctor"
+          ],
           "fields": [
             {
               "name": "u32_0",
@@ -128,7 +127,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> root_init\n__int64 *__fastcall root_init(auto_root_init *a1) {\n    __int64 *result; // x0\n\n    a1->u32_0 = 1380929364;\n    result = child_init(a1: &a1->child);\n    *(unsigned __int64 *)((char *)&a1->u64_30 + 4) = 0x123456789ABCDEFLL;\n    a1[1].u32_0 = 9;\n    return result;\n}\n<<<\n\n>>> child_init\n__int64 *__fastcall child_init(auto_child *a1) {\n    __int64 *result; // x0\n\n    a1->0 = 1128810828;\n    result = leaf_init(result: (__int64 *)&a1->leaf.u32_4);\n    *(unsigned __int64 *)((char *)&a1->u64_20 + 4) = 0xAAAABBBBCCCCDDDDLL;\n    return result;\n}\n<<<\n\n>>> leaf_init\n__int64 *__fastcall leaf_init(__int64 *result) {\n    *(_DWORD *)result = 3;\n    *((_DWORD *)result + 1) = 7;\n    result[1] = 0x1111222233334444LL;\n    return result;\n}\n<<<\n\n>>> use_root\nauto_root_init *__fastcall use_root(auto_root_init *result) {\n    sink ^= result->u32_0;\n    sink ^= (unsigned int)result->child.0;\n    sink ^= result->child.leaf.u32_4;\n    sink ^= LODWORD(result->child.leaf.u64_8);\n    sink ^= *(unsigned __int64 *)((char *)&result->child.leaf.u64_8 + 4);\n    sink ^= *(unsigned __int64 *)((char *)&result->child.u64_20 + 4);\n    sink ^= *(unsigned __int64 *)((char *)&result->u64_30 + 4);\n    sink ^= result[1].u32_0;\n    return result;\n}\n<<<\n"
+      "golden_pseudocode": ">>> install_root\n__int64 install_root() {\n    return root_ctor(a1: &g_root);\n}\n<<<\n\n>>> root_ctor\n__int64 __fastcall root_ctor(auto_g_root *a1) {\n    __int64 result; // x0\n\n    a1->u32_0 = 1380929364;\n    result = child_ctor(a1: (__int64)&a1->child);\n    *(unsigned __int64 *)((char *)&a1->u64_30 + 4) = 0x123456789ABCDEFLL;\n    a1[1].u32_0 = 9;\n    return result;\n}\n<<<\n\n>>> child_ctor\n__int64 __fastcall child_ctor(__int64 a1) {\n    __int64 result; // x0\n\n    *(_DWORD *)a1 = 1128810828;\n    result = leaf_ctor(a1: a1 + 8);\n    *(_QWORD *)(a1 + 32) = 0xAAAABBBBCCCCDDDDLL;\n    return result;\n}\n<<<\n\n>>> leaf_ctor\n__int64 __fastcall leaf_ctor(__int64 result) {\n    *(_DWORD *)result = 3;\n    *(_DWORD *)(result + 4) = 7;\n    *(_QWORD *)(result + 8) = 0x1111222233334444LL;\n    return result;\n}\n<<<\n\n>>> use_root\nvoid use_root() {\n    sink ^= (unsigned int)g_root;\n    sink ^= (unsigned int)dword_100008008;\n    sink ^= (unsigned int)dword_100008010;\n    sink ^= (unsigned int)dword_100008014;\n    sink ^= qword_100008018;\n    sink ^= qword_100008028;\n    sink ^= qword_100008030;\n    sink ^= (unsigned int)dword_100008038;\n}\n<<<\n"
     }
   ]
 }
