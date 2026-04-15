@@ -28,7 +28,7 @@
           "used_fallback": false
         },
         "structure": {
-          "name": "auto_result_view_10",
+          "name": "auto_result",
           "size": 40,
           "alignment": 1,
           "source_func_name": "_consume_window",
@@ -169,7 +169,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> consume_window\nunsigned __int32 (*__shifted(auto_result_view_10, 0x10) __fastcall consume_window(\n                      unsigned __int32 (*__shifted(auto_result_view_10, 0x10) result)[3]))[3] {\n    sink ^= ADJ(ptr: result)->u32_0;\n    sink ^= ADJ(ptr: result)->u16_4;\n    sink ^= ADJ(ptr: result)->u64_8;\n    sink ^= (*result)[0];\n    sink ^= (*result)[1];\n    sink ^= (*result)[2];\n    sink ^= LOBYTE((*result)[3]);\n    return result;\n}\n<<<\n"
+      "golden_pseudocode": ">>> consume_window\nauto_result *__fastcall consume_window(auto_result *result) {\n    sink ^= result[-1].u32s_10[2];\n    sink ^= *(unsigned __int16 *)&result[-1].u8_1C;\n    sink ^= *(_QWORD *)&result[-1].__pad_1d[3];\n    sink ^= result->u32_0;\n    sink ^= *(unsigned int *)&result->u16_4;\n    sink ^= LODWORD(result->u64_8);\n    sink ^= BYTE4(result->u64_8);\n    return result;\n}\n<<<\n"
     }
   ]
 }

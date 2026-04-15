@@ -16,7 +16,7 @@
         "success": true,
         "error": "Success",
         "error_message": "",
-        "fields_created": 7,
+        "fields_created": 6,
         "vtable_slots": 0,
         "propagated_to": [
           "_main",
@@ -25,26 +25,42 @@
         ],
         "failed_sites": [],
         "z3": {
-          "status": "success_relaxed",
+          "status": "success",
           "used_z3": true,
           "used_fallback": false
         },
         "structure": {
-          "name": "auto_read_mixed_anchor_view_10",
+          "name": "auto_read_mixed_anchor",
           "size": 60,
           "alignment": 1,
           "source_func_name": "_read_mixed_anchor",
           "source_var": "a1",
-          "field_count": 7,
-          "non_padding_field_count": 4,
+          "field_count": 6,
+          "non_padding_field_count": 5,
           "provenance": [],
           "fields": [
             {
-              "name": "u32_0",
+              "name": "u32s_0",
               "offset": 0,
-              "size": 4,
+              "size": 12,
+              "semantic": "array",
+              "type": "unsigned __int32[3]",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": true,
+              "array_count": 3,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_C",
+              "offset": 12,
+              "size": 8,
               "semantic": "uint",
-              "type": "unsigned __int32",
+              "type": "unsigned __int64",
               "confidence": "medium",
               "is_padding": false,
               "is_array": false,
@@ -56,45 +72,13 @@
               "union_members": []
             },
             {
-              "name": "__pad_4",
-              "offset": 4,
-              "size": 9,
-              "semantic": "padding",
-              "type": "char[9]",
-              "confidence": "medium",
-              "is_padding": true,
-              "is_array": false,
-              "array_count": 1,
-              "is_union_candidate": false,
-              "is_bitfield": false,
-              "bit_offset": 0,
-              "bit_size": 0,
-              "union_members": []
-            },
-            {
-              "name": "part_d",
-              "offset": 13,
+              "name": "part_14",
+              "offset": 20,
               "size": 16,
               "semantic": "struct",
               "type": "source_version_command",
               "confidence": "medium",
               "is_padding": false,
-              "is_array": false,
-              "array_count": 1,
-              "is_union_candidate": false,
-              "is_bitfield": false,
-              "bit_offset": 0,
-              "bit_size": 0,
-              "union_members": []
-            },
-            {
-              "name": "__pad_1d",
-              "offset": 29,
-              "size": 7,
-              "semantic": "padding",
-              "type": "char[7]",
-              "confidence": "medium",
-              "is_padding": true,
               "is_array": false,
               "array_count": 1,
               "is_union_candidate": false,
@@ -155,7 +139,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> read_mixed_anchor\nsource_version_command *__fastcall read_mixed_anchor(\n    auto_read_mixed_anchor_view_10_tail_10 *__shifted(auto_read_mixed_anchor_view_10, 0x10) a1) {\n    source_version_command *result; // x0\n\n    sink ^= ADJ(ptr: a1)->u32_0;\n    read_child(result: (source_version_command *)ADJ(ptr: a1)->__pad_4);\n    sink ^= *(unsigned __int32 *)((char *)&ADJ(ptr: a1)->part_d.cmd + 3);\n    result = read_child(result: (source_version_command *)((char *)&ADJ(ptr: a1)->part_d.cmdsize + 3));\n    sink ^= ADJ(ptr: a1)->u64_24;\n    return result;\n}\n<<<\n\n>>> read_child\nsource_version_command *__fastcall read_child(source_version_command *result) {\n    sink ^= result->cmd;\n    sink ^= result->cmdsize;\n    sink ^= result->version;\n    return result;\n}\n<<<\n"
+      "golden_pseudocode": ">>> read_mixed_anchor\nunsigned int *__fastcall read_mixed_anchor(auto_read_mixed_anchor *a1) {\n    unsigned int *result; // x0\n\n    sink ^= *(unsigned int *)a1[-1].__pad_2c;\n    read_child(result: (unsigned int *)&a1[-1].__pad_2c[4]);\n    sink ^= a1->u32s_0[0];\n    result = read_child(result: &a1->u32s_0[1]);\n    sink ^= *(_QWORD *)&a1->part_14.cmd;\n    return result;\n}\n<<<\n\n>>> read_child\nunsigned int *__fastcall read_child(unsigned int *result) {\n    sink ^= *result;\n    sink ^= result[1];\n    sink ^= *((_QWORD *)result + 1);\n    return result;\n}\n<<<\n"
     }
   ]
 }

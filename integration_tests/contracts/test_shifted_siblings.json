@@ -76,7 +76,7 @@
               "offset": 8,
               "size": 20,
               "semantic": "struct",
-              "type": "auto_result",
+              "type": "auto_part_8",
               "confidence": "medium",
               "is_padding": false,
               "is_array": false,
@@ -92,7 +92,7 @@
               "offset": 32,
               "size": 20,
               "semantic": "struct",
-              "type": "auto_result",
+              "type": "auto_part_8",
               "confidence": "medium",
               "is_padding": false,
               "is_array": false,
@@ -155,7 +155,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> process_parent\nunsigned int *__fastcall process_parent(auto_process_parent *a1) {\n    unsigned int *result; // x0\n\n    sink ^= a1->0;\n    sink ^= a1->4;\n    consume_child(result: &a1->part_8.u32_0);\n    result = consume_child(result: &a1->part_20.u32_4);\n    sink ^= *(_QWORD *)a1->__pad_40;\n    return result;\n}\n<<<\n\n>>> consume_child\nauto_result *__shifted(auto_result_view_8, 8) __fastcall consume_child(\n    auto_result *__shifted(auto_result_view_8, 8) result) {\n    sink ^= ADJ(ptr: result)->part_8.u32_0;\n    sink ^= ADJ(ptr: result)->part_8.u32_4;\n    sink ^= ADJ(ptr: result)->part_8.u64_8;\n    sink ^= ADJ(ptr: result)->part_8.u8s_10[0];\n    sink ^= ADJ(ptr: result)->part_8.u8s_10[1];\n    sink ^= ADJ(ptr: result)->part_8.u8s_10[2];\n    sink ^= ADJ(ptr: result)->part_8.u8s_10[3];\n    return result;\n}\n<<<\n"
+      "golden_pseudocode": ">>> process_parent\nunsigned int *__fastcall process_parent(auto_process_parent *a1) {\n    unsigned int *result; // x0\n\n    sink ^= a1->0;\n    sink ^= a1->4;\n    consume_child(result: &a1->part_8.u32_0);\n    result = consume_child(result: &a1->part_20.u32_4);\n    sink ^= *(_QWORD *)a1->__pad_40;\n    return result;\n}\n<<<\n\n>>> consume_child\nauto_result_view_8_tail_8 *__shifted(auto_result_view_8, 8) __fastcall consume_child(\n    auto_result_view_8_tail_8 *__shifted(auto_result_view_8, 8) result) {\n    sink ^= ADJ(ptr: result)->u32s_0[2];\n    sink ^= ADJ(ptr: result)->u32s_0[3];\n    sink ^= ADJ(ptr: result)->u64_10;\n    sink ^= ADJ(ptr: result)->u8s_18[0];\n    sink ^= ADJ(ptr: result)->u8s_18[1];\n    sink ^= ADJ(ptr: result)->u8s_18[2];\n    sink ^= ADJ(ptr: result)->u8s_18[3];\n    return result;\n}\n<<<\n"
     }
   ]
 }

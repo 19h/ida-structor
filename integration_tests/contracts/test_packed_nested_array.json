@@ -203,7 +203,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> read_bundle\nauto_result *__fastcall read_bundle(auto_result *result) {\n    sink ^= result->u8_0;\n    sink ^= result->u16_1;\n    sink ^= result->u32_5;\n    sink ^= result->u32_C;\n    sink ^= result->u32_13;\n    return result;\n}\n<<<\n\n>>> read_tail\nunsigned __int8 *__fastcall read_tail(unsigned __int8 *result) {\n    sink ^= result[24];\n    sink ^= result[25];\n    sink ^= result[26];\n    return result;\n}\n<<<\n"
+      "golden_pseudocode": ">>> read_bundle\nauto_result *__fastcall read_bundle(auto_result *result) {\n    sink ^= result->u8_0;\n    sink ^= result->u16_1;\n    sink ^= result->u32_5;\n    sink ^= result->u32_C;\n    sink ^= result->u32_13;\n    return result;\n}\n<<<\n\n>>> read_tail\nauto_result *__fastcall read_tail(auto_result *result) {\n    sink ^= result->u8s_18[0];\n    sink ^= result->u8s_18[1];\n    sink ^= result->u8s_18[2];\n    return result;\n}\n<<<\n"
     }
   ]
 }

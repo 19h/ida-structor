@@ -25,7 +25,7 @@
         ],
         "failed_sites": [],
         "z3": {
-          "status": "success_relaxed",
+          "status": "success",
           "used_z3": true,
           "used_fallback": false
         },
@@ -36,41 +36,12 @@
           "source_func_name": "_dispatch_parent",
           "source_var": "a1",
           "field_count": 8,
-          "non_padding_field_count": 6,
+          "non_padding_field_count": 7,
           "provenance": [],
           "fields": [
             {
-              "name": "union_0",
+              "name": "u32_0",
               "offset": 0,
-              "size": 10,
-              "semantic": "unknown",
-              "type": "__int64 (__fastcall *)(_QWORD, _QWORD)",
-              "confidence": "medium",
-              "is_padding": false,
-              "is_array": false,
-              "array_count": 1,
-              "is_union_candidate": true,
-              "is_bitfield": false,
-              "bit_offset": 0,
-              "bit_size": 0,
-              "union_members": [
-                {
-                  "name": "u32_0",
-                  "offset": 0,
-                  "size": 4,
-                  "type": "unsigned __int32"
-                },
-                {
-                  "name": "fn_2",
-                  "offset": 0,
-                  "size": 8,
-                  "type": "__int64 (__fastcall *)(_QWORD, _QWORD)"
-                }
-              ]
-            },
-            {
-              "name": "u32_A",
-              "offset": 10,
               "size": 4,
               "semantic": "uint",
               "type": "unsigned __int32",
@@ -85,8 +56,8 @@
               "union_members": []
             },
             {
-              "name": "u32_E",
-              "offset": 14,
+              "name": "u32_4",
+              "offset": 4,
               "size": 4,
               "semantic": "uint",
               "type": "unsigned __int32",
@@ -101,13 +72,29 @@
               "union_members": []
             },
             {
-              "name": "__pad_12",
-              "offset": 18,
-              "size": 22,
-              "semantic": "padding",
-              "type": "char[22]",
+              "name": "part_8",
+              "offset": 8,
+              "size": 16,
+              "semantic": "struct",
+              "type": "auto_part_8",
               "confidence": "medium",
-              "is_padding": true,
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "part_18",
+              "offset": 24,
+              "size": 16,
+              "semantic": "struct",
+              "type": "auto_part_8",
+              "confidence": "medium",
+              "is_padding": false,
               "is_array": false,
               "array_count": 1,
               "is_union_candidate": false,
@@ -184,7 +171,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> dispatch_parent\n__int64 __fastcall dispatch_parent(auto_dispatch_parent *a1) {\n    __int64 result; // x0\n\n    sink ^= a1->union_0.u32_0;\n    sink ^= HIDWORD(a1->union_0.fn_2);\n    invoke_child(a1: (__int64)&a1->u32_A);\n    result = invoke_child(a1: (__int64)&a1->__pad_12[8]);\n    sink ^= (unsigned __int8)a1->__pad_2A[0];\n    sink ^= (unsigned __int8)a1->__pad_2A[1];\n    return result;\n}\n<<<\n\n>>> invoke_child\n__int64 __fastcall invoke_child(auto_invoke_child_view_8_tail_8 *__shifted(auto_invoke_child_view_8, 8) a1) {\n    return ADJ(ptr: a1)->fn_8(a1: ADJ(ptr: a1)->u32_10, a2: ADJ(ptr: a1)->u32_14);\n}\n<<<\n"
+      "golden_pseudocode": ">>> dispatch_parent\n__int64 __fastcall dispatch_parent(auto_dispatch_parent *a1) {\n    __int64 result; // x0\n\n    sink ^= a1->u32_0;\n    sink ^= a1->u32_4;\n    invoke_child(a1: &a1->part_8);\n    result = invoke_child(a1: &a1->part_18);\n    sink ^= a1->u8_28;\n    sink ^= a1->u8_29;\n    return result;\n}\n<<<\n\n>>> invoke_child\n__int64 __fastcall invoke_child(auto_part_8 *a1) {\n    return a1->fn_0(a1: a1->u32_8, a2: a1->u32_C);\n}\n<<<\n"
     }
   ]
 }

@@ -207,8 +207,8 @@ def run_return_helper_regression(
         output,
         [
             "Structor: Auto-synthesis OK",
-            "auto_g_session *result",
-            "result->u64_8",
+            "session_ctor(",
+            "part_28.u64_8",
         ],
         "global return helper",
     )

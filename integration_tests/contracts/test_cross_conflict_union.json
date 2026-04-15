@@ -141,7 +141,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> process_conflict\n__int64 __fastcall process_conflict(auto_process_conflict *a1) {\n    __int64 result; // x0\n\n    sink ^= a1->u32_0;\n    sink ^= a1->u32_4;\n    read_payload_whole(result: (__int64)a1);\n    result = read_payload_split(result: (__int64)a1);\n    sink ^= a1->u32_10;\n    return result;\n}\n<<<\n\n>>> read_payload_whole\nauto_process_conflict *__fastcall read_payload_whole(auto_process_conflict *result) {\n    sink ^= result->u64_8;\n    return result;\n}\n<<<\n\n>>> read_payload_split\nauto_process_conflict *__fastcall read_payload_split(auto_process_conflict *result) {\n    sink ^= LODWORD(result->u64_8);\n    sink ^= HIDWORD(result->u64_8);\n    return result;\n}\n<<<\n"
+      "golden_pseudocode": ">>> process_conflict\nauto_process_conflict *__fastcall process_conflict(auto_process_conflict *a1) {\n    auto_process_conflict *result; // x0\n\n    sink ^= a1->u32_0;\n    sink ^= a1->u32_4;\n    read_payload_whole(result: a1);\n    result = read_payload_split(result: a1);\n    sink ^= a1->u32_10;\n    return result;\n}\n<<<\n\n>>> read_payload_whole\nauto_process_conflict *__fastcall read_payload_whole(auto_process_conflict *result) {\n    sink ^= result->u64_8;\n    return result;\n}\n<<<\n\n>>> read_payload_split\nauto_process_conflict *__fastcall read_payload_split(auto_process_conflict *result) {\n    sink ^= LODWORD(result->u64_8);\n    sink ^= HIDWORD(result->u64_8);\n    return result;\n}\n<<<\n"
     }
   ]
 }

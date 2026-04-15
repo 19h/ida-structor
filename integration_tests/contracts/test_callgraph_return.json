@@ -258,7 +258,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> process_root\nauto_result *__fastcall process_root(auto_result *result) {\n    sink ^= result->u64_0;\n    sink ^= LODWORD(result->f32_8);\n    sink ^= result->u16_C;\n    sink ^= result->u8_18;\n    sink ^= result->u64_38;\n    sink ^= result->u32_48;\n    return result;\n}\n<<<\n\n>>> sibling_reader\nauto_result *__fastcall sibling_reader(auto_result *result) {\n    sink ^= result->u8_51;\n    sink ^= result->u64_40;\n    return result;\n}\n<<<\n\n>>> make_sub\nunsigned __int64 *__fastcall make_sub(unsigned __int64 *a1) {\n    return a1 + 12;\n}\n<<<\n"
+      "golden_pseudocode": ">>> process_root\nauto_result *__fastcall process_root(auto_result *result) {\n    sink ^= result->u64_0;\n    sink ^= LODWORD(result->f32_8);\n    sink ^= result->u16_C;\n    sink ^= result->u8_18;\n    sink ^= result->u64_38;\n    sink ^= result->u32_48;\n    return result;\n}\n<<<\n\n>>> sibling_reader\nauto_result *__fastcall sibling_reader(auto_result *result) {\n    sink ^= result->u8_51;\n    sink ^= result->u64_40;\n    return result;\n}\n<<<\n\n>>> make_sub\nauto_part_60 *__fastcall make_sub(auto_result *a1) {\n    return &a1->part_60;\n}\n<<<\n"
     },
     {
       "name": "process_sub",

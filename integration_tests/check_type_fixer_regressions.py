@@ -207,10 +207,6 @@ def run_missing_regarg_regression(
     output = run["output"]
 
     required_substrings = [
-        "Structor: possible missing argument in _regarg_callee",
-        "v0 (w19)",
-        "is populated by 1 caller before the call",
-        "inferred type",
         "variable 'v0' is possibly undefined",
         "// w19",
     ]
@@ -221,6 +217,11 @@ def run_missing_regarg_regression(
             + ", ".join(missing)
             + "\n"
             + output
+        )
+
+    if "Structor: possible missing argument in _regarg_callee" in output:
+        raise RuntimeError(
+            "unexpected automatic missing-argument warning for regarg_callee\n" + output
         )
 
 

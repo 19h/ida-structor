@@ -141,7 +141,7 @@
           "vtable": null
         }
       },
-      "golden_pseudocode": ">>> read_packed\nauto_result *__fastcall read_packed(auto_result *result) {\n    sink ^= result->u8_0;\n    sink ^= LOWORD(result->u16_1);\n    sink ^= *(unsigned int *)((char *)&result->u16_1 + 2);\n    sink ^= *(_QWORD *)&result->u8s_7[1];\n    sink ^= HIWORD(result->u64_A);\n    return result;\n}\n<<<\n\n>>> read_small_array\nunsigned __int8 *__fastcall read_small_array(unsigned __int8 *result) {\n    sink ^= result[7];\n    sink ^= result[8];\n    sink ^= result[9];\n    return result;\n}\n<<<\n\n>>> inspect_flag_slices\nauto_result *__fastcall inspect_flag_slices(auto_result *result) {\n    unsigned __int16 u16_1; // [xsp+Eh] [xbp-12h]\n\n    u16_1 = result->u16_1;\n    sink ^= u16_1 & 3;\n    sink ^= ((int)u16_1 >> 2) & 7;\n    return result;\n}\n<<<\n"
+      "golden_pseudocode": ">>> read_packed\nauto_result *__fastcall read_packed(auto_result *result) {\n    sink ^= result->u8_0;\n    sink ^= LOWORD(result->u16_1);\n    sink ^= *(unsigned int *)((char *)&result->u16_1 + 2);\n    sink ^= *(_QWORD *)&result->u8s_7[1];\n    sink ^= HIWORD(result->u64_A);\n    return result;\n}\n<<<\n\n>>> read_small_array\nauto_result *__fastcall read_small_array(auto_result *result) {\n    sink ^= BYTE2(result->u32_3);\n    sink ^= HIBYTE(result->u32_3);\n    sink ^= result->u8s_7[0];\n    return result;\n}\n<<<\n\n>>> inspect_flag_slices\nauto_result *__fastcall inspect_flag_slices(auto_result *result) {\n    unsigned __int16 u16_1; // [xsp+Eh] [xbp-12h]\n\n    u16_1 = result->u16_1;\n    sink ^= u16_1 & 3;\n    sink ^= ((int)u16_1 >> 2) & 7;\n    return result;\n}\n<<<\n"
     }
   ]
 }

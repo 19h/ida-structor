@@ -28,6 +28,16 @@ bool ends_with_text(const qstring& value, const char* suffix) {
     return strcmp(value.c_str() + value_len - suffix_len, suffix) == 0;
 }
 
+bool starts_with_text(const qstring& value, const char* prefix) {
+    const size_t value_len = value.length();
+    const size_t prefix_len = strlen(prefix);
+    if (prefix_len > value_len) {
+        return false;
+    }
+
+    return strncmp(value.c_str(), prefix, prefix_len) == 0;
+}
+
 qstring qstring_slice(const char* text, size_t len) {
     std::string tmp(text, len);
     qstring out;
@@ -82,6 +92,22 @@ qstring suggest_subobject_stem(ea_t func_ea) {
         stem = erase_suffix(stem, strlen(suffix));
         recognized_factory = true;
         break;
+    }
+
+    if (!recognized_factory) {
+        constexpr const char* kFactoryPrefixes[] = {
+            "make_",
+            "create_",
+            "build_",
+        };
+        for (const char* prefix : kFactoryPrefixes) {
+            if (!starts_with_text(stem, prefix)) {
+                continue;
+            }
+            stem = qstring(stem.c_str() + strlen(prefix));
+            recognized_factory = true;
+            break;
+        }
     }
 
     if (ends_with_text(stem, "_recovered")) {
@@ -1659,6 +1685,14 @@ void LayoutSynthesizer::detect_subobjects(
                              NameOrigin::HeuristicRole,
                              NameConfidence::Medium,
                              false);
+        } else {
+            qstring fallback_type_name;
+            fallback_type_name.sprnt("auto_%s", make_substruct_field_name(delta).c_str());
+            set_generated_name(sub_result.structure.name,
+                               sub_result.structure.naming,
+                               fallback_type_name,
+                               GeneratedNameKind::RootStruct,
+                               NameConfidence::Medium);
         }
 
         adopt_field_names_from_original_type(sub_result.structure, sub_pattern.original_type);
