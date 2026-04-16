@@ -921,6 +921,28 @@ void apply_role_based_field_names(SynthStruct& structure) {
     }
 }
 
+void disambiguate_repeated_field_names(SynthStruct& structure) {
+    if (structure.fields.empty()) return;
+
+    std::unordered_map<qstring, qvector<size_t>> name_groups;
+    for (size_t i = 0; i < structure.fields.size(); ++i) {
+        if (!structure.fields[i].is_padding && !structure.fields[i].name.empty()) {
+            name_groups[structure.fields[i].name].push_back(i);
+        }
+    }
+
+    for (const auto& pair : name_groups) {
+        if (pair.second.size() > 1) {
+            for (size_t idx : pair.second) {
+                auto& field = structure.fields[idx];
+                qstring new_name;
+                new_name.sprnt("%s_%s", pair.first.c_str(), make_offset_suffix(field.offset).c_str());
+                field.name = new_name;
+            }
+        }
+    }
+}
+
 bool adopt_preferred_name(qstring& current_name,
                           NameMetadata& current_metadata,
                           const qstring& candidate_name,

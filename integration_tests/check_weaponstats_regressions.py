@@ -113,7 +113,13 @@ def run_weaponstats_case(repo_root: Path, plugin_path: Path, idump_path: str) ->
             f"weaponstats regression: expected float array naming at 0x28, got {fields.get(0x28, {}).get('name')!r}",
             output,
         )
-        for tail_offset in (0x350, 0x370, 0x390, 0x3A8):
+        expected_tails = {
+            0x350: ("spread_modifier", "auto_spread_modifier"),
+            0x370: ("aim_modifier", "auto_aim_modifier"),
+            0x390: ("regen_consumer_modifier", "auto_regen_consumer_modifier"),
+            0x3A8: ("salvage_modifier", "auto_salvage_modifier"),
+        }
+        for tail_offset, (exp_name, exp_type) in expected_tails.items():
             tail_field = fields.get(tail_offset)
             require(
                 tail_field is not None,
@@ -121,9 +127,18 @@ def run_weaponstats_case(repo_root: Path, plugin_path: Path, idump_path: str) ->
                 output,
             )
             require(
-                tail_field.get("semantic") == "struct"
-                and "auto_part_" in (tail_field.get("type") or ""),
-                f"weaponstats regression: tail field at {tail_offset:#x} was not factored into a subobject",
+                tail_field.get("semantic") == "struct",
+                f"weaponstats regression: tail field at {tail_offset:#x} was not a struct",
+                output,
+            )
+            require(
+                tail_field.get("name") == exp_name,
+                f"weaponstats regression: tail field at {tail_offset:#x} incorrectly named: expected {exp_name!r}, got {tail_field.get('name')!r}",
+                output,
+            )
+            require(
+                tail_field.get("type") == exp_type,
+                f"weaponstats regression: tail field at {tail_offset:#x} had incorrect type: expected {exp_type!r}, got {tail_field.get('type')!r}",
                 output,
             )
         require(

@@ -53,6 +53,7 @@ bool refine_struct_names_from_accesses(SynthStruct& structure,
                                        const qvector<FieldAccess>& accesses,
                                        NameOrigin origin = NameOrigin::AccessContext);
 void apply_role_based_field_names(SynthStruct& structure);
+void disambiguate_repeated_field_names(SynthStruct& structure);
 
 bool adopt_preferred_name(qstring& current_name,
                           NameMetadata& current_metadata,

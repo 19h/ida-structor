@@ -57,6 +57,7 @@ private:
     [[nodiscard]] bool extract_access(const cexpr_t* expr, sval_t& offset, uint32_t& size,
                                       std::optional<std::uint8_t>* base_indirection) const;
     [[nodiscard]] utils::PtrArithInfo resolve_ptr_arith(const cexpr_t* expr) const;
+    void extract_and_add_rhs_constant(FieldAccess& access, const cexpr_t* rhs) const;
     [[nodiscard]] bool compute_bitfield(std::uint64_t mask, int shift,
                                         std::uint16_t& bit_offset,
                                         std::uint16_t& bit_size) const;
@@ -65,7 +66,7 @@ private:
     [[nodiscard]] bool involves_target_var(const cexpr_t* expr) const;
     [[nodiscard]] bool is_call_argument_use(const cexpr_t* expr) const;
     [[nodiscard]] SemanticType infer_semantic_from_usage(const cexpr_t* expr, const cexpr_t* parent);
-    [[nodiscard]] AccessType determine_access_type(const cexpr_t* expr);
+    [[nodiscard]] AccessType determine_access_type(const cexpr_t* expr, const cexpr_t** out_rhs = nullptr);
     [[nodiscard]] bool is_zero_initialization(const cexpr_t* expr) const;
 
     cfunc_t* cfunc_;

@@ -16,10 +16,10 @@ DECLARE_VTABLE(off_148AE9E90);
 DECLARE_VTABLE(off_148AE9EE0);
 DECLARE_VTABLE(off_148AE9F40);
 DECLARE_VTABLE(off_148AE9F88);
-DECLARE_VTABLE(off_148AE9FC8);
-DECLARE_VTABLE(off_148AEA008);
-DECLARE_VTABLE(off_148AEA048);
-DECLARE_VTABLE(off_148AEA090);
+DECLARE_VTABLE(vftable_spreadModifier);
+DECLARE_VTABLE(vftable_aimModifier);
+DECLARE_VTABLE(vftable_regenConsumerModifier);
+DECLARE_VTABLE(vftable_salvageModifier);
 DECLARE_VTABLE(off_148AEA0D8);
 
 typedef struct SHandsRecoilCurveNoiseModiferRecovered {
@@ -577,10 +577,10 @@ static SWeaponStats *SWeaponStats_Init(SWeaponStats *this_) {
     this_->value11 = 1.0f;
     SRecoilModifier_Init(&this_->recoil);
     this_->spreadModifier.spread0 = 1.0f;
-    this_->spreadModifier.vfptr = off_148AE9FC8;
-    this_->aimModifier.vfptr = off_148AEA008;
-    this_->regenConsumerModifier.vfptr = off_148AEA048;
-    this_->salvageModifier.vfptr = off_148AEA090;
+    this_->spreadModifier.vfptr = vftable_spreadModifier;
+    this_->aimModifier.vfptr = vftable_aimModifier;
+    this_->regenConsumerModifier.vfptr = vftable_regenConsumerModifier;
+    this_->salvageModifier.vfptr = vftable_salvageModifier;
     this_->spreadModifier.spread1 = 1.0f;
     this_->spreadModifier.spread2 = 1.0f;
     this_->spreadModifier.spread3 = 1.0f;

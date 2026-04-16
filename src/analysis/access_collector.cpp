@@ -436,7 +436,11 @@ void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr
                         access.size = !expr->type.empty()
                             ? utils::get_type_size(expr->type, get_ptr_size())
                             : get_ptr_size();
-                        access.access_type = determine_access_type(expr);
+                        const cexpr_t* rhs = nullptr;
+                        access.access_type = determine_access_type(expr, &rhs);
+                        if (access.access_type == AccessType::Write) {
+                            extract_and_add_rhs_constant(access, rhs);
+                        }
                         const cexpr_t* parent = parent_expr();
                         access.semantic_type = infer_semantic_from_usage(expr, parent);
                         access.context_expr = utils::expr_to_string(expr, cfunc_);
@@ -456,7 +460,9 @@ void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr
                     pending.size = !expr->type.empty()
                         ? utils::get_type_size(expr->type, get_ptr_size())
                         : get_ptr_size();
-                    pending.access_type = determine_access_type(expr);
+                    const cexpr_t* rhs = nullptr;
+                    pending.access_type = determine_access_type(expr, &rhs);
+                    // extract_and_add_rhs_constant does not work on PendingSymbolicAccess directly
                     const cexpr_t* parent = parent_expr();
                     pending.semantic_type = infer_semantic_from_usage(expr, parent);
                     pending.context_expr = utils::expr_to_string(expr, cfunc_);
@@ -486,8 +492,11 @@ void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr
         access.size = get_ptr_size();
     }
 
-    // Determine if this is a read or write
-    access.access_type = determine_access_type(expr);
+    const cexpr_t* rhs = nullptr;
+    access.access_type = determine_access_type(expr, &rhs);
+    if (access.access_type == AccessType::Write) {
+        extract_and_add_rhs_constant(access, rhs);
+    }
 
     // Check if this is a zero-initialization write
     if (access.access_type == AccessType::Write) {
@@ -581,7 +590,11 @@ void AccessPatternVisitor::process_memptr_access(cexpr_t* expr) {
         access.size = get_ptr_size();
     }
 
-    access.access_type = determine_access_type(expr);
+    const cexpr_t* rhs = nullptr;
+    access.access_type = determine_access_type(expr, &rhs);
+    if (access.access_type == AccessType::Write) {
+        extract_and_add_rhs_constant(access, rhs);
+    }
     access.semantic_type = infer_semantic_from_usage(expr, parent);
     access.is_call_argument = is_call_argument_use(expr);
     if (arith.base_indirection > 0) {
@@ -644,7 +657,11 @@ void AccessPatternVisitor::process_array_access(cexpr_t* expr) {
                 bounded.size = !expr->type.empty()
                     ? utils::get_type_size(expr->type, get_ptr_size())
                     : get_ptr_size();
-                bounded.access_type = determine_access_type(expr);
+                const cexpr_t* rhs = nullptr;
+                bounded.access_type = determine_access_type(expr, &rhs);
+                if (bounded.access_type == AccessType::Write) {
+                    extract_and_add_rhs_constant(bounded, rhs);
+                }
                 const cexpr_t* parent = parent_expr();
                 bounded.semantic_type = infer_semantic_from_usage(expr, parent);
                 bounded.is_call_argument = is_call_argument_use(expr);
@@ -682,7 +699,11 @@ void AccessPatternVisitor::process_array_access(cexpr_t* expr) {
         access.size = get_ptr_size();
     }
 
-    access.access_type = determine_access_type(expr);
+    const cexpr_t* rhs = nullptr;
+    access.access_type = determine_access_type(expr, &rhs);
+    if (access.access_type == AccessType::Write) {
+        extract_and_add_rhs_constant(access, rhs);
+    }
     const cexpr_t* parent = parent_expr();
     access.semantic_type = infer_semantic_from_usage(expr, parent);
     access.is_call_argument = is_call_argument_use(expr);
@@ -1099,7 +1120,8 @@ SemanticType AccessPatternVisitor::infer_semantic_from_usage(const cexpr_t* expr
     return SemanticType::Integer;
 }
 
-AccessType AccessPatternVisitor::determine_access_type(const cexpr_t* expr) {
+AccessType AccessPatternVisitor::determine_access_type(const cexpr_t* expr, const cexpr_t** out_rhs) {
+    if (out_rhs) *out_rhs = nullptr;
     // Walk up parents to determine if this is a read or write
     const cexpr_t* current = expr;
 
@@ -1132,6 +1154,7 @@ AccessType AccessPatternVisitor::determine_access_type(const cexpr_t* expr) {
                     if (parent->op != cot_asg) {
                         return AccessType::ReadWrite;
                     }
+                    if (out_rhs) *out_rhs = parent->y;
                     return AccessType::Write;
                 }
                 return AccessType::Read;
@@ -1189,6 +1212,19 @@ bool AccessPatternVisitor::is_zero_initialization(const cexpr_t* expr) const {
     }
 
     return false;
+}
+
+void AccessPatternVisitor::extract_and_add_rhs_constant(FieldAccess& access, const cexpr_t* rhs) const {
+    if (!rhs) return;
+    while (rhs && (rhs->op == cot_cast || rhs->op == cot_ref)) {
+        rhs = rhs->x;
+    }
+    if (!rhs) return;
+    if (rhs->op == cot_num) {
+        access.add_observed_constant(rhs->numval());
+    } else if (rhs->op == cot_obj) {
+        access.add_observed_constant(rhs->obj_ea);
+    }
 }
 
 // ============================================================================
