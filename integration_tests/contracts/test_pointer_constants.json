@@ -1,0 +1,79 @@
+{
+  "fixture": "test_pointer_constants",
+  "cases": [
+    {
+      "name": "configure_and_invoke",
+      "synth": {
+        "kind": "function",
+        "target": "configure_and_invoke",
+        "var_idx": 0
+      },
+      "dump_functions": [
+        "configure_and_invoke"
+      ],
+      "golden_result": {
+        "success": true,
+        "error": "Success",
+        "error_message": "",
+        "fields_created": 2,
+        "vtable_slots": 0,
+        "propagated_to": [
+          "_configure_and_invoke",
+          "_main"
+        ],
+        "failed_sites": [],
+        "z3": {
+          "status": "success",
+          "used_z3": true,
+          "used_fallback": false
+        },
+        "structure": {
+          "name": "auto_configure_and_invoke",
+          "size": 16,
+          "alignment": 1,
+          "source_func_name": "_configure_and_invoke",
+          "source_var": "a1",
+          "field_count": 2,
+          "non_padding_field_count": 2,
+          "provenance": [],
+          "fields": [
+            {
+              "name": "fn_0",
+              "offset": 0,
+              "size": 8,
+              "semantic": "funcptr",
+              "type": "__int64 (__fastcall *)(unsigned int)",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            },
+            {
+              "name": "u64_8",
+              "offset": 8,
+              "size": 8,
+              "semantic": "uint",
+              "type": "unsigned __int64",
+              "confidence": "medium",
+              "is_padding": false,
+              "is_array": false,
+              "array_count": 1,
+              "is_union_candidate": false,
+              "is_bitfield": false,
+              "bit_offset": 0,
+              "bit_size": 0,
+              "union_members": []
+            }
+          ],
+          "vtable": null
+        }
+      },
+      "golden_pseudocode": ">>> configure_and_invoke\n__int64 __fastcall configure_and_invoke(auto_configure_and_invoke *a1, int a2, unsigned int a3) {\n    __int64 result; // x0\n\n    if ( a2 ) {\n        a1->fn_0 = (__int64 (__fastcall *)(unsigned int))handler_a;\n        a1->u64_8 = (unsigned __int64)&cookie_a;\n    } else {\n        a1->fn_0 = (__int64 (__fastcall *)(unsigned int))handler_b;\n        a1->u64_8 = (unsigned __int64)&cookie_b;\n    }\n    result = a1->fn_0(a1: a3);\n    sink ^= *(_QWORD *)a1->u64_8;\n    if ( a1->u64_8 == (_QWORD)&cookie_a ) {\n        sink ^= 0x10uLL;\n    } else if ( a1->u64_8 == (_QWORD)&cookie_b ) {\n        sink ^= 0x20uLL;\n    }\n    return result;\n}\n<<<\n"
+    }
+  ]
+}

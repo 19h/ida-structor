@@ -235,6 +235,31 @@ CONTRACT_MANIFEST = [
         ],
     },
     {
+        "fixture": "test_alias_lifetime",
+        "cases": [
+            function_case(
+                "alias_rebind_read",
+                "alias_rebind_read",
+                ["alias_rebind_read"],
+            ),
+            function_case(
+                "alias_overwrite_read",
+                "alias_overwrite_read",
+                ["alias_overwrite_read"],
+            ),
+        ],
+    },
+    {
+        "fixture": "test_pointer_constants",
+        "cases": [
+            function_case(
+                "configure_and_invoke",
+                "configure_and_invoke",
+                ["configure_and_invoke"],
+            )
+        ],
+    },
+    {
         "fixture": "test_mixed_subobject_deltas",
         "cases": [
             function_case(
