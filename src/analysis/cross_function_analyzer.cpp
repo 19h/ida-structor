@@ -13,6 +13,28 @@
 namespace structor {
 
 namespace {
+    bool is_assignment_op(ctype_t op) {
+        switch (op) {
+            case cot_asg:
+            case cot_asgbor:
+            case cot_asgxor:
+            case cot_asgband:
+            case cot_asgadd:
+            case cot_asgsub:
+            case cot_asgmul:
+            case cot_asgsshr:
+            case cot_asgushr:
+            case cot_asgshl:
+            case cot_asgsdiv:
+            case cot_asgudiv:
+            case cot_asgsmod:
+            case cot_asgumod:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     tinfo_t build_funcptr_type_from_call(const cexpr_t* call_expr) {
         tinfo_t result;
         if (!call_expr || call_expr->op != cot_call) {
@@ -483,11 +505,11 @@ CallSiteFinder::CallSiteFinder(int target_var_idx)
 int CallSiteFinder::visit_expr(cexpr_t* e) {
     if (!e) return 0;
 
-    if (e->op == cot_asg && e->x && e->x->op == cot_var && e->y) {
-        int base_var = -1;
-        sval_t delta = 0;
-        if (resolve_var_delta(e->y, base_var, delta)) {
-            aliases_[e->x->v.idx] = {base_var, delta};
+    if (is_assignment_op(e->op) && e->x && e->x->op == cot_var) {
+        if (e->op == cot_asg && e->y) {
+            bind_or_clear_alias(e->x->v.idx, e->y);
+        } else {
+            aliases_.erase(e->x->v.idx);
         }
         return 0;
     }
@@ -521,6 +543,17 @@ void CallSiteFinder::process_call(cexpr_t* call_expr) {
             calls_.push_back(info);
         }
     }
+}
+
+void CallSiteFinder::bind_or_clear_alias(int lhs_var_idx, const cexpr_t* rhs) {
+    int base_var = -1;
+    sval_t delta = 0;
+    if (resolve_var_delta(rhs, base_var, delta)) {
+        aliases_[lhs_var_idx] = {base_var, delta};
+        return;
+    }
+
+    aliases_.erase(lhs_var_idx);
 }
 
 bool CallSiteFinder::contains_ref(const cexpr_t* expr) const {
@@ -751,11 +784,17 @@ void CallerFinder::process_caller(ea_t caller_ea, ea_t call_site, qvector<Caller
         int idaapi visit_expr(cexpr_t* e) override {
             if (!e) return 0;
 
-            if (e->op == cot_asg && e->x && e->x->op == cot_var && e->y) {
-                int base_var = -1;
-                sval_t delta = 0;
-                if (resolve_var_delta(e->y, base_var, delta)) {
-                    aliases[e->x->v.idx] = {base_var, delta};
+            if (is_assignment_op(e->op) && e->x && e->x->op == cot_var) {
+                if (e->op == cot_asg && e->y) {
+                    int base_var = -1;
+                    sval_t delta = 0;
+                    if (resolve_var_delta(e->y, base_var, delta)) {
+                        aliases[e->x->v.idx] = {base_var, delta};
+                    } else {
+                        aliases.erase(e->x->v.idx);
+                    }
+                } else {
+                    aliases.erase(e->x->v.idx);
                 }
                 return 0;
             }

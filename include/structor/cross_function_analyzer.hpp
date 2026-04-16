@@ -386,6 +386,7 @@ private:
 
     /// Process a call expression
     void process_call(cexpr_t* call_expr);
+    void bind_or_clear_alias(int lhs_var_idx, const cexpr_t* rhs);
 
     [[nodiscard]] bool contains_ref(const cexpr_t* expr) const;
     [[nodiscard]] bool resolve_var_delta(const cexpr_t* expr, int& var_idx, sval_t& delta) const;

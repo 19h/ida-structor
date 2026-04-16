@@ -313,6 +313,40 @@ TEST_F(SynthTypesTest, ApplyRoleBasedFieldNames) {
     EXPECT_STREQ(structure.fields[2].name.c_str(), "kind_4");
 }
 
+TEST_F(SynthTypesTest, ApplyRoleBasedFieldNamesSkipsPointerLikeConstantDomains) {
+    SynthStruct structure;
+
+    SynthField field;
+    field.name = "u32_4";
+    field.naming = {GeneratedNameKind::Field, NameOrigin::GeneratedFallback,
+                    NameConfidence::Medium, false};
+    field.offset = 4;
+    field.size = 4;
+    field.semantic = SemanticType::Unknown;
+
+    tinfo_t void_type;
+    void_type.create_simple_type(BTF_VOID);
+    field.type.create_ptr(void_type);
+
+    FieldAccess access_a;
+    access_a.semantic_type = SemanticType::Unknown;
+    access_a.inferred_type = field.type;
+    access_a.observed_constants.push_back(0x1000);
+    field.source_accesses.push_back(access_a);
+
+    FieldAccess access_b;
+    access_b.semantic_type = SemanticType::Unknown;
+    access_b.inferred_type = field.type;
+    access_b.observed_constants.push_back(0x2000);
+    field.source_accesses.push_back(access_b);
+
+    structure.fields.push_back(field);
+
+    apply_role_based_field_names(structure);
+
+    EXPECT_STREQ(structure.fields[0].name.c_str(), "u32_4");
+}
+
 TEST_F(SynthTypesTest, ErrorStringConversion) {
     EXPECT_STREQ(synth_error_str(SynthError::Success), "Success");
     EXPECT_STREQ(synth_error_str(SynthError::NoVariableSelected), "No variable selected");

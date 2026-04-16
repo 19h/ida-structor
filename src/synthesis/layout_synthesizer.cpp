@@ -399,7 +399,7 @@ void prune_intermediate_positive_delta_patterns(
 }
 
 void recompute_unified_bounds(UnifiedAccessPattern &unified_pattern) {
-    if (unified_pattern.all_accesses.empty()) {
+  if (unified_pattern.all_accesses.empty()) {
         unified_pattern.global_min_offset = 0;
         unified_pattern.global_max_offset = 0;
         return;
@@ -419,11 +419,31 @@ void recompute_unified_bounds(UnifiedAccessPattern &unified_pattern) {
                 std::min(unified_pattern.global_min_offset, access.offset);
         unified_pattern.global_max_offset =
                 std::max(unified_pattern.global_max_offset, access_end);
-    }
+  }
+}
+
+void recompute_pattern_bounds(AccessPattern &pattern) {
+  if (pattern.accesses.empty()) {
+    pattern.min_offset = 0;
+    pattern.max_offset = 0;
+    return;
+  }
+
+  std::sort(pattern.accesses.begin(), pattern.accesses.end());
+  pattern.min_offset = pattern.accesses.front().offset;
+  pattern.max_offset = pattern.accesses.front().offset +
+                       static_cast<sval_t>(pattern.accesses.front().size);
+
+  for (const auto &access : pattern.accesses) {
+    pattern.min_offset = std::min(pattern.min_offset, access.offset);
+    pattern.max_offset =
+        std::max(pattern.max_offset,
+                 access.offset + static_cast<sval_t>(access.size));
+  }
 }
 
 void reanchor_source_window_accesses(ea_t source_func,
-                                                                         UnifiedAccessPattern &unified_pattern) {
+                                     UnifiedAccessPattern &unified_pattern) {
     auto source_it = unified_pattern.function_deltas.find(source_func);
     if (source_it == unified_pattern.function_deltas.end()) {
         return;
@@ -457,17 +477,28 @@ void reanchor_source_window_accesses(ea_t source_func,
     }
 
     bool changed = false;
-    for (auto &access : unified_pattern.all_accesses) {
-        if (access.source_func_ea != source_func) {
-            continue;
+  for (auto &access : unified_pattern.all_accesses) {
+    if (access.source_func_ea != source_func) {
+      continue;
         }
 
-        access.offset -= source_delta;
-        changed = true;
+    access.offset -= source_delta;
+    changed = true;
+  }
+
+  for (auto &fn_pattern : unified_pattern.per_function_patterns) {
+    if (fn_pattern.func_ea != source_func) {
+      continue;
     }
 
-    if (!changed) {
-        return;
+    for (auto &access : fn_pattern.accesses) {
+      access.offset -= source_delta;
+    }
+    recompute_pattern_bounds(fn_pattern);
+  }
+
+  if (!changed) {
+    return;
     }
 
     std::sort(unified_pattern.all_accesses.begin(),
@@ -2207,20 +2238,17 @@ void LayoutSynthesizer::detect_subobjects(const UnifiedAccessPattern &pattern,
         qstring field_name = make_substruct_field_name(start);
         qstring inferred_stem;
 
-        for (const auto &access : window_accesses) {
-            if (access.access_type == AccessType::Write &&
-                    !access.observed_constants.empty()) {
-                for (auto val : access.observed_constants) {
-                    msg("Structor: Observed constant: %llx\n", val);
-                    qstring name;
-                    if (get_name(&name, static_cast<ea_t>(val)) > 0 && !name.empty()) {
-                        msg("Structor: Testing constant %llx -> '%s'\n", val, name.c_str());
-                        qstring stem = normalize_symbolic_stem(name);
-                        if (!stem.empty() && !is_placeholder_identifier(stem)) {
-                            msg("Structor: Normalized to '%s'\n", stem.c_str());
-                            if (starts_with_text(stem, "vftable_")) {
-                                stem = qstring(stem.c_str() + strlen("vftable_"));
-                            }
+    for (const auto &access : window_accesses) {
+      if (access.access_type == AccessType::Write &&
+          !access.observed_constants.empty()) {
+        for (auto val : access.observed_constants) {
+          qstring name;
+          if (get_name(&name, static_cast<ea_t>(val)) > 0 && !name.empty()) {
+            qstring stem = normalize_symbolic_stem(name);
+            if (!stem.empty() && !is_placeholder_identifier(stem)) {
+              if (starts_with_text(stem, "vftable_")) {
+                stem = qstring(stem.c_str() + strlen("vftable_"));
+              }
                             if (starts_with_text(stem, "off_") ||
                                     starts_with_text(stem, "unk_")) {
                                 continue;
@@ -2238,13 +2266,11 @@ void LayoutSynthesizer::detect_subobjects(const UnifiedAccessPattern &pattern,
             }
             if (!inferred_stem.empty())
                 break;
-        }
+    }
 
-        if (!inferred_stem.empty()) {
-            qstring candidate;
-
-            field_name = inferred_stem;
-        }
+    if (!inferred_stem.empty()) {
+      field_name = inferred_stem;
+    }
 
         qstring type_name;
         if (!inferred_stem.empty()) {

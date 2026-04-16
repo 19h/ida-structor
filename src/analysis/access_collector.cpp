@@ -35,6 +35,28 @@ bool is_aggregate_member_container(const cexpr_t* expr) {
     return false;
 }
 
+bool is_assignment_op(ctype_t op) {
+    switch (op) {
+        case cot_asg:
+        case cot_asgbor:
+        case cot_asgxor:
+        case cot_asgband:
+        case cot_asgadd:
+        case cot_asgsub:
+        case cot_asgmul:
+        case cot_asgsshr:
+        case cot_asgushr:
+        case cot_asgshl:
+        case cot_asgsdiv:
+        case cot_asgudiv:
+        case cot_asgsmod:
+        case cot_asgumod:
+            return true;
+        default:
+            return false;
+    }
+}
+
 } // namespace
 
 // ============================================================================
@@ -67,6 +89,19 @@ int AccessPatternVisitor::visit_expr(cexpr_t* expr) {
             break;
 
         case cot_asg:
+        case cot_asgbor:
+        case cot_asgxor:
+        case cot_asgband:
+        case cot_asgadd:
+        case cot_asgsub:
+        case cot_asgmul:
+        case cot_asgsshr:
+        case cot_asgushr:
+        case cot_asgshl:
+        case cot_asgsdiv:
+        case cot_asgudiv:
+        case cot_asgsmod:
+        case cot_asgumod:
             process_assignment(expr);
             break;
 
@@ -146,17 +181,29 @@ int AccessPatternVisitor::visit_expr(cexpr_t* expr) {
 }
 
 void AccessPatternVisitor::process_assignment(cexpr_t* expr) {
-    if (!expr || expr->op != cot_asg || !expr->x || !expr->y) {
+    if (!expr || !is_assignment_op(expr->op) || !expr->x || !expr->y) {
         return;
     }
 
     cexpr_t* lhs = expr->x;
+    if (!lhs || lhs->op != cot_var) {
+        return;
+    }
+
+    if (expr->op != cot_asg) {
+        invalidate_local_var_state(lhs->v.idx, true);
+        pending_constants_.erase(lhs->v.idx);
+        return;
+    }
+
     cexpr_t* rhs = expr->y;
     while (rhs && rhs->op == cot_cast) {
         rhs = rhs->x;
     }
 
-    if (!lhs || lhs->op != cot_var || !rhs) {
+    if (!rhs) {
+        invalidate_local_var_state(lhs->v.idx, true);
+        pending_constants_.erase(lhs->v.idx);
         return;
     }
 
@@ -195,6 +242,8 @@ void AccessPatternVisitor::process_assignment(cexpr_t* expr) {
         }
     }
 
+    invalidate_local_var_state(lhs->v.idx, false);
+
     if (resolved) {
         auto pending_it = pending_constants_.find(lhs->v.idx);
         if (pending_it != pending_constants_.end()) {
@@ -206,6 +255,20 @@ void AccessPatternVisitor::process_assignment(cexpr_t* expr) {
             pending_constants_.erase(pending_it);
         }
         local_aliases_[lhs->v.idx] = std::move(alias);
+        return;
+    }
+
+    invalidate_local_var_state(lhs->v.idx, true);
+    pending_constants_.erase(lhs->v.idx);
+}
+
+void AccessPatternVisitor::invalidate_local_var_state(int var_idx,
+                                                      bool clear_pending_constants) {
+    local_aliases_.erase(var_idx);
+    local_index_bounds_.erase(var_idx);
+    pending_symbolic_accesses_.erase(var_idx);
+    if (clear_pending_constants) {
+        pending_constants_.erase(var_idx);
     }
 }
 

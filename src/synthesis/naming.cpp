@@ -825,6 +825,36 @@ void apply_role_based_field_names(SynthStruct& structure) {
     int vtable_count = 0;
     int kind_count = 0;
 
+    auto type_blocks_kind_name = [](const tinfo_t& type) {
+        if (type.empty()) {
+            return false;
+        }
+
+        return type.is_ptr() ||
+               type.is_func() ||
+               type.is_funcptr() ||
+               type.is_array() ||
+               type.is_struct() ||
+               type.is_union() ||
+               type.is_floating();
+    };
+
+    auto semantic_blocks_kind_name = [](SemanticType semantic) {
+        switch (semantic) {
+            case SemanticType::Pointer:
+            case SemanticType::FunctionPointer:
+            case SemanticType::VTablePointer:
+            case SemanticType::NestedStruct:
+            case SemanticType::Float:
+            case SemanticType::Double:
+            case SemanticType::Array:
+            case SemanticType::Padding:
+                return true;
+            default:
+                return false;
+        }
+    };
+
     auto is_callback_candidate = [](const SynthField& field) {
         if (field.semantic != SemanticType::FunctionPointer) {
             return false;
@@ -837,7 +867,7 @@ void apply_role_based_field_names(SynthStruct& structure) {
         return false;
     };
 
-    auto is_kind_candidate = [](const SynthField& field) {
+    auto is_kind_candidate_base = [](const SynthField& field) {
         if (field.size == 0 || field.size > 4 || field.is_array || field.is_union_candidate) {
             return false;
         }
@@ -847,6 +877,10 @@ void apply_role_based_field_names(SynthStruct& structure) {
             return false;
         }
 
+        return true;
+    };
+
+    auto has_small_constant_domain = [](const SynthField& field) {
         std::unordered_set<std::uint64_t> values;
         for (const auto& access : field.source_accesses) {
             for (auto value : access.observed_constants) {
@@ -862,6 +896,23 @@ void apply_role_based_field_names(SynthStruct& structure) {
             }
         }
         return true;
+    };
+
+    auto is_kind_candidate = [&](const SynthField& field) {
+        if (!is_kind_candidate_base(field)) {
+            return false;
+        }
+        if (semantic_blocks_kind_name(field.semantic) ||
+            type_blocks_kind_name(field.type)) {
+            return false;
+        }
+        for (const auto& access : field.source_accesses) {
+            if (semantic_blocks_kind_name(access.semantic_type) ||
+                type_blocks_kind_name(access.inferred_type)) {
+                return false;
+            }
+        }
+        return has_small_constant_domain(field);
     };
 
     for (const auto& field : structure.fields) {

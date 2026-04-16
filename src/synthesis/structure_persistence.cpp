@@ -4,6 +4,8 @@
 #include <structor/structure_persistence.hpp>
 #include <structor/naming.hpp>
 
+#include <limits>
+
 namespace structor {
 
 namespace {
@@ -97,6 +99,65 @@ bool union_has_relative_members(const qvector<SynthField>& members) {
     }
 
     return false;
+}
+
+bool semantic_blocks_value_enum(SemanticType semantic) {
+    switch (semantic) {
+        case SemanticType::Pointer:
+        case SemanticType::FunctionPointer:
+        case SemanticType::VTablePointer:
+        case SemanticType::NestedStruct:
+        case SemanticType::Float:
+        case SemanticType::Double:
+        case SemanticType::Array:
+        case SemanticType::Padding:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool type_blocks_value_enum(const tinfo_t& type) {
+    if (type.empty()) {
+        return false;
+    }
+
+    return type.is_ptr() ||
+           type.is_func() ||
+           type.is_funcptr() ||
+           type.is_array() ||
+           type.is_struct() ||
+           type.is_union() ||
+           type.is_floating();
+}
+
+bool field_supports_value_enum(const SynthField& field) {
+    if (field.is_bitfield || field.is_padding || field.is_array ||
+        field.is_union_candidate || field.size == 0 || field.size > 8) {
+        return false;
+    }
+
+    if (semantic_blocks_value_enum(field.semantic) ||
+        type_blocks_value_enum(field.type)) {
+        return false;
+    }
+
+    for (const auto& access : field.source_accesses) {
+        if (semantic_blocks_value_enum(access.semantic_type) ||
+            type_blocks_value_enum(access.inferred_type)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+std::uint64_t max_storable_value(std::uint32_t size) {
+    if (size >= sizeof(std::uint64_t)) {
+        return std::numeric_limits<std::uint64_t>::max();
+    }
+
+    return (std::uint64_t{1} << (size * 8)) - 1;
 }
 
 tid_t create_substruct_recursive(StructurePersistence& persistence, SubStructInfo& sub) {
@@ -1104,7 +1165,7 @@ tinfo_t StructurePersistence::create_value_enum_type(
     const qstring& base_name,
     const SynthField& field)
 {
-    if (field.is_bitfield || field.size == 0 || field.size > 8) {
+    if (!field_supports_value_enum(field)) {
         return tinfo_t();
     }
 
@@ -1122,6 +1183,13 @@ tinfo_t StructurePersistence::create_value_enum_type(
 
     if (values.size() < 2 || values.size() > 32) {
         return tinfo_t();
+    }
+
+    const std::uint64_t max_value = max_storable_value(field.size);
+    for (auto value : values) {
+        if (value > max_value) {
+            return tinfo_t();
+        }
     }
 
     qstring enum_name;
