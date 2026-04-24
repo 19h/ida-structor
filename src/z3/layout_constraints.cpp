@@ -819,43 +819,68 @@ void LayoutConstraintBuilder::add_type_constraints() {
     z3_log("[Structor/Z3] Adding type consistency constraints\n");
     int type_constraint_count = 0;
 
-    for (size_t i = 0; i < field_vars_.size(); ++i) {
-        for (size_t j = i + 1; j < field_vars_.size(); ++j) {
-            const auto& c1 = candidates_[field_vars_[i].candidate_id];
-            const auto& c2 = candidates_[field_vars_[j].candidate_id];
+    std::vector<size_t> by_offset(field_vars_.size());
+    for (size_t i = 0; i < by_offset.size(); ++i) {
+        by_offset[i] = i;
+    }
 
-            // Only for overlapping candidates at same offset
-            if (c1.offset != c2.offset) continue;
+    std::stable_sort(by_offset.begin(), by_offset.end(), [&](size_t lhs, size_t rhs) {
+        const auto& c1 = candidates_[field_vars_[lhs].candidate_id];
+        const auto& c2 = candidates_[field_vars_[rhs].candidate_id];
+        return c1.offset < c2.offset;
+    });
 
-            // Check type compatibility
-            bool compatible = types_compatible(c1.type_category, c2.type_category);
-            ++type_constraint_count;
+    size_t group_begin = 0;
+    while (group_begin < by_offset.size()) {
+        const auto& first = candidates_[field_vars_[by_offset[group_begin]].candidate_id];
+        size_t group_end = group_begin + 1;
+        while (group_end < by_offset.size()) {
+            const auto& next = candidates_[field_vars_[by_offset[group_end]].candidate_id];
+            if (next.offset != first.offset) {
+                break;
+            }
+            ++group_end;
+        }
 
-            if (!compatible) {
-                if (config_.allow_unions) {
-                    continue;
+        for (size_t left = group_begin; left < group_end; ++left) {
+            for (size_t right = left + 1; right < group_end; ++right) {
+                const size_t i = by_offset[left];
+                const size_t j = by_offset[right];
+                const auto& c1 = candidates_[field_vars_[i].candidate_id];
+                const auto& c2 = candidates_[field_vars_[j].candidate_id];
+
+                // Check type compatibility
+                bool compatible = types_compatible(c1.type_category, c2.type_category);
+                ++type_constraint_count;
+
+                if (!compatible) {
+                    if (config_.allow_unions) {
+                        continue;
+                    }
+
+                    ConstraintProvenance prov;
+                    prov.description.sprnt("Type consistency at 0x%llX: %s vs %s",
+                        static_cast<unsigned long long>(c1.offset),
+                        type_category_name(c1.type_category),
+                        type_category_name(c2.type_category));
+                    const auto& weight_source = (c1.source_access_indices.size() >= c2.source_access_indices.size())
+                        ? c1 : c2;
+                    int weight = access_weight(weight_source, config_.weight_type_consistency);
+
+                    prov.is_soft = true;
+                    prov.kind = ConstraintProvenance::Kind::TypeMatch;
+                    prov.weight = weight;
+
+                    // Prefer not selecting both incompatible types
+                    ::z3::expr constraint = !(field_vars_[i].selected && field_vars_[j].selected);
+
+                    constraint_tracker_.add_soft(solver_, constraint, prov, weight);
+                    ++statistics_.type_constraints;
                 }
-
-                ConstraintProvenance prov;
-                prov.description.sprnt("Type consistency at 0x%llX: %s vs %s",
-                    static_cast<unsigned long long>(c1.offset),
-                    type_category_name(c1.type_category),
-                    type_category_name(c2.type_category));
-                const auto& weight_source = (c1.source_access_indices.size() >= c2.source_access_indices.size())
-                    ? c1 : c2;
-                int weight = access_weight(weight_source, config_.weight_type_consistency);
-
-                prov.is_soft = true;
-                prov.kind = ConstraintProvenance::Kind::TypeMatch;
-                prov.weight = weight;
-
-                // Prefer not selecting both incompatible types
-                ::z3::expr constraint = !(field_vars_[i].selected && field_vars_[j].selected);
-
-                constraint_tracker_.add_soft(solver_, constraint, prov, weight);
-                ++statistics_.type_constraints;
             }
         }
+
+        group_begin = group_end;
     }
     
     z3_log("[Structor/Z3]   Added %u type consistency constraints (checked %d pairs)\n", 

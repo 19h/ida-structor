@@ -572,76 +572,89 @@ namespace {
             int score = -1;
         } best;
 
-        for (uint32_t shift = 0; shift < array.stride; ++shift) {
-            const sval_t base = array.base_offset - static_cast<sval_t>(shift);
-            std::unordered_map<MixedStrideKey, MixedStrideField, MixedStrideKeyHash> groups;
+        std::vector<BestAugmentation> shift_results(array.stride);
+        algorithms::parallel_for_chunks(array.stride, 4, [&](size_t begin, size_t end) {
+            for (size_t shift_index = begin; shift_index < end; ++shift_index) {
+                const uint32_t shift = static_cast<uint32_t>(shift_index);
+                const sval_t base = array.base_offset - static_cast<sval_t>(shift);
+                std::unordered_map<MixedStrideKey, MixedStrideField, MixedStrideKeyHash> groups;
 
-            for (size_t i = 0; i < pattern.all_accesses.size(); ++i) {
-                const auto& access = pattern.all_accesses[i];
-                if (access.offset < base) {
-                    continue;
+                for (size_t i = 0; i < pattern.all_accesses.size(); ++i) {
+                    const auto& access = pattern.all_accesses[i];
+                    if (access.offset < base) {
+                        continue;
+                    }
+                    const sval_t rel = access.offset - base;
+                    if (rel < 0) {
+                        continue;
+                    }
+                    uint32_t idx = static_cast<uint32_t>(rel / array.stride);
+                    if (idx >= array.element_count) {
+                        continue;
+                    }
+                    uint32_t inner = static_cast<uint32_t>(rel % array.stride);
+                    if (inner + access.size > array.stride) {
+                        continue;
+                    }
+
+                    MixedStrideKey key{inner, access.size};
+                    auto& field = groups[key];
+                    field.inner_offset = inner;
+                    field.size = access.size;
+                    if (field.type.empty() && !access.inferred_type.empty()) {
+                        field.type = access.inferred_type;
+                    }
+                    field.access_indices.push_back(static_cast<int>(i));
                 }
-                const sval_t rel = access.offset - base;
-                if (rel < 0) {
-                    continue;
+
+                qvector<MixedStrideField> raw_fields;
+                raw_fields.reserve(groups.size());
+                for (auto& [key, field] : groups) {
+                    raw_fields.push_back(field);
                 }
-                uint32_t idx = static_cast<uint32_t>(rel / array.stride);
-                if (idx >= array.element_count) {
-                    continue;
-                }
-                uint32_t inner = static_cast<uint32_t>(rel % array.stride);
-                if (inner + access.size > array.stride) {
+
+                const size_t stable_fields = count_stable_repeated_fields(
+                    raw_fields,
+                    pattern,
+                    base,
+                    array.stride,
+                    array.element_count);
+                const size_t min_stable_fields = base == 0 ? 2u : 1u;
+                if (stable_fields < min_stable_fields) {
                     continue;
                 }
 
-                MixedStrideKey key{inner, access.size};
-                auto& field = groups[key];
-                field.inner_offset = inner;
-                field.size = access.size;
-                if (field.type.empty() && !access.inferred_type.empty()) {
-                    field.type = access.inferred_type;
+                qvector<MixedStrideField> repeated = collapse_fields_by_inner_offset(
+                    raw_fields,
+                    pattern,
+                    base,
+                    array.stride,
+                    std::min<uint32_t>(3, array.element_count));
+                const int score = static_cast<int>(repeated.size());
+
+                if (score < 2) {
+                    continue;
                 }
-                field.access_indices.push_back(static_cast<int>(i));
+
+                std::sort(repeated.begin(), repeated.end(), [](const MixedStrideField& a, const MixedStrideField& b) {
+                    if (a.inner_offset != b.inner_offset) return a.inner_offset < b.inner_offset;
+                    return a.size > b.size;
+                });
+
+                auto& local_best = shift_results[shift_index];
+                local_best.base = base;
+                local_best.fields = std::move(repeated);
+                local_best.score = score;
             }
+        });
 
-            qvector<MixedStrideField> raw_fields;
-            raw_fields.reserve(groups.size());
-            for (auto& [key, field] : groups) {
-                raw_fields.push_back(field);
-            }
-
-            const size_t stable_fields = count_stable_repeated_fields(
-                raw_fields,
-                pattern,
-                base,
-                array.stride,
-                array.element_count);
-            const size_t min_stable_fields = base == 0 ? 2u : 1u;
-            if (stable_fields < min_stable_fields) {
+        for (auto& candidate : shift_results) {
+            if (candidate.score < 2) {
                 continue;
             }
-
-            qvector<MixedStrideField> repeated = collapse_fields_by_inner_offset(
-                raw_fields,
-                pattern,
-                base,
-                array.stride,
-                std::min<uint32_t>(3, array.element_count));
-            const int score = static_cast<int>(repeated.size());
-
-            if (score < 2) {
-                continue;
-            }
-
-            std::sort(repeated.begin(), repeated.end(), [](const MixedStrideField& a, const MixedStrideField& b) {
-                if (a.inner_offset != b.inner_offset) return a.inner_offset < b.inner_offset;
-                return a.size > b.size;
-            });
-
-            if (score > best.score || (score == best.score && base < best.base)) {
-                best.base = base;
-                best.fields = std::move(repeated);
-                best.score = score;
+            if (candidate.score > best.score ||
+                (candidate.score == best.score && candidate.base < best.base)) {
+                best = std::move(candidate);
             }
         }
 

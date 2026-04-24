@@ -121,134 +121,176 @@ qvector<ArrayCandidate> ArrayConstraintBuilder::detect_arrays(
     // Group accesses by size
     auto size_groups = group_by_size(accesses);
 
-    // Process each size group
-    for (auto& [size, group] : size_groups) {
-        if (static_cast<int>(group.size()) < config_.min_elements) {
-            continue;
-        }
+    struct ExactStrideRun {
+        uint32_t stride = 0;
+        size_t begin = 0;
+        size_t end = 0;
+    };
 
-        // Extract and sort offsets
+    struct SizeGroupPlan {
+        uint32_t size = 0;
+        qvector<const FieldAccess*> group;
         qvector<sval_t> offsets;
-        for (const auto* access : group) {
-            offsets.push_back(access->offset);
-        }
-        std::sort(offsets.begin(), offsets.end());
+        std::optional<std::pair<sval_t, uint32_t>> hinted_result;
+        std::optional<std::pair<sval_t, uint32_t>> ap_result;
+        qvector<ExactStrideRun> exact_runs;
+        bool eligible = false;
+    };
 
-        // Remove duplicates
-        offsets.erase(std::unique(offsets.begin(), offsets.end()), offsets.end());
+    std::vector<SizeGroupPlan> plans;
+    plans.reserve(size_groups.size());
+    for (auto& [size, group] : size_groups) {
+        SizeGroupPlan plan;
+        plan.size = size;
+        plan.group = group;
+        plans.push_back(std::move(plan));
+    }
+    std::sort(plans.begin(), plans.end(), [](const SizeGroupPlan& a, const SizeGroupPlan& b) {
+        return a.size < b.size;
+    });
 
-        if (static_cast<int>(offsets.size()) < config_.min_elements) {
-            continue;
-        }
-
-        // Honor stride hints from index expressions when available
-        auto stride_hint = extract_stride_hint(group);
-        if (stride_hint.has_value()) {
-            auto hinted_result = find_progression_with_stride(offsets, group, *stride_hint);
-            if (hinted_result.has_value()) {
-                auto [base, stride] = *hinted_result;
-
-                // Verify type consistency if required
-                if (config_.require_consistent_types && !verify_type_consistency(group)) {
-                    continue;
-                }
-
-                uint32_t count = static_cast<uint32_t>((offsets.back() - base) / stride) + 1;
-                ArrayCandidate candidate = create_candidate(base, stride, count, group);
-
-                if (is_weak_single_field_struct_array(candidate, group)) {
-                    continue;
-                }
-
-                candidates.push_back(std::move(candidate));
-                stats_.arrays_found++;
-                stats_.elements_covered += static_cast<int>(offsets.size());
+    algorithms::parallel_for_chunks(plans.size(), 2, [&](size_t begin, size_t end) {
+        for (size_t plan_idx = begin; plan_idx < end; ++plan_idx) {
+            auto& plan = plans[plan_idx];
+            if (static_cast<int>(plan.group.size()) < config_.min_elements) {
                 continue;
             }
-        }
 
-        auto append_exact_stride_runs = [&](uint32_t stride) {
-            if (stride == 0 || stride > config_.max_stride || offsets.size() < 2) {
-                return;
+            plan.offsets.reserve(plan.group.size());
+            for (const auto* access : plan.group) {
+                plan.offsets.push_back(access->offset);
+            }
+            std::sort(plan.offsets.begin(), plan.offsets.end());
+            plan.offsets.erase(std::unique(plan.offsets.begin(), plan.offsets.end()), plan.offsets.end());
+
+            if (static_cast<int>(plan.offsets.size()) < config_.min_elements) {
+                continue;
+            }
+
+            plan.eligible = true;
+            auto stride_hint = extract_stride_hint(plan.group);
+            if (stride_hint.has_value()) {
+                plan.hinted_result = find_progression_with_stride(plan.offsets, plan.group, *stride_hint);
+            }
+            plan.ap_result = find_arithmetic_progression(plan.offsets);
+
+            const uint32_t stride = plan.size;
+            if (stride == 0 || stride > config_.max_stride || plan.offsets.size() < 2) {
+                continue;
             }
 
             size_t run_start = 0;
-            while (run_start + 1 < offsets.size()) {
+            while (run_start + 1 < plan.offsets.size()) {
                 size_t run_end = run_start + 1;
-                while (run_end < offsets.size() &&
-                       offsets[run_end] - offsets[run_end - 1] == static_cast<sval_t>(stride)) {
+                while (run_end < plan.offsets.size() &&
+                       plan.offsets[run_end] - plan.offsets[run_end - 1] == static_cast<sval_t>(stride)) {
                     ++run_end;
                 }
 
                 const size_t run_len = run_end - run_start;
                 if (static_cast<int>(run_len) >= config_.min_elements) {
-                    qvector<const FieldAccess*> run_group;
-                    std::unordered_set<sval_t> run_offsets;
-                    for (size_t i = run_start; i < run_end; ++i) {
-                        run_offsets.insert(offsets[i]);
-                    }
+                    plan.exact_runs.push_back(ExactStrideRun{stride, run_start, run_end});
+                }
+                run_start = run_end;
+            }
+        }
+    });
 
-                    for (const auto* access : group) {
-                        if (run_offsets.count(access->offset) > 0) {
-                            run_group.push_back(access);
-                        }
-                    }
+    auto make_run_group = [](const SizeGroupPlan& plan, const ExactStrideRun& run) {
+        qvector<const FieldAccess*> run_group;
+        std::unordered_set<sval_t> run_offsets;
+        for (size_t i = run.begin; i < run.end; ++i) {
+            run_offsets.insert(plan.offsets[i]);
+        }
 
-                    if (!config_.require_consistent_types || verify_type_consistency(run_group)) {
-                        ArrayCandidate candidate = create_candidate(
-                            offsets[run_start],
-                            stride,
-                            static_cast<uint32_t>(run_len),
-                            run_group);
-                        if (is_weak_single_field_struct_array(candidate, run_group)) {
-                            run_start = run_end;
-                            continue;
-                        }
-                        candidates.push_back(std::move(candidate));
-                        stats_.arrays_found++;
-                        stats_.elements_covered += static_cast<int>(run_len);
-                    }
+        for (const auto* access : plan.group) {
+            if (run_offsets.count(access->offset) > 0) {
+                run_group.push_back(access);
+            }
+        }
+        return run_group;
+    };
+
+    // Materialize candidates serially: this updates stats and may create IDA types.
+    for (const auto& plan : plans) {
+        if (!plan.eligible) {
+            continue;
+        }
+
+        // Honor stride hints from index expressions when available
+        if (plan.hinted_result.has_value()) {
+            auto [base, stride] = *plan.hinted_result;
+
+                // Verify type consistency if required
+                if (config_.require_consistent_types && !verify_type_consistency(plan.group)) {
+                    continue;
                 }
 
-                run_start = run_end;
+                uint32_t count = static_cast<uint32_t>((plan.offsets.back() - base) / stride) + 1;
+                ArrayCandidate candidate = create_candidate(base, stride, count, plan.group);
+
+                if (is_weak_single_field_struct_array(candidate, plan.group)) {
+                    continue;
+                }
+
+                candidates.push_back(std::move(candidate));
+                stats_.arrays_found++;
+                stats_.elements_covered += static_cast<int>(plan.offsets.size());
+                continue;
+        }
+
+        auto append_exact_stride_runs = [&]() {
+            for (const auto& run : plan.exact_runs) {
+                qvector<const FieldAccess*> run_group = make_run_group(plan, run);
+                if (!config_.require_consistent_types || verify_type_consistency(run_group)) {
+                    ArrayCandidate candidate = create_candidate(
+                        plan.offsets[run.begin],
+                        run.stride,
+                        static_cast<uint32_t>(run.end - run.begin),
+                        run_group);
+                    if (is_weak_single_field_struct_array(candidate, run_group)) {
+                        continue;
+                    }
+                    candidates.push_back(std::move(candidate));
+                    stats_.arrays_found++;
+                    stats_.elements_covered += static_cast<int>(run.end - run.begin);
+                }
             }
         };
 
         // Try simple arithmetic progression detection first
-        auto ap_result = find_arithmetic_progression(offsets);
-
-        if (ap_result.has_value()) {
-            auto [base, stride] = *ap_result;
+        if (plan.ap_result.has_value()) {
+            auto [base, stride] = *plan.ap_result;
 
             // Verify type consistency if required
-            if (config_.require_consistent_types && !verify_type_consistency(group)) {
+            if (config_.require_consistent_types && !verify_type_consistency(plan.group)) {
                 continue;
             }
 
             // Create candidate
             ArrayCandidate candidate = create_candidate(
-                base, stride, static_cast<uint32_t>(offsets.size()), group);
+                base, stride, static_cast<uint32_t>(plan.offsets.size()), plan.group);
 
-            if (is_weak_single_field_struct_array(candidate, group)) {
+            if (is_weak_single_field_struct_array(candidate, plan.group)) {
                 continue;
             }
 
             candidates.push_back(std::move(candidate));
             stats_.arrays_found++;
-            stats_.elements_covered += static_cast<int>(offsets.size());
+            stats_.elements_covered += static_cast<int>(plan.offsets.size());
         }
         // Try symbolic detection if simple AP failed
         else if (config_.use_symbolic_indices) {
-            auto symbolic_result = detect_symbolic_array(group);
+            auto symbolic_result = detect_symbolic_array(plan.group);
             if (symbolic_result.has_value()) {
                 candidates.push_back(std::move(*symbolic_result));
                 stats_.arrays_found++;
                 stats_.symbolic_detections++;
             } else {
-                append_exact_stride_runs(size);
+                append_exact_stride_runs();
             }
         } else {
-            append_exact_stride_runs(size);
+            append_exact_stride_runs();
         }
     }
 

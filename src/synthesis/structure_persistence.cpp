@@ -3,8 +3,10 @@
 
 #include <structor/structure_persistence.hpp>
 #include <structor/naming.hpp>
+#include <structor/optimized_algorithms.hpp>
 
 #include <limits>
+#include <vector>
 
 namespace structor {
 
@@ -1468,9 +1470,13 @@ std::optional<std::tuple<tid_t, qstring, double>> StructurePersistence::find_reu
     }
 
     uint32_t limit = get_ordinal_limit(til);
-    tid_t best_tid = BADADDR;
-    qstring best_name;
-    double best_score = threshold;
+    struct ReuseSnapshot {
+        tid_t tid = BADADDR;
+        qstring name;
+        StructSignature signature;
+    };
+
+    std::vector<ReuseSnapshot> snapshots;
 
     for (uint32_t ord = 1; ord < limit; ++ord) {
         tinfo_t tif;
@@ -1500,11 +1506,6 @@ std::optional<std::tuple<tid_t, qstring, double>> StructurePersistence::find_reu
             continue;
         }
 
-        double score = compute_similarity(synth_sig, sig);
-        if (score < best_score) {
-            continue;
-        }
-
         const char* type_name = get_numbered_type_name(til, ord);
         if (!type_name || type_name[0] == '\0') {
             continue;
@@ -1515,9 +1516,33 @@ std::optional<std::tuple<tid_t, qstring, double>> StructurePersistence::find_reu
             continue;
         }
 
+        ReuseSnapshot snapshot;
+        snapshot.tid = tid;
+        snapshot.name = type_name;
+        snapshot.signature = std::move(sig);
+        snapshots.push_back(std::move(snapshot));
+    }
+
+    tid_t best_tid = BADADDR;
+    qstring best_name;
+    double best_score = threshold;
+
+    std::vector<double> scores(snapshots.size(), 0.0);
+    algorithms::parallel_for_chunks(snapshots.size(), 64, [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            scores[i] = compute_similarity(synth_sig, snapshots[i].signature);
+        }
+    });
+
+    for (size_t i = 0; i < snapshots.size(); ++i) {
+        const double score = scores[i];
+        if (score < best_score) {
+            continue;
+        }
+
         best_score = score;
-        best_tid = tid;
-        best_name = type_name;
+        best_tid = snapshots[i].tid;
+        best_name = snapshots[i].name;
     }
 
     if (best_tid == BADADDR) {

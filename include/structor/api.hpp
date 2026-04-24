@@ -12,6 +12,9 @@
 #include "structure_persistence.hpp"
 #include "ui_integration.hpp"
 #include "type_fixer.hpp"
+#include "optimized_algorithms.hpp"
+
+#include <vector>
 
 namespace structor {
 
@@ -873,6 +876,95 @@ inline FunctionStructureSynthesisResult StructorAPI::synthesize_function_structu
     }
 
     result.total_variables = static_cast<unsigned>(lvars->size());
+
+    const SynthOptions& options = opts ? *opts : Config::instance().options();
+    const bool can_parallel_preview =
+        mode == MaterializationMode::Preview &&
+        !options.z3.cross_function &&
+        !options.vtable_detection;
+
+    if (can_parallel_preview) {
+        struct PreviewWorkItem {
+            VariableStructureSynthesisResult entry;
+            AccessPattern pattern;
+            bool needs_layout = false;
+        };
+
+        std::vector<PreviewWorkItem> work(lvars->size());
+        AccessCollector collector(options);
+        for (size_t i = 0; i < lvars->size(); ++i) {
+            auto& item = work[i];
+            item.entry.variable = make_variable_descriptor(cfunc, static_cast<int>(i));
+            if (!item.entry.variable.valid()) {
+                item.entry.synthesis = SynthResult::make_error(
+                    SynthError::InvalidVariable,
+                    "Invalid variable index");
+                continue;
+            }
+
+            item.pattern = collector.collect(cfunc, static_cast<int>(i));
+            if (item.pattern.accesses.empty()) {
+                item.entry.synthesis = SynthResult::make_error(
+                    SynthError::NoAccessesFound,
+                    "No dereferences found for variable");
+                continue;
+            }
+
+            item.needs_layout = true;
+        }
+
+        algorithms::parallel_for_chunks(work.size(), 2, [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+                auto& item = work[i];
+                if (!item.needs_layout) {
+                    continue;
+                }
+
+                LayoutSynthesizer synthesizer(options);
+                SynthesisResult synthesis = synthesizer.synthesize(item.pattern, options);
+                const std::size_t evidence_count =
+                    synthesis_evidence_count(item.pattern, synthesis.unified_pattern);
+                if (static_cast<int>(evidence_count) < options.min_accesses) {
+                    qstring msg;
+                    msg.sprnt("Only %zu accesses found (minimum: %d)",
+                              evidence_count,
+                              options.min_accesses);
+                    item.entry.synthesis = SynthResult::make_error(
+                        SynthError::InsufficientAccesses,
+                        msg);
+                    continue;
+                }
+
+                if (synthesis.structure.fields.empty()) {
+                    item.entry.synthesis = SynthResult::make_error(
+                        SynthError::TypeCreationFailed,
+                        "Failed to synthesize structure fields");
+                    continue;
+                }
+
+                synthesis.structure.source_func = func_ea;
+                synthesis.structure.source_var = item.entry.variable.var_name;
+                item.entry.synthesis = make_result_from_synthesis(synthesis);
+            }
+        });
+
+        for (auto& item : work) {
+            ++result.attempted;
+            if (item.entry.synthesis.success()) {
+                ++result.succeeded;
+            } else if (item.entry.synthesis.error == SynthError::NoAccessesFound ||
+                       item.entry.synthesis.error == SynthError::InsufficientAccesses) {
+                ++result.skipped;
+            } else {
+                ++result.failed;
+            }
+
+            result.variables.push_back(std::move(item.entry));
+        }
+
+        return result;
+    }
+
     for (size_t i = 0; i < lvars->size(); ++i) {
         VariableStructureSynthesisResult entry;
         entry.variable = make_variable_descriptor(cfunc, static_cast<int>(i));
