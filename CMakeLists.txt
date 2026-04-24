@@ -181,11 +181,11 @@ endif()
 message(STATUS "IDA_ARCH: ${IDA_ARCH}")
 
 if(WIN32)
-    set(IDA_LIB_DIR "${IDA_SDK_DIR}/lib/x64_win_vc_64")
+    set(IDA_LIB_DIR "${IDA_SDK_DIR}/lib/${IDA_ARCH}_win_${IDA_SUFFIX}")
 elseif(APPLE)
-    set(IDA_LIB_DIR "${IDA_SDK_DIR}/lib/${IDA_ARCH}_mac_clang_64")
+    set(IDA_LIB_DIR "${IDA_SDK_DIR}/lib/${IDA_ARCH}_mac_${IDA_SUFFIX}")
 else()
-    set(IDA_LIB_DIR "${IDA_SDK_DIR}/lib/x64_linux_gcc_64")
+    set(IDA_LIB_DIR "${IDA_SDK_DIR}/lib/${IDA_ARCH}_linux_${IDA_SUFFIX}")
 endif()
 
 # Find IDA libraries - on Mac they're libida.dylib, not libida64.dylib
@@ -194,7 +194,9 @@ find_library(IDA_LIB NAMES ida libida PATHS ${IDA_LIB_DIR} NO_DEFAULT_PATH)
 # Hex-Rays doesn't ship as separate library on Mac - it's loaded dynamically
 set(HEXRAYS_LIB "")
 
-if(NOT IDA_LIB)
+if(NOT IDA_LIB AND WIN32 AND STRUCTOR_BUILD_PLUGIN)
+    message(FATAL_ERROR "IDA import library not found at ${IDA_LIB_DIR}; Windows plugin builds require ida.lib")
+elseif(NOT IDA_LIB)
     message(WARNING "IDA library not found at ${IDA_LIB_DIR}, proceeding anyway for header-only development")
 endif()
 
