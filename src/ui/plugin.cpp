@@ -820,7 +820,7 @@ static bool resolve_function_spec(const qstring& requested, ea_t& resolved_ea) {
     }
 
     char* endptr = nullptr;
-    unsigned long long parsed = std::strtoull(requested.c_str(), &endptr, 0);
+    unsigned long long parsed = strtoull(requested.c_str(), &endptr, 0);
     if (endptr && *endptr == '\0') {
         resolved_ea = static_cast<ea_t>(parsed);
         return true;
@@ -836,7 +836,7 @@ static bool resolve_global_spec(const qstring& requested, ea_t& resolved_ea) {
     }
 
     char* endptr = nullptr;
-    unsigned long long parsed = std::strtoull(requested.c_str(), &endptr, 0);
+    unsigned long long parsed = strtoull(requested.c_str(), &endptr, 0);
     if (endptr && *endptr == '\0') {
         resolved_ea = static_cast<ea_t>(parsed);
         return true;
@@ -1801,7 +1801,7 @@ StructorPlugin::StructorPlugin() {
             selector = colon + 1;
         }
 
-        unsigned long long parsed = std::strtoull(target.c_str(), &endptr, 0);
+        unsigned long long parsed = strtoull(target.c_str(), &endptr, 0);
         if (endptr && *endptr == '\0') {
             pending_synth_ea_ = static_cast<ea_t>(parsed);
         } else {

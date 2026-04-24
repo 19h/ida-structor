@@ -366,6 +366,11 @@ if(STRUCTOR_BUILD_PLUGIN)
     target_include_directories(structor${IDA_SUFFIX} PRIVATE ${IDA_INCLUDE_DIR})
     target_compile_definitions(structor${IDA_SUFFIX} PRIVATE ${STRUCTOR_PUBLIC_COMPILE_DEFINITIONS})
 
+    if(APPLE)
+        # IDA plugins resolve IDA/Hex-Rays host symbols from the loading process.
+        target_link_options(structor${IDA_SUFFIX} PRIVATE -Wl,-undefined,dynamic_lookup)
+    endif()
+
     # Set plugin output name and properties
     set_target_properties(structor${IDA_SUFFIX} PROPERTIES
         OUTPUT_NAME "structor"

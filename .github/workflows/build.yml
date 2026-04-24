@@ -37,26 +37,26 @@ jobs:
             cmake_arch: x64
             ida_branch: ""
             ida_suffix: ""
-          # IDA 9.3 beta builds
+          # IDA 9.3.1 release builds
           - os: macos-latest
             name: macos-x86_64
             cmake_arch: x86_64
-            ida_branch: releases/9.3.0-beta
-            ida_suffix: "-ida93beta"
+            ida_branch: releases/9.3.1
+            ida_suffix: "-ida931"
           - os: macos-latest
             name: macos-arm64
             cmake_arch: arm64
-            ida_branch: releases/9.3.0-beta
-            ida_suffix: "-ida93beta"
+            ida_branch: releases/9.3.1
+            ida_suffix: "-ida931"
           - os: ubuntu-latest
             name: linux-x86_64
-            ida_branch: releases/9.3.0-beta
-            ida_suffix: "-ida93beta"
+            ida_branch: releases/9.3.1
+            ida_suffix: "-ida931"
           - os: windows-latest
             name: windows-x86_64
             cmake_arch: x64
-            ida_branch: releases/9.3.0-beta
-            ida_suffix: "-ida93beta"
+            ida_branch: releases/9.3.1
+            ida_suffix: "-ida931"
 
     runs-on: ${{ matrix.os }}
     name: Build ${{ matrix.name }}${{ matrix.ida_suffix }}
