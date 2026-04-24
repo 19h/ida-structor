@@ -235,6 +235,16 @@ CONTRACT_MANIFEST = [
         ],
     },
     {
+        "fixture": "test_pointer_field_pointee",
+        "cases": [
+            function_case(
+                "use_pointer_field",
+                "use_pointer_field",
+                ["use_pointer_field"],
+            )
+        ],
+    },
+    {
         "fixture": "test_alias_lifetime",
         "cases": [
             function_case(

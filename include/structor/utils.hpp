@@ -104,9 +104,15 @@ struct PtrArithInfo {
     int         var_idx;
     sval_t      offset;
     std::uint8_t base_indirection;  // Number of deref steps before base var
+    bool        through_pointer_alias; // True when rebased through a loaded pointer field alias
     bool        valid;
 
-    PtrArithInfo() : var_idx(-1), offset(0), base_indirection(0), valid(false) {}
+    PtrArithInfo()
+        : var_idx(-1)
+        , offset(0)
+        , base_indirection(0)
+        , through_pointer_alias(false)
+        , valid(false) {}
 };
 
 [[nodiscard]] inline PtrArithInfo extract_ptr_arith(const cexpr_t* expr, int depth = 0) {

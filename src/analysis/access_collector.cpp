@@ -57,6 +57,10 @@ bool is_assignment_op(ctype_t op) {
     }
 }
 
+bool is_pointee_access(const utils::PtrArithInfo& arith) {
+    return arith.through_pointer_alias || arith.base_indirection > 1;
+}
+
 } // namespace
 
 // ============================================================================
@@ -287,11 +291,13 @@ utils::PtrArithInfo AccessPatternVisitor::resolve_ptr_arith(const cexpr_t* expr)
         return info;
     }
 
+    const FieldAccess& alias = it->second;
     info.var_idx = target_var_idx_;
-    info.offset += it->second.offset;
-    if (it->second.base_indirection.has_value()) {
+    info.offset += alias.offset;
+    if (alias.base_indirection.has_value()) {
         info.base_indirection = static_cast<std::uint8_t>(
-            std::min<int>(0xFF, info.base_indirection + *it->second.base_indirection));
+            std::min<int>(0xFF, info.base_indirection + *alias.base_indirection));
+        info.through_pointer_alias = true;
     }
     return info;
 }
@@ -615,6 +621,10 @@ void AccessPatternVisitor::process_dereference(cexpr_t* expr, const cexpr_t* ptr
         }
     }
 
+    if (!access.is_vtable_access && is_pointee_access(arith)) {
+        return;
+    }
+
     access.context_expr = utils::expr_to_string(expr, cfunc_);
     access.inferred_type = expr->type;
     access.source_func_ea = cfunc_->entry_ea;
@@ -640,6 +650,9 @@ void AccessPatternVisitor::process_memptr_access(cexpr_t* expr) {
 
     auto arith = resolve_ptr_arith(expr->x);
     if (!arith.valid || arith.var_idx != target_var_idx_) {
+        return;
+    }
+    if (is_pointee_access(arith)) {
         return;
     }
 
@@ -712,6 +725,9 @@ void AccessPatternVisitor::process_array_access(cexpr_t* expr) {
     if (expr->y->op == cot_var && stride_hint.has_value()) {
         auto it = local_index_bounds_.find(expr->y->v.idx);
         if (it != local_index_bounds_.end()) {
+            if (is_pointee_access(arith) && !function_slot_like) {
+                return;
+            }
             const std::uint32_t bound = it->second;
             for (std::uint32_t idx = 0; idx < bound; ++idx) {
                 FieldAccess bounded;
@@ -777,6 +793,9 @@ void AccessPatternVisitor::process_array_access(cexpr_t* expr) {
         access.is_vtable_access = true;
         access.vtable_slot = slot_offset / static_cast<sval_t>(*stride_hint);
         access.set_vtable_nested_access(base_offset, slot_offset, expr->type);
+    }
+    if (!access.is_vtable_access && is_pointee_access(arith)) {
+        return;
     }
     if (arith.base_indirection > 0) {
         if (!access.is_vtable_access) {
@@ -988,6 +1007,7 @@ bool AccessPatternVisitor::extract_access(const cexpr_t* expr, sval_t& offset, u
     if (expr->op == cot_ptr) {
         auto arith = resolve_ptr_arith(expr);
         if (!arith.valid || arith.var_idx != target_var_idx_) return false;
+        if (is_pointee_access(arith)) return false;
         offset = arith.offset;
         size = expr->type.empty() ? get_ptr_size() : utils::get_type_size(expr->type, get_ptr_size());
         if (base_indirection && arith.base_indirection > 0) {
@@ -999,6 +1019,7 @@ bool AccessPatternVisitor::extract_access(const cexpr_t* expr, sval_t& offset, u
     if (expr->op == cot_memptr || expr->op == cot_memref) {
         auto arith = resolve_ptr_arith(expr->x);
         if (!arith.valid || arith.var_idx != target_var_idx_) return false;
+        if (is_pointee_access(arith)) return false;
         offset = arith.offset + expr->m;
         size = expr->type.empty() ? get_ptr_size() : utils::get_type_size(expr->type, get_ptr_size());
         if (base_indirection && arith.base_indirection > 0) {
