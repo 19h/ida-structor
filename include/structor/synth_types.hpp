@@ -47,7 +47,10 @@ inline constexpr const char* PLUGIN_VERSION = "1.0.0";
 inline constexpr const char* PLUGIN_AUTHOR = "Structor Authors";
 inline constexpr const char* ACTION_NAME = "synth:synthesize_structure";
 inline constexpr const char* ACTION_LABEL = "Synthesize Structure";
+inline constexpr const char* MATCH_ACTION_NAME = "synth:match_existing_structure";
+inline constexpr const char* MATCH_ACTION_LABEL = "Match Existing Structure...";
 inline constexpr const char* DEFAULT_HOTKEY = "Shift+S";
+inline constexpr const char* DEFAULT_MATCH_HOTKEY = "Ctrl+Shift+S";
 
 inline constexpr std::size_t MAX_STRUCT_SIZE = 0x100000;  // 1MB max structure size
 inline constexpr std::size_t MAX_VTABLE_SLOTS = 512;

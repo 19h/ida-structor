@@ -277,6 +277,7 @@ set(STRUCTOR_CORE_SOURCES
     src/synthesis/naming.cpp
     src/synthesis/layout_synthesizer.cpp
     src/synthesis/structure_persistence.cpp
+    src/synthesis/type_matcher.cpp
     src/synthesis/type_propagator.cpp
     
     # Rewriter module
@@ -305,6 +306,7 @@ set(STRUCTOR_CORE_HEADERS
     include/structor/vtable_detector.hpp
     include/structor/global_object_analyzer.hpp
     include/structor/type_propagator.hpp
+    include/structor/type_matcher.hpp
     include/structor/pseudocode_rewriter.hpp
     include/structor/structure_persistence.hpp
     include/structor/ui_integration.hpp

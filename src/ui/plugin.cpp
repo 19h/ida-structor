@@ -1728,6 +1728,7 @@ private:
     void run_pending_auto_synth();
 
     SynthActionHandler action_handler_;  // Owned by plugin, passed to IDA
+    MatchExistingActionHandler match_action_handler_;
     HostIntegration host_integration_;
     bool initialized_ = false;
     bool cleaned_up_ = false;
@@ -1762,7 +1763,7 @@ StructorPlugin::StructorPlugin() {
     }
 
     // Initialize UI - pass our action handler which we own
-    if (ui::initialize(&action_handler_)) {
+    if (ui::initialize(&action_handler_, &match_action_handler_)) {
         initialized_ = true;
         msg("Structor %s: Plugin initialized (hotkey: %s)\n",
             PLUGIN_VERSION, Config::instance().hotkey());
