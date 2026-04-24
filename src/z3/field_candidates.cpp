@@ -915,46 +915,58 @@ qvector<FieldCandidate> FieldCandidateGenerator::generate(
     }
 
     // Step 5: Prune candidates dominated by richer struct-array candidates.
+    // Dominance checks are pure candidate-shape comparisons, so split the
+    // expensive O(n^2) scan across workers without touching IDA or Z3 state.
+    std::vector<uint8_t> dominated_flags(candidates.size(), 0);
+    algorithms::parallel_for_chunks(candidates.size(), 128, [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            bool dominated = false;
+
+            if (candidates[i].kind == FieldCandidate::Kind::DirectAccess) {
+                for (size_t j = 0; j < candidates.size(); ++j) {
+                    if (i == j) {
+                        continue;
+                    }
+                    const auto& other = candidates[j];
+                    if (other.kind == FieldCandidate::Kind::ArrayField &&
+                        other.type_category == TypeCategory::Struct &&
+                        other.offset == candidates[i].offset &&
+                        other.end_offset() >= candidates[i].end_offset()) {
+                        dominated = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!dominated) {
+                for (size_t j = 0; j < candidates.size(); ++j) {
+                    if (i == j) {
+                        continue;
+                    }
+                    if (is_dominated_by_struct_array(candidates[j], candidates[i])) {
+                        dominated = true;
+                        break;
+                    }
+                    if (candidates[i].kind == FieldCandidate::Kind::ArrayField &&
+                        candidates[i].type_category != TypeCategory::Struct &&
+                        candidates[j].kind == FieldCandidate::Kind::ArrayField &&
+                        candidates[j].type_category == TypeCategory::Struct &&
+                        candidates[j].offset > candidates[i].offset &&
+                        candidates[j].offset < candidates[i].end_offset()) {
+                        dominated = true;
+                        break;
+                    }
+                }
+            }
+
+            dominated_flags[i] = dominated ? 1 : 0;
+        }
+    });
+
     qvector<FieldCandidate> pruned;
     pruned.reserve(candidates.size());
     for (size_t i = 0; i < candidates.size(); ++i) {
-        bool dominated = false;
-
-        if (candidates[i].kind == FieldCandidate::Kind::DirectAccess) {
-            for (size_t j = 0; j < candidates.size(); ++j) {
-                if (i == j) {
-                    continue;
-                }
-                const auto& other = candidates[j];
-                if (other.kind == FieldCandidate::Kind::ArrayField &&
-                    other.type_category == TypeCategory::Struct &&
-                    other.offset == candidates[i].offset &&
-                    other.end_offset() >= candidates[i].end_offset()) {
-                    dominated = true;
-                    break;
-                }
-            }
-        }
-
-        for (size_t j = 0; j < candidates.size(); ++j) {
-            if (i == j) {
-                continue;
-            }
-            if (is_dominated_by_struct_array(candidates[j], candidates[i])) {
-                dominated = true;
-                break;
-            }
-            if (candidates[i].kind == FieldCandidate::Kind::ArrayField &&
-                candidates[i].type_category != TypeCategory::Struct &&
-                candidates[j].kind == FieldCandidate::Kind::ArrayField &&
-                candidates[j].type_category == TypeCategory::Struct &&
-                candidates[j].offset > candidates[i].offset &&
-                candidates[j].offset < candidates[i].end_offset()) {
-                dominated = true;
-                break;
-            }
-        }
-        if (!dominated) {
+        if (dominated_flags[i] == 0) {
             pruned.push_back(std::move(candidates[i]));
         }
     }

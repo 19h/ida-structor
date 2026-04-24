@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(structor VERSION 1.0.0 LANGUAGES CXX)
 
+find_package(Threads REQUIRED)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -332,6 +334,8 @@ target_compile_definitions(structor_core PUBLIC ${STRUCTOR_PUBLIC_COMPILE_DEFINI
 if(IDA_LIB)
     target_link_libraries(structor_core PUBLIC ${IDA_LIB})
 endif()
+
+target_link_libraries(structor_core PUBLIC Threads::Threads)
 
 if(HEXRAYS_LIB)
     target_link_libraries(structor_core PUBLIC ${HEXRAYS_LIB})

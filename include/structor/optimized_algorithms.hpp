@@ -15,11 +15,67 @@
 #include "structor/simd.hpp"
 #include "structor/optimized_containers.hpp"
 #include <algorithm>
+#include <future>
+#include <thread>
 #include <vector>
 #include <cstdint>
 
 namespace structor {
 namespace algorithms {
+
+inline size_t default_parallel_worker_count(
+    size_t item_count,
+    size_t min_items_per_worker = 256) noexcept
+{
+    min_items_per_worker = std::max<size_t>(1, min_items_per_worker);
+
+    if (item_count < min_items_per_worker * 2) {
+        return 1;
+    }
+
+    unsigned hw_threads = std::thread::hardware_concurrency();
+    if (hw_threads == 0) {
+        hw_threads = 2;
+    }
+
+    const size_t useful_threads =
+        (item_count + min_items_per_worker - 1) / min_items_per_worker;
+    return std::max<size_t>(1, std::min<size_t>(hw_threads, useful_threads));
+}
+
+template<typename Fn>
+void parallel_for_chunks(
+    size_t item_count,
+    size_t min_items_per_worker,
+    Fn&& fn)
+{
+    const size_t workers = default_parallel_worker_count(item_count, min_items_per_worker);
+    if (workers <= 1) {
+        fn(size_t{0}, item_count);
+        return;
+    }
+
+    const size_t chunk_size = (item_count + workers - 1) / workers;
+    std::vector<std::future<void>> tasks;
+    tasks.reserve(workers - 1);
+
+    size_t start = 0;
+    for (size_t worker = 0; worker + 1 < workers && start < item_count; ++worker) {
+        const size_t end = std::min(start + chunk_size, item_count);
+        tasks.push_back(std::async(std::launch::async, [&fn, start, end]() {
+            fn(start, end);
+        }));
+        start = end;
+    }
+
+    if (start < item_count) {
+        fn(start, item_count);
+    }
+
+    for (auto& task : tasks) {
+        task.get();
+    }
+}
 
 // ============================================================================
 // SIMD-Accelerated GCD Computation

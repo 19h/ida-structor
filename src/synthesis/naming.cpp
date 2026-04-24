@@ -11,7 +11,9 @@
 
 #include <array>
 #include <cctype>
+#include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace structor {
@@ -975,10 +977,10 @@ void apply_role_based_field_names(SynthStruct& structure) {
 void disambiguate_repeated_field_names(SynthStruct& structure) {
     if (structure.fields.empty()) return;
 
-    std::unordered_map<qstring, qvector<size_t>> name_groups;
+    std::unordered_map<std::string, qvector<size_t>> name_groups;
     for (size_t i = 0; i < structure.fields.size(); ++i) {
         if (!structure.fields[i].is_padding && !structure.fields[i].name.empty()) {
-            name_groups[structure.fields[i].name].push_back(i);
+            name_groups[structure.fields[i].name.c_str()].push_back(i);
         }
     }
 

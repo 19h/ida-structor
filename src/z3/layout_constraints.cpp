@@ -426,6 +426,98 @@ void LayoutConstraintBuilder::add_coverage_constraints() {
     // Pre-compute candidate bounds for faster coverage checking
     const size_t num_candidates = candidates_.size();
     const size_t num_accesses = pattern_->all_accesses.size();
+    std::vector<TypeCategory> access_categories(num_accesses, TypeCategory::Unknown);
+    for (size_t i = 0; i < num_accesses; ++i) {
+        const auto& access = pattern_->all_accesses[i];
+        if (!access.inferred_type.empty()) {
+            access_categories[i] = ctx_.type_encoder().categorize(access.inferred_type);
+        } else {
+            access_categories[i] = semantic_to_category(static_cast<int>(access.semantic_type));
+        }
+    }
+
+    std::vector<uint8_t> redundant_accesses(num_accesses, 0);
+    for (size_t i = 0; i < num_accesses; ++i) {
+        redundant_accesses[i] = is_redundant_aggregate_access(pattern_, pattern_->all_accesses[i]) ? 1 : 0;
+    }
+
+    std::vector<std::vector<int32_t>> coverage_map(num_accesses);
+    const auto is_padding_like_candidate = [](const FieldCandidate& cand) {
+        return cand.kind == FieldCandidate::Kind::PaddingField ||
+               cand.type_category == TypeCategory::RawBytes;
+    };
+
+    auto covers_by_shape = [&](const FieldCandidate& cand,
+                               const FieldAccess& access,
+                               TypeCategory access_cat) {
+        if ((cand.type_category == TypeCategory::Array ||
+             cand.type_category == TypeCategory::Struct ||
+             cand.type_category == TypeCategory::Union) &&
+            cand.kind == FieldCandidate::Kind::DirectAccess) {
+            return cand.offset == access.offset && cand.size == access.size;
+        }
+
+        if ((cand.kind == FieldCandidate::Kind::DirectAccess ||
+             cand.kind == FieldCandidate::Kind::UnionAlternative) &&
+            cand.offset == access.offset && cand.size == access.size &&
+            cand.type_category != TypeCategory::RawBytes) {
+            if (access_cat != TypeCategory::Unknown && access_cat != TypeCategory::RawBytes &&
+                access_cat != cand.type_category &&
+                !types_compatible(cand.type_category, access_cat)) {
+                return false;
+            }
+        }
+
+        return cand.offset <= access.offset &&
+               cand.offset + static_cast<sval_t>(cand.size) >=
+               access.offset + static_cast<sval_t>(access.size);
+    };
+
+    auto candidate_covers_access_fast = [&](const FieldCandidate& candidate,
+                                            const FieldAccess& access,
+                                            TypeCategory access_cat) {
+        if (!covers_by_shape(candidate, access, access_cat)) {
+            return false;
+        }
+
+        const bool has_non_padding_evidence =
+            access.access_type == AccessType::Call ||
+            access.access_type == AccessType::AddressTaken ||
+            access.is_call_argument;
+
+        if (!has_non_padding_evidence || !is_padding_like_candidate(candidate)) {
+            return true;
+        }
+
+        for (const auto& other : candidates_) {
+            if (is_padding_like_candidate(other)) {
+                continue;
+            }
+            if (covers_by_shape(other, access, access_cat)) {
+                return false;
+            }
+        }
+
+        return true;
+    };
+    algorithms::parallel_for_chunks(num_accesses, 32, [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            if (redundant_accesses[i] != 0) {
+                continue;
+            }
+
+            const auto& access = pattern_->all_accesses[i];
+            auto& covering = coverage_map[i];
+            covering.reserve(std::min<size_t>(num_candidates, 16));
+
+            for (size_t j = 0; j < num_candidates; ++j) {
+                const auto& cand = candidates_[field_vars_[j].candidate_id];
+                if (candidate_covers_access_fast(cand, access, access_categories[i])) {
+                    covering.push_back(static_cast<int32_t>(j));
+                }
+            }
+        }
+    });
     
     // Prefetch candidate data
     if (num_candidates > 0) {
@@ -436,29 +528,14 @@ void LayoutConstraintBuilder::add_coverage_constraints() {
     for (size_t i = 0; i < num_accesses; ++i) {
         const auto& access = pattern_->all_accesses[i];
 
-        if (is_redundant_aggregate_access(pattern_, access)) {
+        if (redundant_accesses[i] != 0) {
             continue;
-        }
-        
-        // Prefetch next access
-        if (STRUCTOR_LIKELY(i + 2 < num_accesses)) {
-            STRUCTOR_PREFETCH_READ(&pattern_->all_accesses[i + 2]);
         }
 
         // Build: OR of all candidates that cover this access
         ::z3::expr_vector covering(ctx);
-
-        for (size_t j = 0; j < num_candidates; ++j) {
-            // Prefetch next candidate
-            if (STRUCTOR_LIKELY(j + 4 < num_candidates)) {
-                STRUCTOR_PREFETCH_READ(&candidates_[j + 4]);
-            }
-            
-            const auto& cand = candidates_[field_vars_[j].candidate_id];
-
-            if (candidate_covers_access(cand, access)) {
-                covering.push_back(field_vars_[j].selected);
-            }
+        for (int32_t candidate_idx : coverage_map[i]) {
+            covering.push_back(field_vars_[static_cast<size_t>(candidate_idx)].selected);
         }
 
         if (covering.empty()) {
