@@ -141,7 +141,9 @@ void HostIntegration::process_decompilation_complete(cfunc_t* cfunc) {
 
     TypeFixerConfig fix_config;
     fix_config.dry_run = false;
-    fix_config.synthesize_structures = true;
+    // Function-entry type fixing must not create Local Types. Manual synthesis
+    // remains responsible for creating or updating recovered structures.
+    fix_config.synthesize_structures = false;
     fix_config.propagate_fixes = Config::instance().options().auto_propagate;
     fix_config.max_propagation_depth = Config::instance().options().max_propagation_depth;
     fix_config.collect_missing_argument_warnings = false;

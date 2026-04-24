@@ -387,6 +387,29 @@ tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
     constexpr double kReuseThreshold = 0.85;
     const bool allow_reuse = synth_struct.naming.origin != NameOrigin::HeuristicRole;
 
+    qstring name = synth_struct.name;
+    const bool existing_generated_target =
+        !name.empty() &&
+        struct_exists(name.c_str()) &&
+        is_generated_name(name, &synth_struct.naming);
+
+    if (synth_struct.has_vtable()) {
+        tid_t vtbl_tid = create_vtable(*synth_struct.vtable);
+        if (vtbl_tid != BADADDR) {
+            synth_struct.vtable->tid = vtbl_tid;
+            apply_vtable_pointer_type(synth_struct);
+        }
+    }
+
+    if (existing_generated_target) {
+        tid_t existing_tid = get_named_type_tid(name.c_str());
+        if (existing_tid != BADADDR && update_struct(existing_tid, synth_struct)) {
+            synth_struct.name = name;
+            synth_struct.tid = existing_tid;
+            return existing_tid;
+        }
+    }
+
     if (allow_reuse &&
         !synth_has_nontrivial_unions(synth_struct) &&
         !synth_struct.fields.empty() && synth_struct.size > 0) {
@@ -414,31 +437,16 @@ tid_t StructurePersistence::create_struct(SynthStruct& synth_struct) {
                     set_provenance(reuse_tid, merged);
                 }
 
-                if (synth_struct.has_vtable()) {
-                    tid_t vtbl_tid = create_vtable(*synth_struct.vtable);
-                    if (vtbl_tid != BADADDR) {
-                        synth_struct.vtable->tid = vtbl_tid;
-                    }
-                }
-
                 return reuse_tid;
             }
         }
     }
 
     // Generate unique name if needed
-    qstring name = synth_struct.name;
+    name = synth_struct.name;
     if (struct_exists(name.c_str())) {
         name = make_unique_name(name.c_str());
         synth_struct.name = name;
-    }
-
-    if (synth_struct.has_vtable()) {
-        tid_t vtbl_tid = create_vtable(*synth_struct.vtable);
-        if (vtbl_tid != BADADDR) {
-            synth_struct.vtable->tid = vtbl_tid;
-            apply_vtable_pointer_type(synth_struct);
-        }
     }
 
     // Create the structure type
@@ -643,7 +651,7 @@ tid_t StructurePersistence::create_struct_with_substructs(
 
 tid_t StructurePersistence::create_vtable(SynthVTable& vtable) {
     qstring name = vtable.name;
-    if (struct_exists(name.c_str())) {
+    if (struct_exists(name.c_str()) && !is_generated_name(name, &vtable.naming)) {
         name = make_unique_name(name.c_str());
         vtable.name = name;
     }
@@ -766,6 +774,10 @@ bool StructurePersistence::update_struct(tid_t tid, const SynthStruct& synth_str
             }
         }
 
+        if (!field.comment.empty()) {
+            udm.cmt = field.comment;
+        }
+
         udt.push_back(udm);
     }
 
@@ -782,8 +794,13 @@ bool StructurePersistence::update_struct(tid_t tid, const SynthStruct& synth_str
         return false;
     }
 
-    // Update provenance
-    set_provenance(tid, synth_struct.provenance);
+    qvector<ea_t> merged = get_provenance(tid);
+    for (ea_t ea : synth_struct.provenance) {
+        if (std::find(merged.begin(), merged.end(), ea) == merged.end()) {
+            merged.push_back(ea);
+        }
+    }
+    set_provenance(tid, merged);
     return true;
 }
 
@@ -939,7 +956,7 @@ tid_t StructurePersistence::create_union(
     const bool overlay_union = union_has_relative_members(members);
 
     qstring union_name = overlay_union ? make_internal_overlay_type_name(name) : name;
-    if (struct_exists(union_name.c_str())) {
+    if (struct_exists(union_name.c_str()) && !is_generated_name(union_name)) {
         union_name = make_unique_union_name(union_name.c_str());
     }
 
@@ -1249,9 +1266,9 @@ tinfo_t StructurePersistence::materialize_nested_type(
             atd.elem_type.get_type_name(&elem_name);
             if (elem_name.empty() || atd.elem_type.is_anonymous_udt()) {
                 qstring nested_name = make_array_element_type_name(parent_name,
-                                                                   field.name,
-                                                                   field.offset);
-                if (struct_exists(nested_name.c_str())) {
+                                                                    field.name,
+                                                                    field.offset);
+                if (struct_exists(nested_name.c_str()) && !is_generated_name(nested_name)) {
                     nested_name = make_unique_name(nested_name.c_str());
                 }
 

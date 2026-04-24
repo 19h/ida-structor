@@ -593,46 +593,6 @@ inline void populate_z3_info_from_synthesis(SynthResult& dst, const SynthesisRes
     return local_pattern.access_count();
 }
 
-[[nodiscard]] inline bool try_reuse_generated_struct(cfunc_t* cfunc, int var_idx, SynthResult& result) {
-    if (!cfunc) {
-        return false;
-    }
-
-    lvars_t* lvars = cfunc->get_lvars();
-    if (!lvars || var_idx < 0 || static_cast<size_t>(var_idx) >= lvars->size()) {
-        return false;
-    }
-
-    const lvar_t& var = lvars->at(static_cast<size_t>(var_idx));
-    tinfo_t current_type = var.type();
-    tinfo_t current_struct = current_type;
-    if (current_struct.is_ptr()) {
-        current_struct = current_struct.get_pointed_object();
-    }
-
-    qstring current_name;
-    current_struct.get_type_name(&current_name);
-    qstring current_decl;
-    current_type.print(&current_decl);
-    if ((!current_name.empty() && (current_name.find("synth_struct_") == 0 || current_name.find("auto_") == 0)) ||
-        (!current_decl.empty() &&
-         (current_decl.find("synth_struct_") != qstring::npos || current_decl.find("auto_") != qstring::npos))) {
-        tid_t existing_tid = current_struct.get_tid();
-        if (existing_tid != BADADDR) {
-            result.struct_tid = existing_tid;
-            result.error = SynthError::Success;
-
-            udt_type_data_t udt;
-            if (current_struct.get_udt_details(&udt)) {
-                result.fields_created = static_cast<int>(udt.size());
-            }
-            return true;
-        }
-    }
-
-    return false;
-}
-
 inline SynthResult StructorAPI::synthesize_structure(
     ea_t func_ea,
     lvar_t* var,
@@ -1638,10 +1598,6 @@ inline SynthResult StructorAPI::do_synthesis(
     cfuncptr_t cfunc = utils::get_cfunc(func_ea);
     if (!cfunc) {
         return SynthResult::make_error(SynthError::InternalError, "Failed to decompile function");
-    }
-
-    if (try_reuse_generated_struct(cfunc, var_idx, result)) {
-        return result;
     }
 
     AccessCollector collector(opts);
