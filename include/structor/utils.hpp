@@ -5,6 +5,14 @@
 namespace structor {
 namespace utils {
 
+[[nodiscard]] inline bool is_call_xref(int type) noexcept {
+    return type == fl_CN || type == fl_CF;
+}
+
+[[nodiscard]] inline bool is_tailcall_xref(int type) noexcept {
+    return type == fl_JN || type == fl_JF;
+}
+
 // ============================================================================
 // Hex-Rays Utilities
 // ============================================================================
@@ -368,14 +376,16 @@ struct PtrArithInfo {
     qvector<ea_t> callers;
 
     xrefblk_t xref;
-    for (bool ok = xref.first_to(func_ea, XREF_FAR); ok; ok = xref.next_to()) {
-        if (xref.iscode && (xref.type == fl_CN || xref.type == fl_CF)) {
-            func_t* caller_func = get_func(xref.from);
-            if (caller_func) {
-                ea_t caller_ea = caller_func->start_ea;
-                if (std::find(callers.begin(), callers.end(), caller_ea) == callers.end()) {
-                    callers.push_back(caller_ea);
-                }
+    for (bool ok = xref.first_to(func_ea, XREF_ALL); ok; ok = xref.next_to()) {
+        if (!xref.iscode || !(is_call_xref(xref.type) || is_tailcall_xref(xref.type))) {
+            continue;
+        }
+
+        func_t* caller_func = get_func(xref.from);
+        if (caller_func) {
+            ea_t caller_ea = caller_func->start_ea;
+            if (std::find(callers.begin(), callers.end(), caller_ea) == callers.end()) {
+                callers.push_back(caller_ea);
             }
         }
     }
@@ -395,11 +405,23 @@ struct PtrArithInfo {
         ea_t ea = fii.current();
 
         xrefblk_t xref;
-        for (bool xok = xref.first_from(ea, XREF_FAR); xok; xok = xref.next_from()) {
-            if (xref.iscode && (xref.type == fl_CN || xref.type == fl_CF)) {
-                if (std::find(callees.begin(), callees.end(), xref.to) == callees.end()) {
-                    callees.push_back(xref.to);
-                }
+        for (bool xok = xref.first_from(ea, XREF_ALL); xok; xok = xref.next_from()) {
+            if (!xref.iscode || !(is_call_xref(xref.type) || is_tailcall_xref(xref.type))) {
+                continue;
+            }
+
+            func_t* target_func = get_func(xref.to);
+            if (!target_func) {
+                continue;
+            }
+
+            ea_t callee_ea = target_func->start_ea;
+            if (callee_ea == func_ea) {
+                continue;
+            }
+
+            if (std::find(callees.begin(), callees.end(), callee_ea) == callees.end()) {
+                callees.push_back(callee_ea);
             }
         }
     }

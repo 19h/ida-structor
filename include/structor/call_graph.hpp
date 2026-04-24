@@ -16,6 +16,14 @@ namespace structor {
 /// Utilities for call graph traversal
 namespace call_graph {
 
+[[nodiscard]] inline bool is_call_xref(int type) noexcept {
+    return type == fl_CF || type == fl_CN;
+}
+
+[[nodiscard]] inline bool is_tailcall_xref(int type) noexcept {
+    return type == fl_JF || type == fl_JN;
+}
+
 /// Get all functions that call the given function
 [[nodiscard]] inline qvector<ea_t> get_callers(ea_t func_ea) {
     qvector<ea_t> result;
@@ -23,8 +31,8 @@ namespace call_graph {
 
     xrefblk_t xref;
     for (bool ok = xref.first_to(func_ea, XREF_ALL); ok; ok = xref.next_to()) {
-        // Only process call references
-        if (xref.type != fl_CF && xref.type != fl_CN) {
+        // Process calls and external jump xrefs used for tail calls.
+        if (!xref.iscode || !(is_call_xref(xref.type) || is_tailcall_xref(xref.type))) {
             continue;
         }
 
@@ -62,14 +70,15 @@ namespace call_graph {
         // Check for call instructions
         xrefblk_t xref;
         for (bool ok = xref.first_from(ea, XREF_ALL); ok; ok = xref.next_from()) {
-            if (xref.type != fl_CF && xref.type != fl_CN) {
+            if (!xref.iscode || !(is_call_xref(xref.type) || is_tailcall_xref(xref.type))) {
                 continue;
             }
 
             ea_t target = xref.to;
             func_t* target_func = get_func(target);
 
-            if (target_func && seen.insert(target_func->start_ea).second) {
+            if (target_func && target_func->start_ea != func_ea &&
+                seen.insert(target_func->start_ea).second) {
                 result.push_back(target_func->start_ea);
             }
         }
@@ -105,15 +114,18 @@ struct CallSiteInfo {
         // Check if this is a call instruction
         xrefblk_t xref;
         for (bool ok = xref.first_from(ea, XREF_ALL); ok; ok = xref.next_from()) {
-            if (xref.type != fl_CF && xref.type != fl_CN) {
+            if (!xref.iscode || !(is_call_xref(xref.type) || is_tailcall_xref(xref.type))) {
+                continue;
+            }
+
+            func_t* target = get_func(xref.to);
+            if (is_tailcall_xref(xref.type) && (!target || target->start_ea == func_ea)) {
                 continue;
             }
 
             CallSiteInfo info;
             info.call_ea = ea;
-            info.is_direct = (xref.type == fl_CF);  // fl_CF = direct call
-
-            func_t* target = get_func(xref.to);
+            info.is_direct = (xref.type == fl_CF || xref.type == fl_JF);
             info.callee_ea = target ? target->start_ea : BADADDR;
             info.arg_count = -1;  // Unknown
 

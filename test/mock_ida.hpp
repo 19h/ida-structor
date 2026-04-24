@@ -650,8 +650,11 @@ struct xrefblk_t {
 };
 
 constexpr int XREF_FAR = 0;
+constexpr int XREF_ALL = 0;
 constexpr int fl_CN = 1;
 constexpr int fl_CF = 2;
+constexpr int fl_JN = 3;
+constexpr int fl_JF = 4;
 
 // func_item_iterator
 struct func_item_iterator_t {

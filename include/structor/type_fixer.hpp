@@ -722,7 +722,7 @@ struct RegisterHandoffSummary {
 
     xrefblk_t xref;
     for (bool ok = xref.first_to(callee_cfunc->entry_ea, XREF_ALL); ok; ok = xref.next_to()) {
-        if (!xref.iscode || (xref.type != fl_CF && xref.type != fl_CN)) {
+        if (!xref.iscode || !(utils::is_call_xref(xref.type) || utils::is_tailcall_xref(xref.type))) {
             continue;
         }
 

@@ -670,8 +670,8 @@ qvector<CallerCallInfo> CallerFinder::find_callers() {
     // Find all cross-references to this function
     xrefblk_t xref;
     for (bool ok = xref.first_to(target_func_, XREF_ALL); ok; ok = xref.next_to()) {
-        if (xref.type != fl_CF && xref.type != fl_CN) {
-            continue;  // Not a call reference
+        if (!xref.iscode || !(utils::is_call_xref(xref.type) || utils::is_tailcall_xref(xref.type))) {
+            continue;  // Not a call or tail-call reference
         }
 
         ea_t call_site = xref.from;
