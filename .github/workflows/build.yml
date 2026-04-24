@@ -101,8 +101,16 @@ jobs:
             brew install ccache
           fi
 
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install ccache ninja -y --no-progress
+          "C:\ProgramData\chocolatey\bin" >> $env:GITHUB_PATH
+          ccache --version
+          ninja --version
+
       - name: Cache ccache
-        if: runner.os != 'Windows'
         uses: actions/cache@v4
         with:
           path: ~/.ccache
@@ -117,6 +125,15 @@ jobs:
           echo "CCACHE_BASEDIR=${{ github.workspace }}" >> $GITHUB_ENV
           echo "CCACHE_COMPRESS=true" >> $GITHUB_ENV
           echo "CCACHE_MAXSIZE=1G" >> $GITHUB_ENV
+
+      - name: Set ccache environment (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "CCACHE_DIR=$env:USERPROFILE\.ccache" >> $env:GITHUB_ENV
+          "CCACHE_BASEDIR=${{ github.workspace }}" >> $env:GITHUB_ENV
+          "CCACHE_COMPRESS=true" >> $env:GITHUB_ENV
+          "CCACHE_MAXSIZE=1G" >> $env:GITHUB_ENV
 
       - name: Configure CMake (macOS)
         if: runner.os == 'macOS'
@@ -149,7 +166,12 @@ jobs:
         run: |
           mkdir build -Force
           cd build
-          cmake .. -G "Visual Studio 17 2022" -A ${{ matrix.cmake_arch }} "-DIDA_SDK_DIR=${{ github.workspace }}/ida-sdk/src"
+          ccache --zero-stats
+          cmake .. -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache `
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache `
+            "-DIDA_SDK_DIR=${{ github.workspace }}/ida-sdk/src"
 
       - name: Build (Unix)
         if: runner.os != 'Windows'
@@ -157,9 +179,15 @@ jobs:
           cd build
           cmake --build . --config Release -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
-      - name: Show ccache stats
+      - name: Show ccache stats (Unix)
         if: runner.os != 'Windows'
         run: ccache --show-stats || true
+
+      - name: Show ccache stats (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ccache --show-stats
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
