@@ -2,25 +2,34 @@ cmake_minimum_required(VERSION 3.20)
 project(structor VERSION 1.0.0 LANGUAGES CXX)
 
 find_package(Threads REQUIRED)
+include(FetchContent)
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL
+    "Do not re-check FetchContent remotes on every build" FORCE)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# Build type
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
 
 # ============================================================================
 # Z3 Theorem Prover Integration
 # ============================================================================
 
-# Allow specifying custom Z3 location
-option(Z3_USE_CUSTOM "Use custom Z3 library instead of system" OFF)
+# Allow specifying custom Z3 location. By default, Structor builds and links a
+# static bundled Z3 so plugin artifacts do not depend on a sidecar libz3.
+option(Z3_USE_CUSTOM "Use custom Z3 library instead of bundled static Z3" OFF)
 set(Z3_CUSTOM_INCLUDE_DIR "" CACHE PATH "Custom Z3 include directory")
 set(Z3_CUSTOM_LIBRARY "" CACHE FILEPATH "Custom Z3 library path")
 set(Z3_CUSTOM_IMPLIB "" CACHE FILEPATH "Custom Z3 import library path (Windows only)")
 
 if(Z3_USE_CUSTOM AND Z3_CUSTOM_INCLUDE_DIR AND Z3_CUSTOM_LIBRARY)
     message(STATUS "Using custom Z3: ${Z3_CUSTOM_LIBRARY}")
-    set(Z3_USE_SYSTEM TRUE)
     set(Z3_CUSTOM TRUE)
 
     # Create imported target for custom Z3
@@ -59,28 +68,26 @@ if(Z3_USE_CUSTOM AND Z3_CUSTOM_INCLUDE_DIR AND Z3_CUSTOM_LIBRARY)
             INTERFACE_INCLUDE_DIRECTORIES "${Z3_CUSTOM_INCLUDE_DIR}"
         )
     endif()
-else()
-    # Try to find system Z3 first (much faster than building from source)
-    find_package(Z3 CONFIG QUIET)
 
-    if(Z3_FOUND)
-        message(STATUS "Found system Z3: ${Z3_VERSION}")
-        set(Z3_USE_SYSTEM TRUE)
-        set(Z3_CUSTOM FALSE)
-    else()
-    message(STATUS "System Z3 not found, building from source (this takes 15+ minutes)...")
-    include(FetchContent)
+    add_library(structor_z3 INTERFACE)
+    target_link_libraries(structor_z3 INTERFACE z3_custom)
+    target_include_directories(structor_z3 INTERFACE "${Z3_CUSTOM_INCLUDE_DIR}")
+    set(STRUCTOR_Z3_INCLUDE_DIRS "${Z3_CUSTOM_INCLUDE_DIR}")
+else()
+    set(Z3_CUSTOM FALSE)
+    message(STATUS "Building bundled static Z3 from source")
 
     # Z3 Theorem Prover - use release tag for reproducibility
     FetchContent_Declare(
         z3
         GIT_REPOSITORY https://github.com/Z3Prover/z3.git
-        GIT_TAG        z3-4.13.0
+        GIT_TAG        z3-4.15.4
         GIT_SHALLOW    TRUE
     )
 
-    # Z3 build options - disable unnecessary components for faster builds
+    # Z3 build options - produce a static library that is linked into Structor.
     set(Z3_BUILD_LIBZ3_SHARED OFF CACHE BOOL "" FORCE)
+    set(Z3_BUILD_LIBZ3_MSVC_STATIC ON CACHE BOOL "" FORCE)
     set(Z3_BUILD_EXECUTABLE OFF CACHE BOOL "" FORCE)
     set(Z3_BUILD_TEST_EXECUTABLES OFF CACHE BOOL "" FORCE)
     set(Z3_ENABLE_EXAMPLE_TARGETS OFF CACHE BOOL "" FORCE)
@@ -88,11 +95,26 @@ else()
     set(Z3_BUILD_JAVA_BINDINGS OFF CACHE BOOL "" FORCE)
     set(Z3_BUILD_PYTHON_BINDINGS OFF CACHE BOOL "" FORCE)
     set(Z3_BUILD_DOTNET_BINDINGS OFF CACHE BOOL "" FORCE)
+    set(WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
 
-        FetchContent_MakeAvailable(z3)
-        set(Z3_USE_SYSTEM FALSE)
-        set(Z3_CUSTOM FALSE)
+    FetchContent_MakeAvailable(z3)
+
+    if(NOT TARGET libz3)
+        message(FATAL_ERROR "Expected bundled Z3 target 'libz3' was not created")
     endif()
+
+    if(MSVC)
+        target_compile_options(libz3 PRIVATE $<$<CONFIG:Release>:/O2>)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(libz3 PRIVATE $<$<CONFIG:Release>:-O3>)
+    endif()
+
+    add_library(structor_z3 ALIAS libz3)
+    set(STRUCTOR_Z3_INCLUDE_DIRS
+        "${z3_SOURCE_DIR}/src/api"
+        "${z3_SOURCE_DIR}/src/api/c++"
+        "${z3_BINARY_DIR}/src/api"
+    )
 endif()
 
 # Verify exceptions are enabled (required for Z3 C++ API)
@@ -105,11 +127,6 @@ if(APPLE)
     if(NOT CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "")
         set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version" FORCE)
     endif()
-endif()
-
-# Build type
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
 endif()
 
 option(STRUCTOR_BUILD_PLUGIN "Build the standalone Structor IDA plugin wrapper" ON)
@@ -329,6 +346,7 @@ target_include_directories(structor_core
     PUBLIC
         ${PROJECT_SOURCE_DIR}/include
         ${IDA_INCLUDE_DIR}
+        ${STRUCTOR_Z3_INCLUDE_DIRS}
 )
 
 target_compile_definitions(structor_core PUBLIC ${STRUCTOR_PUBLIC_COMPILE_DEFINITIONS})
@@ -343,20 +361,9 @@ if(HEXRAYS_LIB)
     target_link_libraries(structor_core PUBLIC ${HEXRAYS_LIB})
 endif()
 
-# Link Z3 to structor core
-if(Z3_CUSTOM)
-    target_link_libraries(structor_core PUBLIC z3_custom)
-elseif(Z3_USE_SYSTEM)
-    target_link_libraries(structor_core PUBLIC z3::libz3)
-    # System Z3 includes are handled by the imported target
-else()
-    target_link_libraries(structor_core PUBLIC libz3)
-    target_include_directories(structor_core PRIVATE
-        ${z3_SOURCE_DIR}/src/api      # C API headers (z3.h)
-        ${z3_SOURCE_DIR}/src/api/c++  # C++ API headers (z3++.h)
-        ${z3_BINARY_DIR}/src/api      # Generated headers
-    )
-endif()
+# Link Z3 into the actual Structor libraries/plugins instead of shipping it as
+# a separate runtime dependency.
+target_link_libraries(structor_core PUBLIC structor_z3)
 
 if(STRUCTOR_BUILD_PLUGIN)
     # Plugin shared library wrapper

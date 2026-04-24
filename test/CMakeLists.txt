@@ -105,19 +105,12 @@ endif()
 # Helper function to add Z3 test targets
 function(add_z3_test TEST_NAME TEST_SOURCE)
     add_executable(${TEST_NAME} ${TEST_SOURCE})
-    target_include_directories(${TEST_NAME} PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    target_include_directories(${TEST_NAME} PRIVATE
+        ${PROJECT_SOURCE_DIR}/include
+        ${STRUCTOR_Z3_INCLUDE_DIRS}
+    )
     target_compile_definitions(${TEST_NAME} PRIVATE STRUCTOR_TESTING)
-
-    if(Z3_USE_SYSTEM)
-        target_link_libraries(${TEST_NAME} PRIVATE z3::libz3)
-    else()
-        target_include_directories(${TEST_NAME} PRIVATE
-            ${z3_SOURCE_DIR}/src/api
-            ${z3_SOURCE_DIR}/src/api/c++
-            ${z3_BINARY_DIR}/src/api
-        )
-        target_link_libraries(${TEST_NAME} PRIVATE libz3)
-    endif()
+    target_link_libraries(${TEST_NAME} PRIVATE structor_z3)
 endfunction()
 
 # Z3 Context Tests
@@ -158,20 +151,10 @@ add_executable(test_type_lattice
 target_include_directories(test_type_lattice PRIVATE
     ${PROJECT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/test
+    ${STRUCTOR_Z3_INCLUDE_DIRS}
 )
 target_compile_definitions(test_type_lattice PRIVATE STRUCTOR_TESTING)
-if(Z3_CUSTOM)
-    target_link_libraries(test_type_lattice PRIVATE z3_custom)
-elseif(Z3_USE_SYSTEM)
-    target_link_libraries(test_type_lattice PRIVATE z3::libz3)
-else()
-    target_include_directories(test_type_lattice PRIVATE
-        ${z3_SOURCE_DIR}/src/api
-        ${z3_SOURCE_DIR}/src/api/c++
-        ${z3_BINARY_DIR}/src/api
-    )
-    target_link_libraries(test_type_lattice PRIVATE libz3)
-endif()
+target_link_libraries(test_type_lattice PRIVATE structor_z3)
 add_test(NAME type_lattice COMMAND test_type_lattice)
 
 # Add combined test target
