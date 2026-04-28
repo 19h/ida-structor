@@ -13,7 +13,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <functional>
+#include <limits>
 #include <string>
 #include <unordered_map>
 
@@ -657,6 +659,329 @@ struct RegisterHandoffSummary {
     int conflicts = 0;
 };
 
+struct TypeValidationCallerXref {
+    ea_t call_ea = BADADDR;
+    ea_t caller_ea = BADADDR;
+    std::uint64_t function_size = 0;
+};
+
+struct TypeValidationCallerArg {
+    ea_t caller_ea = BADADDR;
+    int var_idx = -1;
+    bool by_ref = false;
+};
+
+constexpr int kTypeValidationMinXrefsBeforeStop = 4;
+constexpr int kTypeValidationSoftXrefLimit = 32;
+constexpr int kTypeValidationHardXrefLimit = 64;
+
+[[nodiscard]] inline qvector<TypeValidationCallerXref> collect_ordered_caller_xrefs(ea_t target_func) {
+    qvector<TypeValidationCallerXref> result;
+
+#ifndef STRUCTOR_TESTING
+    xrefblk_t xref;
+    for (bool ok = xref.first_to(target_func, XREF_ALL); ok; ok = xref.next_to()) {
+        if (!xref.iscode || !(utils::is_call_xref(xref.type) || utils::is_tailcall_xref(xref.type))) {
+            continue;
+        }
+
+        func_t* caller_func = get_func(xref.from);
+        if (caller_func == nullptr) {
+            continue;
+        }
+
+        TypeValidationCallerXref item;
+        item.call_ea = xref.from;
+        item.caller_ea = caller_func->start_ea;
+        if (caller_func->end_ea > caller_func->start_ea) {
+            item.function_size = static_cast<std::uint64_t>(caller_func->end_ea - caller_func->start_ea);
+        }
+        result.push_back(item);
+    }
+
+    std::sort(result.begin(), result.end(), [](const auto& lhs, const auto& rhs) {
+        if (lhs.function_size != rhs.function_size) {
+            return lhs.function_size < rhs.function_size;
+        }
+        if (lhs.caller_ea != rhs.caller_ea) {
+            return lhs.caller_ea < rhs.caller_ea;
+        }
+        return lhs.call_ea < rhs.call_ea;
+    });
+#else
+    (void) target_func;
+#endif
+
+    return result;
+}
+
+[[nodiscard]] inline bool has_sufficient_type_validation_evidence(
+    int support,
+    int typed_support,
+    int conflicts,
+    TypeConfidence confidence)
+{
+    if (support <= 0 || conflicts > 0) {
+        return false;
+    }
+
+    if (typed_support >= 3 && confidence >= TypeConfidence::Medium) {
+        return true;
+    }
+
+    if (typed_support >= 1 && support >= 2 && confidence >= TypeConfidence::High) {
+        return true;
+    }
+
+    return support >= 6 && typed_support >= 3;
+}
+
+[[nodiscard]] inline bool should_stop_type_validation_xref_scan(
+    int processed_xrefs,
+    int total_xrefs,
+    int support,
+    int typed_support,
+    int conflicts,
+    TypeConfidence confidence)
+{
+    if (processed_xrefs >= total_xrefs) {
+        return true;
+    }
+    if (processed_xrefs < kTypeValidationMinXrefsBeforeStop) {
+        return false;
+    }
+
+    if (has_sufficient_type_validation_evidence(support, typed_support, conflicts, confidence)) {
+        return true;
+    }
+
+    if (total_xrefs <= kTypeValidationSoftXrefLimit) {
+        return false;
+    }
+
+    // Initial validation is a heuristic report/fix pass. Avoid decompiling every
+    // caller of very hot functions once the smallest callers show no useful or
+    // already-consistent evidence.
+    if (processed_xrefs >= kTypeValidationSoftXrefLimit
+     && conflicts == 0
+     && (support == 0 || confidence >= TypeConfidence::Medium || support >= 2)) {
+        return true;
+    }
+
+    return processed_xrefs >= kTypeValidationHardXrefLimit;
+}
+
+template <typename GetCfunc, typename OnCaller, typename ShouldStop>
+inline void scan_callers_with_param_ordered(
+    ea_t func_ea,
+    int param_idx,
+    GetCfunc&& get_cfunc,
+    OnCaller&& on_caller,
+    ShouldStop&& should_stop)
+{
+#ifndef STRUCTOR_TESTING
+    qvector<TypeValidationCallerXref> caller_xrefs = collect_ordered_caller_xrefs(func_ea);
+    const int total_xrefs = static_cast<int>(std::min<std::size_t>(
+        caller_xrefs.size(),
+        static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    int processed_xrefs = 0;
+
+    for (const auto& caller_xref : caller_xrefs) {
+        ++processed_xrefs;
+
+        cfuncptr_t caller_cfunc = get_cfunc(caller_xref.caller_ea);
+        if (caller_cfunc) {
+            qvector<TypeValidationCallerArg> found_args;
+
+            struct CallerFinder : public ctree_visitor_t {
+                ea_t target_func;
+                ea_t target_call_ea;
+                ea_t caller_ea;
+                int target_param;
+                qvector<TypeValidationCallerArg>& results;
+                std::unordered_map<int, std::pair<int, sval_t>> aliases;
+
+                CallerFinder(
+                    ea_t func,
+                    ea_t call_ea,
+                    ea_t caller,
+                    int param,
+                    qvector<TypeValidationCallerArg>& r)
+                    : ctree_visitor_t(CV_FAST)
+                    , target_func(func)
+                    , target_call_ea(call_ea)
+                    , caller_ea(caller)
+                    , target_param(param)
+                    , results(r) {}
+
+                static bool is_assignment(ctype_t op) {
+                    switch (op) {
+                        case cot_asg:
+                        case cot_asgbor:
+                        case cot_asgxor:
+                        case cot_asgband:
+                        case cot_asgadd:
+                        case cot_asgsub:
+                        case cot_asgmul:
+                        case cot_asgsshr:
+                        case cot_asgushr:
+                        case cot_asgshl:
+                        case cot_asgsdiv:
+                        case cot_asgudiv:
+                        case cot_asgsmod:
+                        case cot_asgumod:
+                            return true;
+                        default:
+                            return false;
+                    }
+                }
+
+                static bool contains_ref(const cexpr_t* expr) {
+                    if (!expr) return false;
+                    if (expr->op == cot_ref) return true;
+
+                    switch (expr->op) {
+                        case cot_cast:
+                        case cot_ptr:
+                        case cot_memref:
+                        case cot_memptr:
+                        case cot_idx:
+                            return contains_ref(expr->x);
+                        case cot_call:
+                            if (expr->x && expr->x->op == cot_helper && expr->a && expr->a->size() == 1) {
+                                return contains_ref(&expr->a->at(0));
+                            }
+                            return false;
+                        case cot_add:
+                        case cot_sub:
+                            return contains_ref(expr->x) || contains_ref(expr->y);
+                        default:
+                            return false;
+                    }
+                }
+
+                bool resolve_var_delta(const cexpr_t* expr, int& var_idx, sval_t& delta) const {
+                    if (!expr) {
+                        return false;
+                    }
+
+                    switch (expr->op) {
+                        case cot_var: {
+                            auto it = aliases.find(expr->v.idx);
+                            if (it != aliases.end()) {
+                                var_idx = it->second.first;
+                                delta += it->second.second;
+                            } else {
+                                var_idx = expr->v.idx;
+                            }
+                            return true;
+                        }
+                        case cot_cast:
+                        case cot_ref:
+                        case cot_ptr:
+                            return resolve_var_delta(expr->x, var_idx, delta);
+                        case cot_call:
+                            if (expr->x && expr->x->op == cot_helper && expr->a && expr->a->size() == 1) {
+                                return resolve_var_delta(&expr->a->at(0), var_idx, delta);
+                            }
+                            return false;
+                        case cot_add:
+                            if (expr->y && expr->y->op == cot_num && resolve_var_delta(expr->x, var_idx, delta)) {
+                                delta += static_cast<sval_t>(expr->y->numval());
+                                return true;
+                            }
+                            if (expr->x && expr->x->op == cot_num && resolve_var_delta(expr->y, var_idx, delta)) {
+                                delta += static_cast<sval_t>(expr->x->numval());
+                                return true;
+                            }
+                            return false;
+                        case cot_sub:
+                            if (expr->y && expr->y->op == cot_num && resolve_var_delta(expr->x, var_idx, delta)) {
+                                delta -= static_cast<sval_t>(expr->y->numval());
+                                return true;
+                            }
+                            return false;
+                        case cot_memptr:
+                        case cot_memref:
+                            if (resolve_var_delta(expr->x, var_idx, delta)) {
+                                delta += expr->m;
+                                return true;
+                            }
+                            return false;
+                        case cot_idx:
+                            return resolve_var_delta(expr->x, var_idx, delta);
+                        default:
+                            return false;
+                    }
+                }
+
+                int idaapi visit_expr(cexpr_t* expr) override {
+                    if (!expr) return 0;
+
+                    if (is_assignment(expr->op) && expr->x && expr->x->op == cot_var) {
+                        if (expr->op == cot_asg && expr->y) {
+                            int base_var = -1;
+                            sval_t delta = 0;
+                            if (resolve_var_delta(expr->y, base_var, delta)) {
+                                aliases[expr->x->v.idx] = {base_var, delta};
+                            } else {
+                                aliases.erase(expr->x->v.idx);
+                            }
+                        } else {
+                            aliases.erase(expr->x->v.idx);
+                        }
+                        return 0;
+                    }
+
+                    if (expr->op != cot_call || !expr->a || expr->ea != target_call_ea) {
+                        return 0;
+                    }
+
+                    if (!expr->x || expr->x->op != cot_obj || expr->x->obj_ea != target_func) {
+                        return 0;
+                    }
+
+                    if (static_cast<size_t>(target_param) >= expr->a->size()) {
+                        return 0;
+                    }
+
+                    const carg_t& arg = expr->a->at(target_param);
+                    int base_var = -1;
+                    sval_t delta = 0;
+                    if (!resolve_var_delta(&arg, base_var, delta)) {
+                        return 0;
+                    }
+
+                    TypeValidationCallerArg info;
+                    info.caller_ea = caller_ea;
+                    info.var_idx = base_var;
+                    info.by_ref = contains_ref(&arg);
+                    results.push_back(info);
+                    return 1;
+                }
+            };
+
+            CallerFinder finder(func_ea, caller_xref.call_ea, caller_xref.caller_ea, param_idx, found_args);
+            finder.apply_to(&caller_cfunc->body, nullptr);
+
+            for (const auto& caller_arg : found_args) {
+                on_caller(caller_arg);
+            }
+        }
+
+        if (should_stop(processed_xrefs, total_xrefs)) {
+            break;
+        }
+    }
+#else
+    (void) func_ea;
+    (void) param_idx;
+    (void) get_cfunc;
+    (void) on_caller;
+    (void) should_stop;
+#endif
+}
+
 [[nodiscard]] inline tinfo_t make_width_fallback_type(int width) {
     tinfo_t type;
     switch (width) {
@@ -720,25 +1045,47 @@ struct RegisterHandoffSummary {
         return summary;
     }
 
-    xrefblk_t xref;
-    for (bool ok = xref.first_to(callee_cfunc->entry_ea, XREF_ALL); ok; ok = xref.next_to()) {
-        if (!xref.iscode || !(utils::is_call_xref(xref.type) || utils::is_tailcall_xref(xref.type))) {
-            continue;
-        }
+    qvector<TypeValidationCallerXref> caller_xrefs = collect_ordered_caller_xrefs(callee_cfunc->entry_ea);
+    const int total_xrefs = static_cast<int>(std::min<std::size_t>(
+        caller_xrefs.size(),
+        static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    int processed_xrefs = 0;
+    std::unordered_map<ea_t, cfuncptr_t> caller_cfunc_cache;
 
-        ea_t call_ea = xref.from;
-        func_t* caller_func = get_func(call_ea);
-        if (caller_func == nullptr) {
-            continue;
-        }
+    auto should_stop_scan = [&summary, &processed_xrefs, &total_xrefs]() {
+        return should_stop_type_validation_xref_scan(
+            processed_xrefs,
+            total_xrefs,
+            summary.support,
+            summary.typed_support,
+            summary.conflicts,
+            summary.confidence);
+    };
 
-        cfuncptr_t caller_cfunc = utils::get_cfunc(caller_func->start_ea);
+    for (const auto& caller_xref : caller_xrefs) {
+        ++processed_xrefs;
+
+        ea_t call_ea = caller_xref.call_ea;
+        auto cached = caller_cfunc_cache.find(caller_xref.caller_ea);
+        if (cached == caller_cfunc_cache.end()) {
+            auto inserted = caller_cfunc_cache.emplace(
+                caller_xref.caller_ea,
+                utils::get_cfunc(caller_xref.caller_ea));
+            cached = inserted.first;
+        }
+        cfuncptr_t caller_cfunc = cached->second;
         if (!caller_cfunc) {
+            if (should_stop_scan()) {
+                break;
+            }
             continue;
         }
 
         lvars_t* caller_lvars = caller_cfunc->get_lvars();
         if (caller_lvars == nullptr) {
+            if (should_stop_scan()) {
+                break;
+            }
             continue;
         }
 
@@ -749,7 +1096,7 @@ struct RegisterHandoffSummary {
         for (int step = 0; step < 12; ++step) {
             insn_t insn;
             ea_t prev_ea = decode_prev_insn(&insn, scan_ea);
-            if (prev_ea == BADADDR || prev_ea < caller_func->start_ea) {
+            if (prev_ea == BADADDR || prev_ea < caller_xref.caller_ea) {
                 break;
             }
             scan_ea = prev_ea;
@@ -783,7 +1130,7 @@ struct RegisterHandoffSummary {
                     insn_t prev_write_insn;
                     ea_t before_write_ea = decode_prev_insn(&prev_write_insn, prev_ea);
                     if (before_write_ea != BADADDR
-                     && before_write_ea >= caller_func->start_ea
+                     && before_write_ea >= caller_xref.caller_ea
                      && (prev_write_insn.get_canon_feature(PH) & CF_CALL) != 0) {
                         rejected_write = true;
                         found_write = false;
@@ -849,7 +1196,14 @@ struct RegisterHandoffSummary {
         }
 
         if (!found_write || rejected_write) {
+            if (should_stop_scan()) {
+                break;
+            }
             continue;
+        }
+
+        if (should_stop_scan()) {
+            break;
         }
     }
 #else
@@ -1474,8 +1828,6 @@ inline qvector<qstring> TypeFixer::collect_missing_argument_warnings(cfunc_t* cf
         return inserted.first->second;
     };
 
-    CrossFunctionAnalyzer analyzer;
-
     for (size_t i = 0; i < lvars->size(); ++i) {
         const lvar_t& var = lvars->at(i);
         if (var.is_arg_var() || !var.is_reg_var()) {
@@ -1544,26 +1896,21 @@ inline qvector<qstring> TypeFixer::collect_missing_argument_warnings(cfunc_t* cf
         }
 
         for (int param_idx : candidate_param_indices) {
-            auto callers = analyzer.find_callers_with_param(cfunc->entry_ea, param_idx);
-            if (callers.empty()) {
-                continue;
-            }
-
             CallerTypeSummary summary;
 
-            for (const auto& caller : callers) {
+            auto update_summary_from_caller = [&](const detail::TypeValidationCallerArg& caller) {
                 if (caller.caller_ea == BADADDR || caller.var_idx < 0) {
-                    continue;
+                    return;
                 }
 
                 cfuncptr_t caller_cfunc = get_cached_cfunc(caller.caller_ea);
                 if (!caller_cfunc) {
-                    continue;
+                    return;
                 }
 
                 lvars_t* caller_lvars = caller_cfunc->get_lvars();
                 if (!caller_lvars || static_cast<size_t>(caller.var_idx) >= caller_lvars->size()) {
-                    continue;
+                    return;
                 }
 
                 const lvar_t& caller_var = caller_lvars->at(static_cast<size_t>(caller.var_idx));
@@ -1579,7 +1926,7 @@ inline qvector<qstring> TypeFixer::collect_missing_argument_warnings(cfunc_t* cf
                 }
 
                 if (candidate_type.empty() || is_default_type(candidate_type)) {
-                    continue;
+                    return;
                 }
 
                 if (caller.by_ref && !candidate_type.is_ptr() && !candidate_type.is_funcptr()) {
@@ -1590,7 +1937,7 @@ inline qvector<qstring> TypeFixer::collect_missing_argument_warnings(cfunc_t* cf
                 }
 
                 if (!detail::type_matches_lvar_width(candidate_type, var)) {
-                    continue;
+                    return;
                 }
 
                 if (summary.type.empty()) {
@@ -1598,7 +1945,7 @@ inline qvector<qstring> TypeFixer::collect_missing_argument_warnings(cfunc_t* cf
                     summary.confidence = candidate_confidence;
                     summary.support = 1;
                     summary.typed_callers = 1;
-                    continue;
+                    return;
                 }
 
                 if (detail::types_are_compatible_for_recovery(summary.type, candidate_type)) {
@@ -1609,7 +1956,24 @@ inline qvector<qstring> TypeFixer::collect_missing_argument_warnings(cfunc_t* cf
                 } else {
                     ++summary.conflicts;
                 }
-            }
+            };
+
+            auto should_stop_scan = [&summary](int processed_xrefs, int total_xrefs) {
+                return detail::should_stop_type_validation_xref_scan(
+                    processed_xrefs,
+                    total_xrefs,
+                    summary.support,
+                    summary.typed_callers,
+                    summary.conflicts,
+                    summary.confidence);
+            };
+
+            detail::scan_callers_with_param_ordered(
+                cfunc->entry_ea,
+                param_idx,
+                get_cached_cfunc,
+                update_summary_from_caller,
+                should_stop_scan);
 
             if (summary.type.empty()) {
                 continue;
