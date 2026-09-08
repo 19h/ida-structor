@@ -2,6 +2,7 @@
 /// @brief Access pattern collection implementation
 
 #include <structor/access_collector.hpp>
+#include <structor/analysis/exception_compat.hpp>
 #include <structor/config.hpp>
 
 namespace structor {
@@ -956,7 +957,8 @@ int AccessPatternVisitor::visit_insn(cinsn_t* insn) {
             auto incoming = states;
             states = walk_block(insn->ctry, insn, std::move(states));
             for (auto& handler : insn->ctry->catchs) {
-                if (handler.is_finally() && !insn->ctry->is_wind()) {
+                const bool cleanup = detail::is_cleanup_handler(*insn->ctry, handler);
+                if (cleanup && !detail::is_wind_statement(*insn->ctry)) {
                     FlowStates finalized;
                     for (auto& state : states) {
                         const auto previous_exit = state.exit;
@@ -973,7 +975,7 @@ int AccessPatternVisitor::visit_insn(cinsn_t* insn) {
                 record_precision_loss(FlowPrecisionLoss::UnknownExceptionEntry, incoming.size());
                 unknown.push_back(widen_flow_states(incoming));
                 auto caught = walk_block(&handler, insn, std::move(unknown));
-                if (handler.is_finally()) {
+                if (cleanup) {
                     // Exceptions may originate at any point in the try body.
                     // The cleanup can observe direct accesses, but its unknown
                     // exception environment cannot reach normal continuation.

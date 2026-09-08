@@ -35,6 +35,7 @@ set(TEST_SOURCES
     test_access_type_inference.cpp
     test_field_fragment_type.cpp
     test_signature_and_abi.cpp
+    test_exception_compat.cpp
     test_optimized_algorithms.cpp
     test_persistence_invariants.cpp
     test_lifecycle_and_registry.cpp
