@@ -11,6 +11,7 @@
 #include "type_matcher_live_checks.hpp"
 #include "type_application_live_checks.hpp"
 #include "signature_abi_live_checks.hpp"
+#include "type_query_status_live_checks.hpp"
 #include "type_lattice_live_checks.hpp"
 #include "../../integration_tests/assignment_order_ctree_probe.hpp"
 #include "../../integration_tests/alias_flow_ctree_probe.hpp"
@@ -1578,6 +1579,75 @@ static bool run_pending_api_command_impl(const qstring& command_text) {
         append_json_bool(payload, success);
         export_api_json(command.c_str(), payload);
         return success;
+    }
+
+    if (command == "inspect_symbolic_query_status") {
+        if (parts.size() != 2) {
+            export_api_error(command.c_str(), "Expected function");
+            return false;
+        }
+        ea_t function_ea = BADADDR;
+        if (!resolve_function_spec(qstring(parts[1].c_str()), function_ea)) {
+            export_api_error(command.c_str(), "Function not found");
+            return false;
+        }
+        cfuncptr_t function = utils::get_cfunc(function_ea);
+        if (!function) {
+            export_api_error(command.c_str(), "Failed to decompile function");
+            return false;
+        }
+        const auto* original_body = function->body.cblock;
+        const auto original_arguments = function->argidx;
+        std::vector<tinfo_t> original_local_types;
+        for (const auto& local : *function->get_lvars()) original_local_types.push_back(local.type());
+        tinfo_t original_saved_type;
+        const bool had_saved_type = get_tinfo(&original_saved_type, function_ea);
+        const auto observations = z3::TypeInferenceQueryStatusTestAccess::collect(function);
+        bool unchanged = original_body == function->body.cblock &&
+            original_arguments == function->argidx &&
+            original_local_types.size() == function->get_lvars()->size();
+        for (std::size_t index = 0; unchanged && index < original_local_types.size(); ++index) {
+            unchanged &= original_local_types[index].equals_to((*function->get_lvars())[index].type());
+        }
+        tinfo_t saved_type;
+        const bool has_saved_type = get_tinfo(&saved_type, function_ea);
+        unchanged &= had_saved_type == has_saved_type &&
+            (!has_saved_type || saved_type.equals_to(original_saved_type));
+        std::string payload = "\"success\":true,\"function_unchanged\":";
+        append_json_bool(payload, unchanged);
+        payload += ",\"cases\":[";
+        bool first = true;
+        for (const auto& observation : observations) {
+            if (!first) payload += ',';
+            first = false;
+            const auto& result = observation.result;
+            payload += "{\"name\":";
+            append_json_string(payload, observation.name);
+            payload += ",\"status\":" + std::to_string(static_cast<unsigned>(result.status));
+            payload += ",\"success\":";
+            append_json_bool(payload, result.success);
+            payload += ",\"inferred_type_matches\":";
+            append_json_bool(payload, observation.inferred_type_matches);
+            payload += ",\"used_symbolic_bounds\":";
+            append_json_bool(payload, result.used_bounded_symbolic_queries);
+            payload += ",\"used_explicit_candidates\":";
+            append_json_bool(payload, result.used_explicit_symbolic_candidates);
+            payload += ",\"bounds\":";
+            if (result.symbolic_query_bounds) {
+                const auto bounds = *result.symbolic_query_bounds;
+                payload += "{\"depth\":" + std::to_string(bounds.max_depth) +
+                    ",\"list_length\":" + std::to_string(bounds.max_list_length) +
+                    ",\"expansions\":" + std::to_string(bounds.max_expansions) + '}';
+            } else payload += "null";
+            payload += ",\"error\":";
+            append_json_string(payload, result.error_message);
+            payload += ",\"solve_iterations\":" + std::to_string(result.stats.solve_iterations);
+            payload += ",\"local_type_count\":" + std::to_string(result.local_types.size());
+            payload += ",\"memory_type_count\":" + std::to_string(result.memory_types.size()) + '}';
+        }
+        payload += ']';
+        export_api_json(command.c_str(), payload);
+        return true;
     }
 
     if (command == "inspect_signature_mapping") {

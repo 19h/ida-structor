@@ -876,34 +876,198 @@ void TypeLatticeEncoder::initialize_base_sort() {
         *base_type_sort_, base_type_consts_);
 }
 
+namespace {
+enum TypeConstructorIndex : unsigned {
+    CtorBase, CtorPointer, CtorFunction, CtorArray, CtorStruct, CtorSum,
+    CtorNullPointer, CtorNil, CtorCons
+};
+}
+
 void TypeLatticeEncoder::initialize_type_datatype() {
+    auto& cache = *ctx_.type_lattice_sorts_;
+    if (cache.type_sort) {
+        type_sort_ = cache.type_sort;
+        return;
+    }
     auto& c = ctx_.ctx();
-    
-    // Use integer encoding for types instead of recursive datatypes
-    // This is more efficient for Z3 solving and avoids API complexity
-    //
-    // Encoding scheme:
-    // Bits 0-7:   Type kind tag (0=Base, 1=Ptr, 2=Func, 3=Array, 4=Struct, 5=Sum)
-    // Bits 8-15:  Base type enum value (for Kind::Base)
-    // Bits 16-23: Pointer depth or array count
-    // Bits 24-31: Reserved
-    //
-    // For pointer types: stores the innermost pointee's base type and pointer depth
-    // For example, int** has base_type=Int32, ptr_depth=2
-    
-    type_sort_ = c.int_sort();
+    // Type and TypeList are declared together: list members refer to Type,
+    // while function parameters and sum alternatives refer to TypeList.
+    struct Constructors {
+        ::z3::context& context;
+        std::vector<Z3_constructor> values;
+        std::vector<Z3_constructor_list> lists;
+        ~Constructors() {
+            for (auto list : lists) Z3_del_constructor_list(context, list);
+            for (auto value : values) Z3_del_constructor(context, value);
+        }
+    } handles{c, {}, {}};
+    std::vector<unsigned> arities;
+    auto constructor = [&](const char* name, const char* recognizer,
+                           std::initializer_list<const char*> fields,
+                           std::initializer_list<Z3_sort> sorts,
+                           std::initializer_list<unsigned> refs) {
+        std::vector<Z3_symbol> names;
+        for (auto field : fields) names.push_back(c.str_symbol(field));
+        std::vector<Z3_sort> field_sorts(sorts);
+        std::vector<unsigned> references(refs);
+        handles.values.push_back(Z3_mk_constructor(c, c.str_symbol(name),
+            c.str_symbol(recognizer), static_cast<unsigned>(names.size()),
+            names.data(), field_sorts.data(), references.data()));
+        c.check_error();
+        arities.push_back(static_cast<unsigned>(names.size()));
+    };
+    auto count_sort = c.bv_sort(32);
+    auto tid_sort = c.bv_sort(64);
+    constructor("ST_Base", "ST_is_base", {"ST_base"}, {*base_type_sort_}, {0});
+    constructor("ST_Ptr", "ST_is_ptr", {"ST_pointee"}, {nullptr}, {0});
+    constructor("ST_Func", "ST_is_func", {"ST_return", "ST_params"},
+                {nullptr, nullptr}, {0, 1});
+    constructor("ST_Array", "ST_is_array", {"ST_element", "ST_count"},
+                {nullptr, count_sort}, {0, 0});
+    constructor("ST_Struct", "ST_is_struct", {"ST_tid"}, {tid_sort}, {0});
+    constructor("ST_Sum", "ST_is_sum", {"ST_alternatives"}, {nullptr}, {1});
+    // Preserve the public make_ptr(shared_ptr{}) representation distinctly
+    // from an explicit pointer to Unknown or Void.
+    constructor("ST_NullPtr", "ST_is_null_ptr", {}, {}, {});
+    constructor("ST_Nil", "ST_is_nil", {}, {}, {});
+    constructor("ST_Cons", "ST_is_cons", {"ST_head", "ST_tail"},
+                {nullptr, nullptr}, {0, 1});
+    handles.lists.push_back(Z3_mk_constructor_list(c, 7, handles.values.data()));
+    handles.lists.push_back(Z3_mk_constructor_list(c, 2, handles.values.data() + 7));
+    Z3_symbol names[] = {c.str_symbol("StructorInferredType"),
+                         c.str_symbol("StructorInferredTypeList")};
+    Z3_sort sorts[2] = {};
+    Z3_mk_datatypes(c, 2, names, sorts, handles.lists.data());
+    c.check_error();
+    cache.type_sort.emplace(c, sorts[0]);
+    cache.list_sort.emplace(c, sorts[1]);
+    for (size_t i = 0; i < handles.values.size(); ++i) {
+        Z3_func_decl ctor = nullptr, test = nullptr;
+        std::vector<Z3_func_decl> access(arities[i]);
+        Z3_query_constructor(c, handles.values[i], arities[i],
+                             &ctor, &test, access.data());
+        c.check_error();
+        cache.constructors.emplace_back(c, ctor);
+        cache.recognizers.emplace_back(c, test);
+        auto& fields = cache.accessors.emplace_back();
+        for (auto field : access) fields.emplace_back(c, field);
+    }
+    type_sort_ = cache.type_sort;
+    initialize_type_relations();
 }
 
-::z3::sort TypeLatticeEncoder::type_sort() {
-    return *type_sort_;
+void TypeLatticeEncoder::initialize_type_relations() {
+    auto& c = ctx_.ctx();
+    auto& cache = *ctx_.type_lattice_sorts_;
+    const auto& cons = cache.constructors;
+    const auto& is = cache.recognizers;
+    const auto& field = cache.accessors;
+    const auto& ts = *cache.type_sort;
+    const auto& ls = *cache.list_sort;
+    cache.subtype = c.recfun("ST_subtype", ts, ts, c.bool_sort());
+    cache.list_subtype = c.recfun("ST_list_subtype", ls, ls, c.bool_sort());
+    cache.source_sum_subtype = c.recfun("ST_source_sum_subtype", ls, ts, c.bool_sort());
+    cache.target_sum_subtype = c.recfun("ST_target_sum_subtype", ts, ls, c.bool_sort());
+    cache.compatible = c.recfun("ST_compatible", ts, ts, c.bool_sort());
+    cache.sum_compatible = c.recfun("ST_sum_compatible", ls, ts, c.bool_sort());
+    cache.same_list_length = c.recfun("ST_same_list_length", ls, ls, c.bool_sort());
+    cache.byte_size = c.recfun("ST_byte_size", ts, c.int_sort());
+    cache.sum_byte_size = c.recfun("ST_sum_byte_size", ls, c.int_sort());
+    const auto& sub = *cache.subtype;
+    const auto& list_sub = *cache.list_subtype;
+    const auto& source_sum = *cache.source_sum_subtype;
+    const auto& target_sum = *cache.target_sum_subtype;
+    const auto& compatible = *cache.compatible;
+    const auto& sum_compatible = *cache.sum_compatible;
+    const auto& same_length = *cache.same_list_length;
+    const auto& size = *cache.byte_size;
+    const auto& sum_size = *cache.sum_byte_size;
+    auto a = c.constant("ST_a", ts), b = c.constant("ST_b", ts);
+    auto xs = c.constant("ST_xs", ls), ys = c.constant("ST_ys", ls);
+    auto define = [&](const ::z3::func_decl& function,
+                      std::initializer_list<::z3::expr> args,
+                      const ::z3::expr& body) {
+        ::z3::expr_vector parameters(c);
+        for (const auto& arg : args) parameters.push_back(arg);
+        c.recdef(function, parameters, body);
+    };
+    // Lists encode ordered function arguments. Sums use all/source and
+    // any/target membership; no alternative is dropped by the representation.
+    define(list_sub, {xs, ys}, ::z3::ite(is[CtorNil](xs), is[CtorNil](ys),
+        is[CtorCons](ys) && sub(field[CtorCons][0](xs), field[CtorCons][0](ys)) &&
+        list_sub(field[CtorCons][1](xs), field[CtorCons][1](ys))));
+    define(source_sum, {xs, b}, ::z3::ite(is[CtorNil](xs), c.bool_val(true),
+        sub(field[CtorCons][0](xs), b) && source_sum(field[CtorCons][1](xs), b)));
+    define(target_sum, {a, ys}, ::z3::ite(is[CtorNil](ys), c.bool_val(false),
+        sub(a, field[CtorCons][0](ys)) || target_sum(a, field[CtorCons][1](ys))));
+    ::z3::expr scalar_sub = c.bool_val(false);
+    for (unsigned i = 0; i < static_cast<unsigned>(BaseType::_Count); ++i) {
+        for (unsigned j = 0; j < static_cast<unsigned>(BaseType::_Count); ++j) {
+            if (lattice_.is_subtype(InferredType::make_base(static_cast<BaseType>(i)),
+                                    InferredType::make_base(static_cast<BaseType>(j)))) {
+                scalar_sub = scalar_sub ||
+                    (a == cons[CtorBase](base_type_consts_[i]) &&
+                     b == cons[CtorBase](base_type_consts_[j]));
+            }
+        }
+    }
+    auto structural_sub = scalar_sub ||
+        (is[CtorPointer](a) && is[CtorPointer](b) && sub(field[CtorPointer][0](a), field[CtorPointer][0](b))) ||
+        (is[CtorFunction](a) && is[CtorFunction](b) && sub(field[CtorFunction][0](a), field[CtorFunction][0](b)) &&
+         list_sub(field[CtorFunction][1](b), field[CtorFunction][1](a))) ||
+        (is[CtorArray](a) && is[CtorArray](b) && field[CtorArray][1](a) == field[CtorArray][1](b) &&
+         sub(field[CtorArray][0](a), field[CtorArray][0](b)));
+    define(sub, {a, b}, a == b ||
+        a == encode_base(BaseType::Bottom) || b == encode_base(BaseType::Unknown) ||
+        ::z3::ite(is[CtorSum](a), source_sum(field[CtorSum][0](a), b),
+            ::z3::ite(is[CtorSum](b), target_sum(a, field[CtorSum][0](b)), structural_sub)));
+
+    define(same_length, {xs, ys}, ::z3::ite(is[CtorNil](xs), is[CtorNil](ys),
+        is[CtorCons](ys) && same_length(field[CtorCons][1](xs), field[CtorCons][1](ys))));
+    define(sum_compatible, {xs, b}, ::z3::ite(is[CtorNil](xs), c.bool_val(false),
+        compatible(field[CtorCons][0](xs), b) || sum_compatible(field[CtorCons][1](xs), b)));
+    // Compatibility means that the lattice meet is not global Bottom.
+    // Pointer/array/function meets retain their constructor even when an
+    // individual component meets at Bottom; sum meets distribute pairwise.
+    auto compatible_shapes = a == b ||
+        a == encode_base(BaseType::Unknown) || b == encode_base(BaseType::Unknown) ||
+        (is[CtorBase](a) && is[CtorBase](b) && (sub(a, b) || sub(b, a))) ||
+        (is[CtorPointer](a) && is[CtorPointer](b)) ||
+        (is[CtorArray](a) && is[CtorArray](b) && field[CtorArray][1](a) == field[CtorArray][1](b)) ||
+        (is[CtorFunction](a) && is[CtorFunction](b) &&
+         same_length(field[CtorFunction][1](a), field[CtorFunction][1](b)));
+    define(compatible, {a, b},
+        a != encode_base(BaseType::Bottom) && b != encode_base(BaseType::Bottom) &&
+        ::z3::ite(is[CtorSum](a), sum_compatible(field[CtorSum][0](a), b),
+            ::z3::ite(is[CtorSum](b), sum_compatible(field[CtorSum][0](b), a), compatible_shapes)));
+
+    // Sizes are mathematical byte counts. -1 denotes unavailable size
+    // metadata (Unknown, Bottom, or a structure requiring an IDB lookup).
+    ::z3::expr scalar_size = c.int_val(-1);
+    for (unsigned i = static_cast<unsigned>(BaseType::Int8);
+         i < static_cast<unsigned>(BaseType::_Count); ++i) {
+        scalar_size = ::z3::ite(a == cons[CtorBase](base_type_consts_[i]),
+            ctx_.uint_val(base_type_size(static_cast<BaseType>(i), ctx_.pointer_size())),
+            scalar_size);
+    }
+    auto head_size = size(field[CtorCons][0](xs));
+    auto tail_size = sum_size(field[CtorCons][1](xs));
+    define(sum_size, {xs}, ::z3::ite(is[CtorNil](xs), c.int_val(0),
+        ::z3::ite(head_size < 0 || tail_size < 0, c.int_val(-1),
+            ::z3::ite(head_size > tail_size, head_size, tail_size))));
+    auto element_size = size(field[CtorArray][0](a));
+    define(size, {a}, ::z3::ite(is[CtorPointer](a) || is[CtorFunction](a) || is[CtorNullPointer](a),
+        ctx_.uint_val(ctx_.pointer_size()),
+        ::z3::ite(is[CtorArray](a), ::z3::ite(element_size < 0, c.int_val(-1),
+            element_size * ::z3::bv2int(field[CtorArray][1](a), false)),
+            ::z3::ite(is[CtorSum](a), sum_size(field[CtorSum][0](a)), scalar_size))));
 }
 
-::z3::sort TypeLatticeEncoder::base_type_sort() {
-    return *base_type_sort_;
-}
+::z3::sort TypeLatticeEncoder::type_sort() { return *type_sort_; }
+::z3::sort TypeLatticeEncoder::base_type_sort() { return *base_type_sort_; }
 
 ::z3::expr TypeLatticeEncoder::make_type_var(const char* name) {
-    return ctx_.ctx().int_const(name);
+    return ctx_.ctx().constant(name, type_sort());
 }
 
 ::z3::expr TypeLatticeEncoder::make_type_var(ea_t func_ea, int var_idx, int version) {
@@ -914,127 +1078,103 @@ void TypeLatticeEncoder::initialize_type_datatype() {
 
 ::z3::expr TypeLatticeEncoder::make_mem_type_var(ea_t base, sval_t offset, uint32_t size) {
     qstring name;
-    name.sprnt("mem_type_%llX_%llX_%u", 
-               static_cast<unsigned long long>(base),
-               static_cast<unsigned long long>(offset),
-               size);
+    name.sprnt("mem_type_%llX_%llX_%u", static_cast<unsigned long long>(base),
+               static_cast<unsigned long long>(offset), size);
     return make_type_var(name.c_str());
 }
 
 ::z3::expr TypeLatticeEncoder::encode_base(BaseType base) {
-    return ctx_.int_val(static_cast<int>(base));
+    const auto index = static_cast<unsigned>(base);
+    if (index >= base_type_consts_.size()) throw std::invalid_argument("invalid base type");
+    return ctx_.type_lattice_sorts_->constructors[CtorBase](base_type_consts_[index]);
+}
+
+::z3::expr TypeLatticeEncoder::encode_list(
+    const std::vector<std::shared_ptr<InferredType>>& types) {
+    const auto& constructors = ctx_.type_lattice_sorts_->constructors;
+    auto result = constructors[CtorNil]();
+    for (auto it = types.rbegin(); it != types.rend(); ++it) {
+        if (!*it) throw std::invalid_argument("null type-list member");
+        result = constructors[CtorCons](encode_type(**it), result);
+    }
+    return result;
+}
+
+::z3::expr TypeLatticeEncoder::encode_type(const InferredType& type) {
+    const auto& constructors = ctx_.type_lattice_sorts_->constructors;
+    switch (type.kind()) {
+        case InferredType::Kind::Base: return encode_base(type.base_type());
+        case InferredType::Kind::Pointer:
+            return type.pointee() ? encode_ptr(encode_type(*type.pointee()))
+                                  : constructors[CtorNullPointer]();
+        case InferredType::Kind::Function:
+            return constructors[CtorFunction](encode_type(*type.return_type()),
+                                   encode_list(type.param_types()));
+        case InferredType::Kind::Array:
+            return constructors[CtorArray](encode_type(*type.element_type()),
+                                   ctx_.ctx().bv_val(type.array_count(), 32));
+        case InferredType::Kind::Struct:
+            return constructors[CtorStruct](ctx_.ctx().bv_val(static_cast<uint64_t>(type.struct_tid()), 64));
+        case InferredType::Kind::Sum:
+            return constructors[CtorSum](encode_list(type.sum_alternatives()));
+    }
+    throw std::invalid_argument("invalid inferred type kind");
 }
 
 ::z3::expr TypeLatticeEncoder::encode(const InferredType& type) {
-    // Check cache
     auto it = encode_cache_.find(type);
-    if (it != encode_cache_.end()) {
-        return it->second;
-    }
-    
-    ::z3::expr result = ctx_.ctx().int_val(0);
-    
-    // Encoding scheme for integer representation:
-    // Bits 0-7:   Type tag (kind)
-    // Bits 8-15:  Base type (for Kind::Base)
-    // Bits 16-23: Pointer depth (for Kind::Pointer)
-    // Bits 24-31: Array count low bits (for Kind::Array)
-    
-    int encoded = 0;
-    
-    switch (type.kind()) {
-        case InferredType::Kind::Base:
-            encoded = (static_cast<int>(type.base_type()) << 8) | 0;
-            break;
-            
-        case InferredType::Kind::Pointer: {
-            int depth = 1;
-            const InferredType* curr = type.pointee();
-            while (curr && curr->is_pointer()) {
-                ++depth;
-                curr = curr->pointee();
-            }
-            BaseType inner_base = BaseType::Void;
-            if (curr && curr->is_base()) {
-                inner_base = curr->base_type();
-            }
-            encoded = (depth << 16) | (static_cast<int>(inner_base) << 8) | 1;
-            break;
-        }
-        
-        case InferredType::Kind::Function:
-            encoded = (static_cast<int>(type.param_types().size()) << 8) | 2;
-            break;
-            
-        case InferredType::Kind::Array:
-            encoded = (static_cast<int>(type.array_count() & 0xFF) << 24) | 3;
-            break;
-            
-        case InferredType::Kind::Struct:
-            encoded = 4;
-            break;
-            
-        case InferredType::Kind::Sum:
-            encoded = 5;
-            break;
-    }
-    
-    result = ctx_.int_val(encoded);
+    if (it != encode_cache_.end()) return it->second;
+    auto result = encode_type(type);
     encode_cache_.emplace(type.snapshot(), result);
     return result;
 }
 
 ::z3::expr TypeLatticeEncoder::encode_ptr(const ::z3::expr& pointee) {
-    // ptr(t) = t | (1 << 16) -- add one level of pointer
-    return pointee + ctx_.int_val(1 << 16);
+    return ctx_.type_lattice_sorts_->constructors[CtorPointer](pointee);
+}
+
+std::vector<InferredType> TypeLatticeEncoder::decode_list(const ::z3::expr& value) {
+    const auto& constructors = ctx_.type_lattice_sorts_->constructors;
+    auto current = value;
+    std::vector<InferredType> result;
+    while (::z3::eq(current.decl(), constructors[CtorCons])) {
+        result.push_back(decode_type(current.arg(0)));
+        current = current.arg(1);
+    }
+    if (!::z3::eq(current.decl(), constructors[CtorNil]))
+        throw std::invalid_argument("non-ground inferred type list");
+    return result;
+}
+
+InferredType TypeLatticeEncoder::decode_type(const ::z3::expr& value) {
+    const auto& constructors = ctx_.type_lattice_sorts_->constructors;
+    if (::z3::eq(value.decl(), constructors[CtorBase])) {
+        for (unsigned i = 0; i < base_type_consts_.size(); ++i) {
+            if (::z3::eq(value.arg(0), base_type_consts_[i]))
+                return InferredType::make_base(static_cast<BaseType>(i));
+        }
+    } else if (::z3::eq(value.decl(), constructors[CtorPointer])) {
+        return InferredType::make_ptr(decode_type(value.arg(0)));
+    } else if (::z3::eq(value.decl(), constructors[CtorFunction])) {
+        return InferredType::make_func(decode_type(value.arg(0)), decode_list(value.arg(1)));
+    } else if (::z3::eq(value.decl(), constructors[CtorArray])) {
+        return InferredType::make_array(decode_type(value.arg(0)), value.arg(1).get_numeral_uint());
+    } else if (::z3::eq(value.decl(), constructors[CtorStruct])) {
+        return InferredType::make_struct(static_cast<tid_t>(value.arg(0).get_numeral_uint64()));
+    } else if (::z3::eq(value.decl(), constructors[CtorSum])) {
+        return InferredType::make_sum(decode_list(value.arg(0)));
+    } else if (::z3::eq(value.decl(), constructors[CtorNullPointer])) {
+        return InferredType::make_ptr(std::shared_ptr<InferredType>{});
+    }
+    throw std::invalid_argument("non-ground inferred type");
 }
 
 InferredType TypeLatticeEncoder::decode(const ::z3::expr& expr, const ::z3::model& model) {
     try {
-        ::z3::expr val = model.eval(expr, true);
-        if (!val.is_numeral()) {
-            return InferredType::unknown();
-        }
-        
-        int encoded = static_cast<int>(val.get_numeral_int64());
-        int kind_tag = encoded & 0xFF;
-        int base_bits = (encoded >> 8) & 0xFF;
-        int ptr_depth = (encoded >> 16) & 0xFF;
-        
-        switch (kind_tag) {
-            case 0: // Base
-                return InferredType::make_base(static_cast<BaseType>(base_bits));
-                
-            case 1: { // Pointer
-                InferredType inner = InferredType::make_base(static_cast<BaseType>(base_bits));
-                for (int i = 0; i < ptr_depth; ++i) {
-                    inner = InferredType::make_ptr(std::move(inner));
-                }
-                return inner;
-            }
-            
-            case 2: // Function
-                return InferredType::make_func(
-                    InferredType::make_base(BaseType::Void),
-                    std::vector<InferredType>()
-                );
-                
-            case 3: // Array
-                return InferredType::make_array(
-                    InferredType::unknown(),
-                    (encoded >> 24) & 0xFF
-                );
-                
-            case 4: // Struct
-                return InferredType::make_struct(BADADDR);
-                
-            case 5: // Sum
-                return InferredType::unknown();
-                
-            default:
-                return InferredType::unknown();
-        }
-    } catch (...) {
+        return decode_type(model.eval(expr, true));
+    } catch (const ::z3::exception&) {
+        return InferredType::unknown();
+    } catch (const std::invalid_argument&) {
         return InferredType::unknown();
     }
 }
@@ -1044,102 +1184,301 @@ InferredType TypeLatticeEncoder::decode(const ::z3::expr& expr, const ::z3::mode
 }
 
 ::z3::expr TypeLatticeEncoder::is_pointer_type(const ::z3::expr& type) {
-    // Check if kind tag is 1 (pointer)
-    // Use mod 256 instead of bitwise & for Z3 integers
-    return (type % ctx_.int_val(256)) == ctx_.int_val(1);
-}
-
-::z3::expr TypeLatticeEncoder::is_integer_type(const ::z3::expr& type) {
-    // Kind tag is 0 (base) and base type is in integer range
-    // Use arithmetic (div, mod) instead of bitwise ops for Z3 integers
-    ::z3::expr kind = type % ctx_.int_val(256);
-    ::z3::expr base = (type / ctx_.int_val(256)) % ctx_.int_val(256);
-    
-    ::z3::expr is_base = (kind == ctx_.int_val(0));
-    ::z3::expr in_signed_range = (base >= ctx_.int_val(static_cast<int>(BaseType::Int8))) &&
-                                  (base <= ctx_.int_val(static_cast<int>(BaseType::Int64)));
-    ::z3::expr in_unsigned_range = (base >= ctx_.int_val(static_cast<int>(BaseType::UInt8))) &&
-                                    (base <= ctx_.int_val(static_cast<int>(BaseType::UInt64)));
-    
-    return is_base && (in_signed_range || in_unsigned_range);
+    const auto& is = ctx_.type_lattice_sorts_->recognizers;
+    return is[CtorPointer](type) || is[CtorNullPointer](type);
 }
 
 ::z3::expr TypeLatticeEncoder::is_signed_type(const ::z3::expr& type) {
-    ::z3::expr kind = type % ctx_.int_val(256);
-    ::z3::expr base = (type / ctx_.int_val(256)) % ctx_.int_val(256);
-    
-    return (kind == ctx_.int_val(0)) &&
-           (base >= ctx_.int_val(static_cast<int>(BaseType::Int8))) &&
-           (base <= ctx_.int_val(static_cast<int>(BaseType::Int64)));
+    auto result = ctx_.bool_val(false);
+    for (unsigned i = static_cast<unsigned>(BaseType::Int8);
+         i <= static_cast<unsigned>(BaseType::Int64); ++i)
+        result = result || type == encode_base(static_cast<BaseType>(i));
+    return result;
 }
 
 ::z3::expr TypeLatticeEncoder::is_unsigned_type(const ::z3::expr& type) {
-    ::z3::expr kind = type % ctx_.int_val(256);
-    ::z3::expr base = (type / ctx_.int_val(256)) % ctx_.int_val(256);
-    
-    return (kind == ctx_.int_val(0)) &&
-           (base >= ctx_.int_val(static_cast<int>(BaseType::UInt8))) &&
-           (base <= ctx_.int_val(static_cast<int>(BaseType::UInt64)));
+    auto result = ctx_.bool_val(false);
+    for (unsigned i = static_cast<unsigned>(BaseType::UInt8);
+         i <= static_cast<unsigned>(BaseType::UInt64); ++i)
+        result = result || type == encode_base(static_cast<BaseType>(i));
+    return result;
+}
+
+::z3::expr TypeLatticeEncoder::is_integer_type(const ::z3::expr& type) {
+    return is_signed_type(type) || is_unsigned_type(type);
 }
 
 ::z3::expr TypeLatticeEncoder::is_floating_type(const ::z3::expr& type) {
-    ::z3::expr kind = type % ctx_.int_val(256);
-    ::z3::expr base = (type / ctx_.int_val(256)) % ctx_.int_val(256);
-    
-    return (kind == ctx_.int_val(0)) &&
-           ((base == ctx_.int_val(static_cast<int>(BaseType::Float32))) ||
-            (base == ctx_.int_val(static_cast<int>(BaseType::Float64))));
+    return type == encode_base(BaseType::Float32) || type == encode_base(BaseType::Float64);
+}
+
+SymbolicTypeQueryBounds TypeLatticeEncoder::symbolic_query_bounds() const noexcept {
+    const auto& config = ctx_.config();
+    return {config.max_symbolic_type_depth, config.max_symbolic_type_list_length,
+            config.max_symbolic_type_expansions};
+}
+
+void TypeLatticeEncoder::QueryBudget::consume() {
+    if (remaining == 0)
+        throw SymbolicTypeQueryLimit("symbolic type predicate expansion budget exhausted");
+    --remaining;
+}
+
+bool TypeLatticeEncoder::is_ground_type(const ::z3::expr& type) const {
+    std::vector<::z3::expr> pending{type};
+    while (!pending.empty()) {
+        auto current = std::move(pending.back());
+        pending.pop_back();
+        if (current.is_numeral()) continue;
+        if (!current.is_app() || current.decl().decl_kind() != Z3_OP_DT_CONSTRUCTOR)
+            return false;
+        for (unsigned i = 0; i < current.num_args(); ++i)
+            pending.push_back(current.arg(i));
+    }
+    return true;
+}
+
+int TypeLatticeEncoder::constructor_index(const ::z3::expr& type) const {
+    if (!type.is_app()) return -1;
+    const auto& constructors = ctx_.type_lattice_sorts_->constructors;
+    for (size_t i = 0; i < constructors.size(); ++i)
+        if (::z3::eq(type.decl(), constructors[i])) return static_cast<int>(i);
+    return -1;
+}
+
+::z3::expr TypeLatticeEncoder::project(const ::z3::expr& type,
+                                      unsigned constructor, unsigned member) const {
+    if (constructor_index(type) == static_cast<int>(constructor)) return type.arg(member);
+    return ctx_.type_lattice_sorts_->accessors[constructor][member](type);
+}
+
+::z3::expr TypeLatticeEncoder::bounded_byte_size(const ::z3::expr& type,
+                                                unsigned depth, QueryBudget& budget) {
+    budget.consume();
+    const auto& cache = *ctx_.type_lattice_sorts_;
+    if (is_ground_type(type)) return (*cache.byte_size)(type).simplify();
+    const auto kind = constructor_index(type);
+    if (kind == CtorPointer || kind == CtorNullPointer || kind == CtorFunction)
+        return ctx_.uint_val(ctx_.pointer_size());
+    auto result = ctx_.int_val(-1);
+    for (unsigned i = static_cast<unsigned>(BaseType::Int8);
+         i < static_cast<unsigned>(BaseType::_Count); ++i) {
+        auto tag = static_cast<BaseType>(i);
+        result = ::z3::ite(type == encode_base(tag),
+            ctx_.uint_val(base_type_size(tag, ctx_.pointer_size())), result);
+    }
+    auto primitive = ::z3::ite(is_pointer_type(type) || cache.recognizers[CtorFunction](type),
+        ctx_.uint_val(ctx_.pointer_size()), result);
+    if (depth != 0) {
+        auto array_size = ctx_.int_val(-1), sum_size = ctx_.int_val(-1);
+        if (kind < 0 || kind == CtorArray) {
+            auto element_size = bounded_byte_size(project(type, CtorArray, 0), depth - 1, budget);
+            auto count = ::z3::bv2int(project(type, CtorArray, 1), false);
+            array_size = ::z3::ite(element_size < 0, ctx_.int_val(-1), element_size * count);
+        }
+        if (kind < 0 || kind == CtorSum)
+            sum_size = bounded_sum_byte_size(project(type, CtorSum, 0), depth - 1,
+                symbolic_query_bounds().max_list_length, budget);
+        return ::z3::ite(cache.recognizers[CtorBase](type) || is_pointer_type(type) ||
+            cache.recognizers[CtorFunction](type), primitive,
+            ::z3::ite(cache.recognizers[CtorArray](type), array_size,
+                ::z3::ite(cache.recognizers[CtorSum](type), sum_size, ctx_.int_val(-1))));
+    }
+    return primitive;
+}
+
+::z3::expr TypeLatticeEncoder::bounded_sum_byte_size(const ::z3::expr& list,
+                                                    unsigned depth, unsigned length,
+                                                    QueryBudget& budget) {
+    budget.consume();
+    const auto& cache = *ctx_.type_lattice_sorts_;
+    if (is_ground_type(list)) return (*cache.sum_byte_size)(list).simplify();
+    const auto empty = cache.recognizers[CtorNil](list);
+    if (length == 0) return ::z3::ite(empty, ctx_.int_val(0), ctx_.int_val(-1));
+    auto head = bounded_byte_size(project(list, CtorCons, 0), depth, budget);
+    auto tail = bounded_sum_byte_size(project(list, CtorCons, 1), depth, length - 1, budget);
+    return ::z3::ite(empty, ctx_.int_val(0),
+        ::z3::ite(head < 0 || tail < 0, ctx_.int_val(-1), ::z3::ite(head > tail, head, tail)));
+}
+
+::z3::expr TypeLatticeEncoder::bounded_list_subtype(const ::z3::expr& a, const ::z3::expr& b,
+                                                   unsigned depth, unsigned length,
+                                                   QueryBudget& budget) {
+    budget.consume();
+    const auto& cache = *ctx_.type_lattice_sorts_;
+    const auto left_kind = constructor_index(a), right_kind = constructor_index(b);
+    if (left_kind == CtorNil) return cache.recognizers[CtorNil](b);
+    if (right_kind == CtorNil) return cache.recognizers[CtorNil](a);
+    auto both_empty = cache.recognizers[CtorNil](a) && cache.recognizers[CtorNil](b);
+    if (length == 0) return both_empty;
+    auto heads = bounded_subtype(project(a, CtorCons, 0),
+        project(b, CtorCons, 0), depth, budget);
+    auto tails = bounded_list_subtype(project(a, CtorCons, 1),
+        project(b, CtorCons, 1), depth, length - 1, budget);
+    return both_empty || (cache.recognizers[CtorCons](a) && cache.recognizers[CtorCons](b) && heads && tails);
+}
+
+::z3::expr TypeLatticeEncoder::bounded_same_list_length(const ::z3::expr& a,
+                                                       const ::z3::expr& b,
+                                                       unsigned length, QueryBudget& budget) {
+    budget.consume();
+    const auto& cache = *ctx_.type_lattice_sorts_;
+    const auto left_kind = constructor_index(a), right_kind = constructor_index(b);
+    if (left_kind == CtorNil) return cache.recognizers[CtorNil](b);
+    if (right_kind == CtorNil) return cache.recognizers[CtorNil](a);
+    auto both_empty = cache.recognizers[CtorNil](a) && cache.recognizers[CtorNil](b);
+    if (length == 0) return both_empty;
+    auto tails = bounded_same_list_length(project(a, CtorCons, 1),
+        project(b, CtorCons, 1), length - 1, budget);
+    return both_empty || (cache.recognizers[CtorCons](a) && cache.recognizers[CtorCons](b) && tails);
+}
+
+::z3::expr TypeLatticeEncoder::bounded_sum_subtype(const ::z3::expr& list,
+                                                  const ::z3::expr& type, bool source,
+                                                  unsigned depth, unsigned length,
+                                                  QueryBudget& budget) {
+    budget.consume();
+    const auto& cache = *ctx_.type_lattice_sorts_;
+    if (constructor_index(list) == CtorNil) return ctx_.bool_val(source);
+    auto empty = cache.recognizers[CtorNil](list);
+    if (length == 0) return source ? empty : ctx_.bool_val(false);
+    auto head = project(list, CtorCons, 0);
+    auto match = source ? bounded_subtype(head, type, depth, budget)
+                        : bounded_subtype(type, head, depth, budget);
+    auto rest = bounded_sum_subtype(project(list, CtorCons, 1), type, source,
+        depth, length - 1, budget);
+    return ::z3::ite(empty, ctx_.bool_val(source), source ? match && rest : match || rest);
+}
+
+::z3::expr TypeLatticeEncoder::bounded_subtype(const ::z3::expr& a, const ::z3::expr& b,
+                                              unsigned depth, QueryBudget& budget) {
+    budget.consume();
+    const auto& cache = *ctx_.type_lattice_sorts_;
+    if (::z3::eq(a, b)) return ctx_.bool_val(true);
+    if (is_ground_type(a) && is_ground_type(b)) return (*cache.subtype)(a, b).simplify();
+    const auto left_kind = constructor_index(a), right_kind = constructor_index(b);
+    const auto can_be = [](int known, unsigned kind) { return known < 0 || known == static_cast<int>(kind); };
+    auto result = a == b || a == encode_base(BaseType::Bottom) || b == encode_base(BaseType::Unknown);
+    if (can_be(left_kind, CtorBase) && can_be(right_kind, CtorBase)) {
+        for (auto first : {BaseType::Int8, BaseType::UInt8}) {
+            for (unsigned i = 0; i < 4; ++i) {
+                for (unsigned j = i + 1; j < 4; ++j) {
+                    result = result ||
+                        (a == encode_base(static_cast<BaseType>(static_cast<unsigned>(first) + i)) &&
+                         b == encode_base(static_cast<BaseType>(static_cast<unsigned>(first) + j)));
+                }
+            }
+        }
+    }
+    if (depth == 0) return result;
+    const auto length = symbolic_query_bounds().max_list_length;
+    if (left_kind == CtorSum)
+        return result || bounded_sum_subtype(project(a, CtorSum, 0), b, true,
+            depth - 1, length, budget);
+    auto structural = ctx_.bool_val(false);
+    if (can_be(left_kind, CtorPointer) && can_be(right_kind, CtorPointer)) {
+        auto pointees = bounded_subtype(project(a, CtorPointer, 0), project(b, CtorPointer, 0), depth - 1, budget);
+        structural = structural || (cache.recognizers[CtorPointer](a) && cache.recognizers[CtorPointer](b) && pointees);
+    }
+    if (can_be(left_kind, CtorArray) && can_be(right_kind, CtorArray)) {
+        auto elements = bounded_subtype(project(a, CtorArray, 0), project(b, CtorArray, 0), depth - 1, budget);
+        structural = structural || (cache.recognizers[CtorArray](a) && cache.recognizers[CtorArray](b) &&
+            project(a, CtorArray, 1) == project(b, CtorArray, 1) && elements);
+    }
+    if (can_be(left_kind, CtorFunction) && can_be(right_kind, CtorFunction)) {
+        auto returns = bounded_subtype(project(a, CtorFunction, 0), project(b, CtorFunction, 0), depth - 1, budget);
+        auto parameters = bounded_list_subtype(project(b, CtorFunction, 1), project(a, CtorFunction, 1),
+            depth - 1, length, budget);
+        structural = structural || (cache.recognizers[CtorFunction](a) && cache.recognizers[CtorFunction](b) && returns && parameters);
+    }
+    if (can_be(right_kind, CtorSum)) {
+        auto list = project(b, CtorSum, 0);
+        auto match = bounded_sum_subtype(list, a, false, depth - 1, length, budget) &&
+            bounded_same_list_length(list, list, length, budget);
+        structural = ::z3::ite(cache.recognizers[CtorSum](b), match, structural);
+    }
+    if (can_be(left_kind, CtorSum)) {
+        auto match = bounded_sum_subtype(project(a, CtorSum, 0), b, true, depth - 1, length, budget);
+        structural = ::z3::ite(cache.recognizers[CtorSum](a), match, structural);
+    }
+    return result || structural;
+}
+
+::z3::expr TypeLatticeEncoder::bounded_sum_compatible(const ::z3::expr& list,
+                                                     const ::z3::expr& type,
+                                                     unsigned depth, unsigned length,
+                                                     QueryBudget& budget) {
+    budget.consume();
+    const auto& cache = *ctx_.type_lattice_sorts_;
+    if (constructor_index(list) == CtorNil) return ctx_.bool_val(false);
+    if (length == 0) return ctx_.bool_val(false);
+    auto match = bounded_compatible(project(list, CtorCons, 0), type, depth, budget);
+    auto rest = bounded_sum_compatible(project(list, CtorCons, 1), type,
+        depth, length - 1, budget);
+    return !cache.recognizers[CtorNil](list) && (match || rest);
+}
+
+::z3::expr TypeLatticeEncoder::bounded_compatible(const ::z3::expr& a, const ::z3::expr& b,
+                                                 unsigned depth, QueryBudget& budget) {
+    budget.consume();
+    const auto& cache = *ctx_.type_lattice_sorts_;
+    if (is_ground_type(a) && is_ground_type(b)) return (*cache.compatible)(a, b).simplify();
+    auto result = a == b || a == encode_base(BaseType::Unknown) || b == encode_base(BaseType::Unknown) ||
+        (is_signed_type(a) && is_signed_type(b)) || (is_unsigned_type(a) && is_unsigned_type(b)) ||
+        (cache.recognizers[CtorPointer](a) && cache.recognizers[CtorPointer](b)) ||
+        (cache.recognizers[CtorArray](a) && cache.recognizers[CtorArray](b) &&
+         project(a, CtorArray, 1) == project(b, CtorArray, 1));
+    const auto length = symbolic_query_bounds().max_list_length;
+    auto same_arity = bounded_same_list_length(project(a, CtorFunction, 1),
+        project(b, CtorFunction, 1), length, budget);
+    result = result || (cache.recognizers[CtorFunction](a) && cache.recognizers[CtorFunction](b) && same_arity);
+    auto any_sum = cache.recognizers[CtorSum](a) || cache.recognizers[CtorSum](b);
+    if (depth == 0) {
+        result = result && !any_sum;
+    } else {
+        auto source_list = project(a, CtorSum, 0), target_list = project(b, CtorSum, 0);
+        auto source = bounded_sum_compatible(source_list, b, depth - 1, length, budget) &&
+            bounded_same_list_length(source_list, source_list, length, budget);
+        auto target = bounded_sum_compatible(target_list, a, depth - 1, length, budget) &&
+            bounded_same_list_length(target_list, target_list, length, budget);
+        result = ::z3::ite(cache.recognizers[CtorSum](a), source,
+            ::z3::ite(cache.recognizers[CtorSum](b), target, result));
+    }
+    return a != encode_base(BaseType::Bottom) && b != encode_base(BaseType::Bottom) && result;
 }
 
 ::z3::expr TypeLatticeEncoder::type_has_size(const ::z3::expr& type, uint32_t size) {
-    auto& c = ctx_.ctx();
-    ::z3::expr kind = type % ctx_.int_val(256);
-    ::z3::expr base = (type / ctx_.int_val(256)) % ctx_.int_val(256);
-    
-    // Build constraints for each type that has this size
-    ::z3::expr_vector options(c);
-    
-    // Check pointer type (always pointer size)
-    if (size == ctx_.pointer_size()) {
-        options.push_back(is_pointer_type(type));
-    }
-    
-    // Check base types
-    for (int bt = static_cast<int>(BaseType::Int8); bt < static_cast<int>(BaseType::_Count); ++bt) {
-        if (base_type_size(static_cast<BaseType>(bt), ctx_.pointer_size()) == size) {
-            options.push_back((kind == ctx_.int_val(0)) && (base == ctx_.int_val(bt)));
-        }
-    }
-    
-    if (options.empty()) {
-        return c.bool_val(false);
-    }
-    return ::z3::mk_or(options);
+    const auto& constructors = ctx_.type_lattice_sorts_->constructors;
+    if (type.is_app() &&
+        (::z3::eq(type.decl(), constructors[CtorPointer]) ||
+         ::z3::eq(type.decl(), constructors[CtorNullPointer]) ||
+         ::z3::eq(type.decl(), constructors[CtorFunction])))
+        return ctx_.bool_val(size == ctx_.pointer_size());
+    if (is_ground_type(type))
+        return ((*ctx_.type_lattice_sorts_->byte_size)(type) == ctx_.uint_val(size)).simplify();
+    bounded_symbolic_queries_used_ = true;
+    auto bounds = symbolic_query_bounds();
+    QueryBudget budget{bounds.max_expansions};
+    return bounded_byte_size(type, bounds.max_depth, budget) == ctx_.uint_val(size);
 }
 
 ::z3::expr TypeLatticeEncoder::subtype_of(const ::z3::expr& t1, const ::z3::expr& t2) {
-    // Simplified subtyping: same type or widening of integers
-    ::z3::expr same = type_eq(t1, t2);
-    
-    ::z3::expr kind1 = t1 % ctx_.int_val(256);
-    ::z3::expr kind2 = t2 % ctx_.int_val(256);
-    ::z3::expr base1 = (t1 / ctx_.int_val(256)) % ctx_.int_val(256);
-    ::z3::expr base2 = (t2 / ctx_.int_val(256)) % ctx_.int_val(256);
-    
-    // Both base types and base1 <= base2 for same signedness family
-    ::z3::expr both_base = (kind1 == ctx_.int_val(0)) && (kind2 == ctx_.int_val(0));
-    ::z3::expr can_widen = both_base && (base1 <= base2);
-    
-    return same || can_widen;
+    if (::z3::eq(t1, t2)) return ctx_.bool_val(true);
+    if (is_ground_type(t1) && is_ground_type(t2))
+        return (*ctx_.type_lattice_sorts_->subtype)(t1, t2).simplify();
+    bounded_symbolic_queries_used_ = true;
+    auto bounds = symbolic_query_bounds();
+    QueryBudget budget{bounds.max_expansions};
+    return bounded_subtype(t1, t2, bounds.max_depth, budget);
 }
 
 ::z3::expr TypeLatticeEncoder::types_compatible(const ::z3::expr& t1, const ::z3::expr& t2) {
-    // Compatible if same type, or both integers of compatible sizes
-    ::z3::expr same = type_eq(t1, t2);
-    ::z3::expr both_int = is_integer_type(t1) && is_integer_type(t2);
-    ::z3::expr both_ptr = is_pointer_type(t1) && is_pointer_type(t2);
-    
-    return same || both_int || both_ptr;
+    if (is_ground_type(t1) && is_ground_type(t2))
+        return (*ctx_.type_lattice_sorts_->compatible)(t1, t2).simplify();
+    bounded_symbolic_queries_used_ = true;
+    auto bounds = symbolic_query_bounds();
+    QueryBudget budget{bounds.max_expansions};
+    return bounded_compatible(t1, t2, bounds.max_depth, budget);
 }
 
 // ============================================================================

@@ -16,6 +16,7 @@
 #include <unordered_set>
 #include <vector>
 #include <memory>
+#include <stdexcept>
 
 namespace structor::z3 {
 
@@ -277,6 +278,18 @@ private:
     mutable CacheStats stats_;
 };
 
+struct SymbolicTypeQueryBounds {
+    unsigned max_depth;
+    unsigned max_list_length;
+    unsigned max_expansions;
+};
+
+/// The finite symbolic predicate builder exhausted its configured work budget.
+class SymbolicTypeQueryLimit : public std::length_error {
+public:
+    using std::length_error::length_error;
+};
+
 /// Encodes InferredType to Z3 expressions
 /// Uses a recursive datatype definition for pointer types
 class TypeLatticeEncoder {
@@ -340,12 +353,27 @@ public:
     /// Get the type lattice
     [[nodiscard]] const TypeLattice& lattice() const noexcept { return lattice_; }
 
+    /// Symbolic recursive predicates are complete only within these bounds.
+    /// UNSAT after a bounded query means no model in that domain. Ground
+    /// constructor queries, type equality, and pointer sizes remain exact.
+    [[nodiscard]] SymbolicTypeQueryBounds symbolic_query_bounds() const noexcept;
+    [[nodiscard]] bool bounded_symbolic_queries_used() const noexcept {
+        return bounded_symbolic_queries_used_;
+    }
+    [[nodiscard]] bool explicit_candidate_queries_used() const noexcept {
+        return explicit_candidate_queries_used_;
+    }
+    void reset_symbolic_query_tracking() noexcept {
+        bounded_symbolic_queries_used_ = false;
+        explicit_candidate_queries_used_ = false;
+    }
+
 private:
     Z3Context& ctx_;
     TypeLattice lattice_;
     
     // Z3 sorts
-    std::optional<::z3::sort> type_sort_;         // Integer-encoded type
+    std::optional<::z3::sort> type_sort_;         // Recursive lossless datatype
     std::optional<::z3::sort> base_type_sort_;    // Enumeration sort for base types
     
     // Base type enum constants
@@ -353,10 +381,51 @@ private:
     
     // Cache for encoded types
     std::unordered_map<InferredType, ::z3::expr, InferredTypeHash> encode_cache_;
+    bool bounded_symbolic_queries_used_ = false;
+    bool explicit_candidate_queries_used_ = false;
+    friend class TypeConstraintSet;
+
+    struct QueryBudget {
+        unsigned remaining;
+        void consume();
+    };
     
     void initialize_sorts();
     void initialize_base_sort();
     void initialize_type_datatype();
+    void initialize_type_relations();
+    [[nodiscard]] ::z3::expr encode_type(const InferredType& type);
+    [[nodiscard]] ::z3::expr encode_list(
+        const std::vector<std::shared_ptr<InferredType>>& types);
+    [[nodiscard]] InferredType decode_type(const ::z3::expr& value);
+    [[nodiscard]] std::vector<InferredType> decode_list(const ::z3::expr& value);
+    [[nodiscard]] bool is_ground_type(const ::z3::expr& type) const;
+    [[nodiscard]] int constructor_index(const ::z3::expr& type) const;
+    [[nodiscard]] ::z3::expr project(const ::z3::expr& type,
+                                   unsigned constructor, unsigned member) const;
+    [[nodiscard]] ::z3::expr bounded_byte_size(const ::z3::expr& type,
+                                              unsigned depth, QueryBudget& budget);
+    [[nodiscard]] ::z3::expr bounded_sum_byte_size(const ::z3::expr& list,
+                                                  unsigned depth, unsigned length,
+                                                  QueryBudget& budget);
+    [[nodiscard]] ::z3::expr bounded_subtype(const ::z3::expr& a, const ::z3::expr& b,
+                                            unsigned depth, QueryBudget& budget);
+    [[nodiscard]] ::z3::expr bounded_list_subtype(const ::z3::expr& a, const ::z3::expr& b,
+                                                 unsigned depth, unsigned length,
+                                                 QueryBudget& budget);
+    [[nodiscard]] ::z3::expr bounded_sum_subtype(const ::z3::expr& list,
+                                                const ::z3::expr& type, bool source,
+                                                unsigned depth, unsigned length,
+                                                QueryBudget& budget);
+    [[nodiscard]] ::z3::expr bounded_compatible(const ::z3::expr& a, const ::z3::expr& b,
+                                               unsigned depth, QueryBudget& budget);
+    [[nodiscard]] ::z3::expr bounded_sum_compatible(const ::z3::expr& list,
+                                                   const ::z3::expr& type,
+                                                   unsigned depth, unsigned length,
+                                                   QueryBudget& budget);
+    [[nodiscard]] ::z3::expr bounded_same_list_length(const ::z3::expr& a,
+                                                     const ::z3::expr& b,
+                                                     unsigned length, QueryBudget& budget);
 };
 
 /// Bitvector-based type encoding for improved solver performance

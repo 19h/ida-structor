@@ -248,6 +248,16 @@ target_sources(test_instruction_semantics_identity PRIVATE
 )
 add_test(NAME type_instruction_semantics_identity COMMAND test_instruction_semantics_identity)
 
+add_z3_test(test_compound_type_encoding test_compound_type_encoding.cpp)
+target_include_directories(test_compound_type_encoding PRIVATE ${PROJECT_SOURCE_DIR}/test)
+target_sources(test_compound_type_encoding PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/z3/type_lattice.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/context.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/type_encoding.cpp
+)
+add_test(NAME type_compound_encoding COMMAND test_compound_type_encoding)
+set_tests_properties(type_compound_encoding PROPERTIES TIMEOUT 20)
+
 # Add combined test target
 add_custom_target(check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --no-tests=error
@@ -269,6 +279,7 @@ add_custom_target(check
             test_type_lattice_laws
             test_type_variable_identity
             test_instruction_semantics_identity
+            test_compound_type_encoding
 )
 
 # Add z3-only test target for quick Z3 testing
@@ -290,5 +301,6 @@ add_custom_target(check_z3
             test_type_lattice_laws
             test_type_variable_identity
             test_instruction_semantics_identity
+            test_compound_type_encoding
     VERBATIM
 )

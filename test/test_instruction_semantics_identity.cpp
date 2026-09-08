@@ -108,7 +108,7 @@ void check_shared_encoder_sorts_and_context_lifetime() {
         assert(::z3::eq(first.base_type_sort(), second.base_type_sort()));
         assert(first.base_type_sort().sort_kind() == Z3_DATATYPE_SORT);
         assert(::z3::eq(first.type_sort(), second.type_sort()));
-        assert(first.type_sort().is_int());
+        assert(first.type_sort().is_datatype());
         TypeConstraintSet constraints(context);
         const auto variable = TypeVariable::for_temp(0, BADADDR, "same");
         assert(::z3::eq(constraints.get_z3_var(variable, first),
@@ -260,6 +260,140 @@ void check_storage_width_validation_before_narrowing() {
     }
 }
 
+void check_hard_evidence_specialization() {
+    Z3Config config;
+    config.max_symbolic_type_depth = 0;
+    config.max_symbolic_type_list_length = 0;
+    config.max_symbolic_type_expansions = 1;
+    Z3Context context(config);
+    TypeLatticeEncoder encoder(context);
+    const auto integer = InferredType::make_base(BaseType::Int32);
+    const auto nested = InferredType::make_array(InferredType::make_array(integer, 2), 3);
+    const auto first = TypeVariable::for_temp(1, 0x1000, "exact");
+    const auto alias = TypeVariable::for_temp(2, 0x1000, "alias");
+    TypeConstraintSet exact(context);
+    // Put the size constraint first to reject order-dependent specialization.
+    exact.add(TypeConstraint::make_has_size(alias, 24));
+    exact.add(TypeConstraint::make_equal(first, alias));
+    exact.add(TypeConstraint::make_one_of(first, {nested}));
+    auto solver = context.make_solver();
+    solver.add(exact.to_z3_hard(encoder));
+    assert(!encoder.bounded_symbolic_queries_used());
+    assert(solver.check() == ::z3::sat);
+    assert(encoder.decode(exact.get_z3_var(alias, encoder), solver.get_model()) == nested);
+    exact.add(TypeConstraint::make_one_of(alias, {InferredType::make_array(integer, 2)}));
+    solver.reset();
+    solver.add(exact.to_z3_hard(encoder));
+    assert(solver.check() == ::z3::unsat);
+    assert(!encoder.bounded_symbolic_queries_used());
+
+    TypeConstraintSet conflict(context);
+    conflict.add(TypeConstraint::make_has_size(first, 4));
+    conflict.add(TypeConstraint::make_is_base(first, BaseType::Int32));
+    conflict.add(TypeConstraint::make_is_base(first, BaseType::Float32));
+    solver.reset();
+    solver.add(conflict.to_z3_hard(encoder));
+    assert(solver.check() == ::z3::unsat);
+    assert(!encoder.bounded_symbolic_queries_used());
+
+    // Neither soft concrete hints nor multi-choice alternatives entail one
+    // concrete equality. They must not bypass the symbolic work budget.
+    for (const auto soft : {false, true}) {
+        auto hint = TypeConstraint::make_one_of(first, soft
+            ? std::vector<InferredType>{integer}
+            : std::vector<InferredType>{integer, InferredType::make_base(BaseType::Float32)});
+        if (soft) hint.soft(10);
+        // Depth=0 permits only one size-builder step, so use zero budget
+        // in a separate context to prove that no equality was assumed.
+        Z3Config zero_config = config;
+        zero_config.max_symbolic_type_expansions = 0;
+        Z3Context zero_context(zero_config);
+        TypeLatticeEncoder zero_encoder(zero_context);
+        TypeConstraintSet zero_constraints(zero_context);
+        zero_constraints.add(TypeConstraint::make_has_size(first, 4));
+        zero_constraints.add(hint);
+        bool exhausted = false;
+        try {
+            (void)zero_constraints.to_z3_hard(zero_encoder);
+        } catch (const SymbolicTypeQueryLimit&) {
+            exhausted = true;
+        }
+        assert(exhausted && zero_encoder.bounded_symbolic_queries_used());
+    }
+}
+
+void check_soft_compound_candidates_outside_bounds() {
+    const auto integer = InferredType::make_base(BaseType::Int32);
+    const auto nested = InferredType::make_array(InferredType::make_array(integer, 2), 3);
+    const auto pointer = InferredType::make_ptr(InferredType::make_ptr(nested));
+    const auto function = InferredType::make_func(InferredType::make_ptr(nested),
+        {InferredType::make_ptr(nested), InferredType::make_array(InferredType::make_ptr(integer), 4)});
+    for (const auto& candidate : {nested, pointer, function}) {
+        Z3Config config;
+        config.max_symbolic_type_depth = 0;
+        config.max_symbolic_type_list_length = 0;
+        Z3Context context(config);
+        TypeLatticeEncoder encoder(context);
+        TypeConstraintSet constraints(context);
+        const auto source = TypeVariable::for_temp(1, 0x1000, "soft source");
+        const auto alias = TypeVariable::for_temp(2, 0x1000, "soft alias");
+        constraints.add(TypeConstraint::make_has_size(alias, candidate.size(8)));
+        if (candidate.is_pointer()) constraints.add(TypeConstraint::make_is_pointer(alias));
+        constraints.add(TypeConstraint::make_equal(source, alias));
+        constraints.add(TypeConstraint::make_one_of(source, {candidate}).soft(10));
+        auto optimizer = context.make_optimizer();
+        optimizer.add(constraints.to_z3_hard(encoder));
+        for (const auto& [expression, weight] : constraints.to_z3_soft(encoder, true))
+            optimizer.add_soft(expression, weight);
+        assert(optimizer.check() == ::z3::sat);
+        assert(encoder.decode(constraints.get_z3_var(alias, encoder), optimizer.get_model()) == candidate);
+        assert(encoder.bounded_symbolic_queries_used());
+        assert(encoder.explicit_candidate_queries_used());
+        encoder.reset_symbolic_query_tracking();
+        assert(!encoder.bounded_symbolic_queries_used() && !encoder.explicit_candidate_queries_used());
+    }
+    {
+        Z3Config config;
+        config.max_symbolic_type_depth = 0;
+        config.max_symbolic_type_list_length = 0;
+        Z3Context context(config);
+        TypeLatticeEncoder encoder(context);
+        TypeConstraintSet constraints(context);
+        const auto a = TypeVariable::for_temp(1, 0x1000, "subtype source");
+        const auto b = TypeVariable::for_temp(2, 0x1000, "subtype destination");
+        const auto narrow = InferredType::make_ptr(InferredType::make_ptr(InferredType::make_base(BaseType::Int8)));
+        const auto wide = InferredType::make_ptr(InferredType::make_ptr(integer));
+        constraints.add(TypeConstraint::make_is_pointer(a));
+        constraints.add(TypeConstraint::make_is_pointer(b));
+        constraints.add(TypeConstraint::make_subtype(a, b));
+        constraints.add(TypeConstraint::make_one_of(a, {narrow}).soft(10));
+        constraints.add(TypeConstraint::make_one_of(b, {wide}).soft(10));
+        auto optimizer = context.make_optimizer();
+        optimizer.add(constraints.to_z3_hard(encoder));
+        for (const auto& [expression, weight] : constraints.to_z3_soft(encoder, true))
+            optimizer.add_soft(expression, weight);
+        assert(optimizer.check() == ::z3::sat);
+        assert(encoder.decode(constraints.get_z3_var(a, encoder), optimizer.get_model()) == narrow);
+        assert(encoder.decode(constraints.get_z3_var(b, encoder), optimizer.get_model()) == wide);
+        assert(encoder.bounded_symbolic_queries_used() && encoder.explicit_candidate_queries_used());
+    }
+    {
+        Z3Context context;
+        TypeLatticeEncoder encoder(context);
+        TypeConstraintSet constraints(context);
+        const auto variable = TypeVariable::for_temp(1, 0x1000, "conflicting preference");
+        constraints.add(TypeConstraint::make_is_base(variable, BaseType::Int32));
+        constraints.add(TypeConstraint::make_has_size(variable, 4));
+        constraints.add(TypeConstraint::make_one_of(variable, {nested}).soft(10));
+        auto optimizer = context.make_optimizer();
+        optimizer.add(constraints.to_z3_hard(encoder));
+        for (const auto& [expression, weight] : constraints.to_z3_soft(encoder, true))
+            optimizer.add_soft(expression, weight);
+        assert(optimizer.check() == ::z3::sat);
+        assert(encoder.decode(constraints.get_z3_var(variable, encoder), optimizer.get_model()) == integer);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -277,6 +411,8 @@ int main(int argc, char** argv) {
     run("full_extraction", check_full_production_extraction_and_node_identity);
     run("recycled_node", check_recycled_node_storage_between_expression_passes);
     run("storage_widths", check_storage_width_validation_before_narrowing);
+    run("hard_evidence", check_hard_evidence_specialization);
+    run("soft_compound_candidates", check_soft_compound_candidates_outside_bounds);
     assert(ran);
     std::cout << "Production instruction semantics identity checks passed\n";
 }

@@ -172,7 +172,9 @@ public:
     [[nodiscard]] static bool is_floating(TypeCategory cat) noexcept;
 
 private:
-    Z3Context& ctx_;
+    // The context owns this encoder and rebinds it when its wrapper moves.
+    Z3Context* ctx_;
+    friend class Z3Context;
     std::optional<::z3::sort> type_sort_;
     std::vector<::z3::expr> category_exprs_;
 

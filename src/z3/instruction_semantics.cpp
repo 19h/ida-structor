@@ -847,12 +847,69 @@ void TypeConstraintSet::add_all(const qvector<TypeConstraint>& constraints) {
     return var;
 }
 
+TypeConstraintSet::ConstraintEvidence TypeConstraintSet::constraint_evidence() const {
+    std::unordered_map<TypeVariableIdentity, TypeVariableIdentity,
+                       TypeVariableIdentityHash> parents;
+    for (const auto& variable : variables_) parents.emplace(variable.identity, variable.identity);
+    const auto find_root = [&](TypeVariableIdentity identity) {
+        auto root = identity;
+        while (parents.at(root) != root) root = parents.at(root);
+        while (parents.at(identity) != identity) {
+            auto next = parents.at(identity);
+            parents.at(identity) = root;
+            identity = next;
+        }
+        return root;
+    };
+    for (const auto& constraint : constraints_) {
+        if (!constraint.is_soft && constraint.kind == TypeConstraint::Kind::Equal && constraint.var2)
+            parents.at(find_root(constraint.var1.identity)) = find_root(constraint.var2->identity);
+    }
+    ConcreteBindings roots;
+    CandidateBindings choices;
+    for (const auto& constraint : constraints_) {
+        const InferredType* exact = nullptr;
+        if ((constraint.kind == TypeConstraint::Kind::IsBase && constraint.concrete_type &&
+             constraint.concrete_type->is_base()) ||
+            (constraint.kind == TypeConstraint::Kind::IsPointerTo && constraint.concrete_type)) {
+            exact = &*constraint.concrete_type;
+        } else if (constraint.kind == TypeConstraint::Kind::OneOf && constraint.alternatives.size() == 1) {
+            exact = &constraint.alternatives.front();
+        }
+        const auto root = find_root(constraint.var1.identity);
+        if (exact && !constraint.is_soft) roots.emplace(root, exact->snapshot());
+        const auto record_candidate = [&](const InferredType& type) {
+            auto& values = choices[root];
+            if (std::find(values.begin(), values.end(), type) == values.end())
+                values.push_back(type.snapshot());
+        };
+        if (exact) record_candidate(*exact);
+        if (constraint.kind == TypeConstraint::Kind::OneOf)
+            for (const auto& alternative : constraint.alternatives) record_candidate(alternative);
+    }
+    ConstraintEvidence result;
+    for (const auto& variable : variables_) {
+        const auto root = find_root(variable.identity);
+        auto exact = roots.find(root);
+        if (exact != roots.end()) result.exact.emplace(variable.identity, exact->second);
+        auto candidates = choices.find(root);
+        if (candidates != choices.end()) result.candidates.emplace(variable.identity, candidates->second);
+    }
+    return result;
+}
+
 ::z3::expr TypeConstraintSet::constraint_to_z3(
     const TypeConstraint& c,
-    TypeLatticeEncoder& encoder) const
+    TypeLatticeEncoder& encoder,
+    const ConcreteBindings& bindings,
+    const CandidateBindings& candidates) const
 {
     auto& ctx = ctx_.ctx();
     ::z3::expr t1 = get_z3_var(c.var1, encoder);
+    const auto evidence_or_variable = [&](const TypeVariable& variable) {
+        auto known = bindings.find(variable.identity);
+        return known == bindings.end() ? get_z3_var(variable, encoder) : encoder.encode(known->second);
+    };
     
     switch (c.kind) {
         case TypeConstraint::Kind::Equal:
@@ -863,7 +920,34 @@ void TypeConstraintSet::add_all(const qvector<TypeConstraint>& constraints) {
             
         case TypeConstraint::Kind::Subtype:
             if (c.var2) {
-                return encoder.subtype_of(t1, get_z3_var(*c.var2, encoder));
+                const auto left = evidence_or_variable(c.var1), right = evidence_or_variable(*c.var2);
+                auto result = encoder.subtype_of(left, right);
+                const auto left_candidates = candidates.find(c.var1.identity);
+                const auto right_candidates = candidates.find(c.var2->identity);
+                if ((!bindings.contains(c.var1.identity) && left_candidates != candidates.end()) ||
+                    (!bindings.contains(c.var2->identity) && right_candidates != candidates.end()))
+                    encoder.explicit_candidate_queries_used_ = true;
+                const auto t2 = get_z3_var(*c.var2, encoder);
+                if (left_candidates != candidates.end()) {
+                    for (const auto& candidate : left_candidates->second) {
+                        auto encoded = encoder.encode(candidate);
+                        result = result || (t1 == encoded && encoder.subtype_of(encoded, right));
+                        if (right_candidates != candidates.end()) {
+                            for (const auto& other : right_candidates->second) {
+                                auto other_encoded = encoder.encode(other);
+                                result = result || (t1 == encoded && t2 == other_encoded &&
+                                    encoder.subtype_of(encoded, other_encoded));
+                            }
+                        }
+                    }
+                }
+                if (right_candidates != candidates.end()) {
+                    for (const auto& candidate : right_candidates->second) {
+                        auto encoded = encoder.encode(candidate);
+                        result = result || (t2 == encoded && encoder.subtype_of(left, encoded));
+                    }
+                }
+                return result;
             }
             return ctx.bool_val(true);
             
@@ -896,7 +980,18 @@ void TypeConstraintSet::add_all(const qvector<TypeConstraint>& constraints) {
             
         case TypeConstraint::Kind::HasSize:
             if (c.size) {
-                return encoder.type_has_size(t1, *c.size);
+                auto result = encoder.type_has_size(evidence_or_variable(c.var1), *c.size);
+                // Soft or multi-choice evidence extends the explored domain;
+                // a guarded candidate never becomes an assumed equality.
+                auto explicit_types = candidates.find(c.var1.identity);
+                if (explicit_types != candidates.end()) {
+                    if (!bindings.contains(c.var1.identity)) encoder.explicit_candidate_queries_used_ = true;
+                    for (const auto& candidate : explicit_types->second) {
+                        auto encoded = encoder.encode(candidate);
+                        result = result || (t1 == encoded && encoder.type_has_size(encoded, *c.size));
+                    }
+                }
+                return result;
             }
             return ctx.bool_val(true);
             
@@ -919,10 +1014,13 @@ void TypeConstraintSet::add_all(const qvector<TypeConstraint>& constraints) {
 ::z3::expr_vector TypeConstraintSet::to_z3_hard(TypeLatticeEncoder& encoder) const {
     auto& ctx = ctx_.ctx();
     ::z3::expr_vector result(ctx);
-    
+    // These substitutions are entailed by hard equalities. Every original
+    // equality remains below, including conflicting concrete observations.
+    const auto evidence = constraint_evidence();
+
     for (const auto& c : constraints_) {
         if (!c.is_soft) {
-            result.push_back(constraint_to_z3(c, encoder));
+            result.push_back(constraint_to_z3(c, encoder, evidence.exact, evidence.candidates));
         }
     }
     
@@ -930,13 +1028,15 @@ void TypeConstraintSet::add_all(const qvector<TypeConstraint>& constraints) {
 }
 
 std::vector<std::pair<::z3::expr, int>> TypeConstraintSet::to_z3_soft(
-    TypeLatticeEncoder& encoder) const
+    TypeLatticeEncoder& encoder, bool hard_constraints_installed) const
 {
     std::vector<std::pair<::z3::expr, int>> result;
+    const auto evidence = constraint_evidence();
+    const auto bindings = hard_constraints_installed ? evidence.exact : ConcreteBindings{};
     
     for (const auto& c : constraints_) {
         if (c.is_soft) {
-            result.emplace_back(constraint_to_z3(c, encoder), c.weight);
+            result.emplace_back(constraint_to_z3(c, encoder, bindings, evidence.candidates), c.weight);
         }
     }
     

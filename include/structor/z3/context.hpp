@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <vector>
+#include <optional>
 
 namespace structor::z3 {
 
@@ -28,6 +29,12 @@ struct Z3Config {
     uint32_t max_candidates = 1000;       // Maximum candidate universe
     uint32_t max_fields = 4096;           // Maximum number of fields
     uint32_t max_array_elements = 1024;   // Maximum array elements to detect
+
+    // Finite domain for recursive predicates over symbolic InferredType
+    // expressions. Ground constructor terms retain exact finite semantics.
+    unsigned max_symbolic_type_depth = 1;
+    unsigned max_symbolic_type_list_length = 16;
+    unsigned max_symbolic_type_expansions = 4096; // Type/list builder steps
 };
 
 /// RAII wrapper for Z3 context with Structor-specific configuration
@@ -116,6 +123,20 @@ private:
     struct TypeLatticeSortCache {
         ::z3::sort base_sort;
         std::vector<::z3::expr> base_constants;
+        std::optional<::z3::sort> type_sort;
+        std::optional<::z3::sort> list_sort;
+        std::vector<::z3::func_decl> constructors;
+        std::vector<::z3::func_decl> recognizers;
+        std::vector<std::vector<::z3::func_decl>> accessors;
+        std::optional<::z3::func_decl> subtype;
+        std::optional<::z3::func_decl> list_subtype;
+        std::optional<::z3::func_decl> source_sum_subtype;
+        std::optional<::z3::func_decl> target_sum_subtype;
+        std::optional<::z3::func_decl> compatible;
+        std::optional<::z3::func_decl> sum_compatible;
+        std::optional<::z3::func_decl> same_list_length;
+        std::optional<::z3::func_decl> byte_size;
+        std::optional<::z3::func_decl> sum_byte_size;
 
         TypeLatticeSortCache(const ::z3::sort& sort,
                              const std::vector<::z3::expr>& constants)

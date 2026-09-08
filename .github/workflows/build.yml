@@ -219,6 +219,7 @@ jobs:
             inspect_base_inference \
             inspect_existing_type_matcher \
             inspect_array_layout \
+            inspect_symbolic_query_status \
             inspect_signature_mapping \
             inspect_target_calling_convention \
             inspect_type_application_identity; do
@@ -308,6 +309,7 @@ jobs:
               "inspect_base_inference",
               "inspect_existing_type_matcher",
               "inspect_array_layout",
+              "inspect_symbolic_query_status",
               "inspect_signature_mapping",
               "inspect_target_calling_convention",
               "inspect_type_application_identity")) {

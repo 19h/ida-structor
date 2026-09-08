@@ -485,12 +485,12 @@ TEST(type_encoder_basic) {
     
     // Create type variable
     auto tv = encoder.make_type_var("test_var");
-    ASSERT_TRUE(tv.is_int());
+    ASSERT_TRUE(tv.get_sort().is_datatype());
     
     // Encode base types
     auto int32 = InferredType::make_base(BaseType::Int32);
     auto encoded = encoder.encode(int32);
-    ASSERT_TRUE(encoded.is_int());
+    ASSERT_TRUE(encoded.get_sort().is_datatype());
 }
 
 TEST(type_encoder_constraints) {

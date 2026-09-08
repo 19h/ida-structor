@@ -266,8 +266,10 @@ public:
     /// Convert to Z3 constraints
     [[nodiscard]] ::z3::expr_vector to_z3_hard(TypeLatticeEncoder& encoder) const;
     
-    /// Convert soft constraints to Z3 with weights
-    [[nodiscard]] std::vector<std::pair<::z3::expr, int>> to_z3_soft(TypeLatticeEncoder& encoder) const;
+    /// Convert soft constraints to Z3 with weights. If the caller has installed
+    /// this set's hard constraints, exact hard facts may specialize predicates.
+    [[nodiscard]] std::vector<std::pair<::z3::expr, int>> to_z3_soft(
+        TypeLatticeEncoder& encoder, bool hard_constraints_installed = false) const;
     
     /// Get Z3 expression for a type variable
     [[nodiscard]] ::z3::expr get_z3_var(const TypeVariable& tv, TypeLatticeEncoder& encoder) const;
@@ -285,10 +287,22 @@ private:
     mutable std::unordered_map<TypeVariableIdentity, ::z3::expr,
                                TypeVariableIdentityHash> var_cache_;
     
+    using ConcreteBindings = std::unordered_map<TypeVariableIdentity,
+        InferredType, TypeVariableIdentityHash>;
+    using CandidateBindings = std::unordered_map<TypeVariableIdentity,
+        std::vector<InferredType>, TypeVariableIdentityHash>;
+    struct ConstraintEvidence {
+        ConcreteBindings exact;
+        CandidateBindings candidates;
+    };
+    [[nodiscard]] ConstraintEvidence constraint_evidence() const;
+
     /// Convert a single constraint to Z3
     [[nodiscard]] ::z3::expr constraint_to_z3(
         const TypeConstraint& c,
-        TypeLatticeEncoder& encoder
+        TypeLatticeEncoder& encoder,
+        const ConcreteBindings& bindings,
+        const CandidateBindings& candidates
     ) const;
 };
 

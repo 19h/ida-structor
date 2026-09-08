@@ -27,7 +27,7 @@ const char* type_category_name(TypeCategory cat) noexcept {
     }
 }
 
-TypeEncoder::TypeEncoder(Z3Context& ctx) : ctx_(ctx) {
+TypeEncoder::TypeEncoder(Z3Context& ctx) : ctx_(&ctx) {
     initialize_type_sort();
 }
 
@@ -54,10 +54,10 @@ void TypeEncoder::initialize_type_sort() {
     names[static_cast<unsigned>(TypeCategory::Void)]     = "TypeVoid";
 
     // Create enum sort
-    ::z3::func_decl_vector consts(ctx_.ctx());
-    ::z3::func_decl_vector testers(ctx_.ctx());
+    ::z3::func_decl_vector consts(ctx_->ctx());
+    ::z3::func_decl_vector testers(ctx_->ctx());
 
-    type_sort_ = ctx_.ctx().enumeration_sort(
+    type_sort_ = ctx_->ctx().enumeration_sort(
         "TypeCategory",
         static_cast<unsigned>(TypeCategory::_Count),
         names,
@@ -211,7 +211,7 @@ tinfo_t TypeEncoder::decode(
     const ExtendedTypeInfo* extended)
 {
     tinfo_t type;
-    uint32_t ptr_size = ctx_.pointer_size();
+    uint32_t ptr_size = ctx_->pointer_size();
 
     // A candidate's storage width is authoritative for materialization. Ctree
     // evidence can carry a promoted expression type (for example int32 for a
@@ -412,47 +412,47 @@ std::pair<::z3::expr, bool> TypeEncoder::compatible(
     const ::z3::expr& type,
     const ::z3::expr& size)
 {
-    auto& c = ctx_.ctx();
-    uint32_t ptr_size = ctx_.pointer_size();
+    auto& c = ctx_->ctx();
+    uint32_t ptr_size = ctx_->pointer_size();
 
     ::z3::expr_vector constraints(c);
 
     // Add size constraints for each type category
     constraints.push_back(::z3::implies(type == category_expr(TypeCategory::Int8),
-                                        size == ctx_.int_val(1)));
+                                        size == ctx_->int_val(1)));
     constraints.push_back(::z3::implies(type == category_expr(TypeCategory::UInt8),
-                                        size == ctx_.int_val(1)));
+                                        size == ctx_->int_val(1)));
     constraints.push_back(::z3::implies(type == category_expr(TypeCategory::Int16),
-                                        size == ctx_.int_val(2)));
+                                        size == ctx_->int_val(2)));
     constraints.push_back(::z3::implies(type == category_expr(TypeCategory::UInt16),
-                                        size == ctx_.int_val(2)));
+                                        size == ctx_->int_val(2)));
     constraints.push_back(::z3::implies(type == category_expr(TypeCategory::Int32),
-                                        size == ctx_.int_val(4)));
+                                        size == ctx_->int_val(4)));
     constraints.push_back(::z3::implies(type == category_expr(TypeCategory::UInt32),
-                                        size == ctx_.int_val(4)));
+                                        size == ctx_->int_val(4)));
     constraints.push_back(::z3::implies(type == category_expr(TypeCategory::Int64),
-                                        size == ctx_.int_val(8)));
+                                        size == ctx_->int_val(8)));
     constraints.push_back(::z3::implies(type == category_expr(TypeCategory::UInt64),
-                                        size == ctx_.int_val(8)));
+                                        size == ctx_->int_val(8)));
     constraints.push_back(::z3::implies(type == category_expr(TypeCategory::Float32),
-                                        size == ctx_.int_val(4)));
+                                        size == ctx_->int_val(4)));
     constraints.push_back(::z3::implies(type == category_expr(TypeCategory::Float64),
-                                        size == ctx_.int_val(8)));
+                                        size == ctx_->int_val(8)));
     constraints.push_back(::z3::implies(type == category_expr(TypeCategory::Pointer),
-                                        size == ctx_.int_val(ptr_size)));
+                                        size == ctx_->int_val(ptr_size)));
     constraints.push_back(::z3::implies(type == category_expr(TypeCategory::FuncPtr),
-                                        size == ctx_.int_val(ptr_size)));
+                                        size == ctx_->int_val(ptr_size)));
 
     return ::z3::mk_and(constraints);
 }
 
 uint32_t TypeEncoder::natural_size(TypeCategory cat) const {
-    uint32_t ptr_size = ctx_.pointer_size();
+    uint32_t ptr_size = ctx_->pointer_size();
     return type_category_size(cat, ptr_size);
 }
 
 uint32_t TypeEncoder::natural_alignment(TypeCategory cat) const {
-    uint32_t ptr_size = ctx_.pointer_size();
+    uint32_t ptr_size = ctx_->pointer_size();
     return type_category_alignment(cat, ptr_size);
 }
 

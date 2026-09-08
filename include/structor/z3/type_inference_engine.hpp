@@ -56,6 +56,8 @@ enum class TypeInferenceStatus : std::uint8_t {
     UnsupportedOperation,
     InternalError,
     Success,
+    NoModelWithinSymbolicBounds,
+    SymbolicQueryBudgetExceeded,
 };
 
 /// Statistics from type inference
@@ -131,6 +133,12 @@ struct FunctionTypeInferenceResult {
     qstring error_message;
     TypeInferenceStats stats;
     
+    // Present only for an explicitly enabled inference run. The flag records
+    // whether a non-ground predicate used the configured finite type domain.
+    std::optional<SymbolicTypeQueryBounds> symbolic_query_bounds;
+    bool used_bounded_symbolic_queries = false;
+    bool used_explicit_symbolic_candidates = false;
+
     /// Get inferred type for a variable
     [[nodiscard]] std::optional<InferredType> get_var_type(int var_idx) const;
     
@@ -193,6 +201,7 @@ public:
 private:
 #if defined(STRUCTOR_LIVE_TEST_HOOKS)
     friend struct TypeInferenceSignatureTestAccess;
+    friend struct TypeInferenceQueryStatusTestAccess;
 #endif
     Z3Context& ctx_;
     TypeInferenceConfig config_;
@@ -222,7 +231,7 @@ private:
     ::z3::optimize build_z3_constraints();
     
     /// Phase 5: Solve constraints
-    bool phase_solve(::z3::optimize& opt, ::z3::model& out_model);
+    ::z3::check_result phase_solve(::z3::optimize& opt, ::z3::model& out_model);
     
     /// Phase 6: Extract results from model
     void extract_results(

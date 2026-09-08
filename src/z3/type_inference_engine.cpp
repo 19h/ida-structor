@@ -127,6 +127,8 @@ FunctionTypeInferenceResult TypeInferenceEngine::infer_function(cfunc_t* cfunc) 
         result.error_message = "null cfunc";
         return result;
     }
+    type_encoder_.reset_symbolic_query_tracking();
+    result.symbolic_query_bounds = type_encoder_.symbolic_query_bounds();
     if (ctx_.config().max_memory_mb != 0) {
         result.status = TypeInferenceStatus::UnsupportedOperation;
         result.error_message =
@@ -141,6 +143,8 @@ FunctionTypeInferenceResult TypeInferenceEngine::infer_function(cfunc_t* cfunc) 
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 total_end - total_start);
         result.stats = last_stats_;
+        result.used_bounded_symbolic_queries = type_encoder_.bounded_symbolic_queries_used();
+        result.used_explicit_symbolic_candidates = type_encoder_.explicit_candidate_queries_used();
     };
 
     try {
@@ -187,13 +191,22 @@ FunctionTypeInferenceResult TypeInferenceEngine::infer_function(cfunc_t* cfunc) 
 
         report_progress("Solving", 70, "Solving constraints");
         ::z3::model model(ctx_.ctx());
-        const bool solved = phase_solve(opt, model);
+        const auto solved = phase_solve(opt, model);
 
-        if (!solved) {
-            result.status = TypeInferenceStatus::SolverFailure;
-            result.error_message =
-                "type-inference constraints were unsatisfiable or the solver "
-                "returned unknown";
+        if (solved != ::z3::sat) {
+            if (solved == ::z3::unsat && type_encoder_.bounded_symbolic_queries_used()) {
+                result.status = TypeInferenceStatus::NoModelWithinSymbolicBounds;
+                const auto bounds = *result.symbolic_query_bounds;
+                result.error_message.sprnt(
+                    "no model within symbolic type bounds (depth=%u, list_length=%u, "
+                    "expansions=%u); this does not establish an unbounded source-type contradiction",
+                    bounds.max_depth, bounds.max_list_length, bounds.max_expansions);
+            } else {
+                result.status = TypeInferenceStatus::SolverFailure;
+                result.error_message = solved == ::z3::unsat
+                    ? "type-inference constraints were unsatisfiable"
+                    : "type-inference solver returned unknown (including possible timeout)";
+            }
         } else {
             report_progress("Extracting", 90, "Extracting inferred types");
             extract_results(model, result);
@@ -204,6 +217,11 @@ FunctionTypeInferenceResult TypeInferenceEngine::infer_function(cfunc_t* cfunc) 
         report_progress("Complete", 100,
                         result.success ? "Experimental type inference complete"
                                        : "Experimental type inference failed");
+    } catch (const SymbolicTypeQueryLimit& exception) {
+        result.status = TypeInferenceStatus::SymbolicQueryBudgetExceeded;
+        result.success = false;
+        result.error_message.sprnt("symbolic type query budget exhausted: %s", exception.what());
+        reset_state();
     } catch (const std::exception& exception) {
         result.status = TypeInferenceStatus::InternalError;
         result.success = false;
@@ -373,7 +391,7 @@ void TypeInferenceEngine::add_calling_convention_constraints(cfunc_t* cfunc) {
     }
     
     // Add soft constraints with weights
-    auto soft = current_constraints_.to_z3_soft(type_encoder_);
+    auto soft = current_constraints_.to_z3_soft(type_encoder_, true);
     for (const auto& [expr, weight] : soft) {
         opt.add_soft(expr, weight);
     }
@@ -381,7 +399,7 @@ void TypeInferenceEngine::add_calling_convention_constraints(cfunc_t* cfunc) {
     return opt;
 }
 
-bool TypeInferenceEngine::phase_solve(::z3::optimize& opt, ::z3::model& out_model) {
+::z3::check_result TypeInferenceEngine::phase_solve(::z3::optimize& opt, ::z3::model& out_model) {
     auto start = std::chrono::steady_clock::now();
     
     auto result = opt.check();
@@ -393,12 +411,11 @@ bool TypeInferenceEngine::phase_solve(::z3::optimize& opt, ::z3::model& out_mode
     
     if (result == ::z3::sat) {
         out_model = opt.get_model();
-        return true;
     }
     
     // Unknown (including timeout) is not evidence of satisfiability. Never
     // expose a partial model as successful inferred type information.
-    return false;
+    return result;
 }
 
 void TypeInferenceEngine::extract_results(

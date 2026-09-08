@@ -66,54 +66,36 @@ def main() -> int:
         args.idump,
     ]
 
+    # Keep each label with its command so adding a suite cannot desynchronize
+    # two parallel registries and skip a late check.
     suites = [
-        [
+        ("external CMake consumer", [
             sys.executable,
             "integration_tests/check_cmake_embed_consumer.py",
             "--repo-root",
             str(repo_root),
-        ],
-        [sys.executable, "integration_tests/check_cpp_api_surface.py", *common],
-        [sys.executable, "integration_tests/check_index_guard_regressions.py", *common],
-        [sys.executable, "integration_tests/check_assignment_order_regressions.py", *common],
-        [sys.executable, "integration_tests/check_alias_flow_regressions.py", *common],
-        [sys.executable, "integration_tests/check_fixture_contracts.py", *common],
-        [sys.executable, "integration_tests/check_determinism_regressions.py", *common],
-        [sys.executable, "integration_tests/check_persistence_regressions.py", *common],
-        [sys.executable, "integration_tests/check_global_recovery_regressions.py", *common],
-        [sys.executable, "integration_tests/check_weaponstats_regressions.py", *common],
-        [sys.executable, "integration_tests/check_vtable_regressions.py", *common],
-        [sys.executable, "integration_tests/check_type_fixer_regressions.py", *common],
-        [sys.executable, "integration_tests/check_type_matcher_regressions.py", *common],
-        [sys.executable, "integration_tests/check_array_regressions.py", *common],
-        [sys.executable, "integration_tests/check_type_application_regressions.py", *common],
-        [sys.executable, "integration_tests/check_signature_abi_regressions.py", *common],
-        [sys.executable, "integration_tests/check_instruction_semantics_identity.py", *common],
-        [sys.executable, "integration_tests/check_type_lattice_regressions.py", *common],
+        ]),
+        ("C++ API surface", [sys.executable, "integration_tests/check_cpp_api_surface.py", *common]),
+        ("index guard regressions", [sys.executable, "integration_tests/check_index_guard_regressions.py", *common]),
+        ("assignment and call evaluation regressions", [sys.executable, "integration_tests/check_assignment_order_regressions.py", *common]),
+        ("branch-sensitive alias regressions", [sys.executable, "integration_tests/check_alias_flow_regressions.py", *common]),
+        ("exact fixture contracts", [sys.executable, "integration_tests/check_fixture_contracts.py", *common]),
+        ("fresh-database determinism regressions", [sys.executable, "integration_tests/check_determinism_regressions.py", *common]),
+        ("structure-persistence regressions", [sys.executable, "integration_tests/check_persistence_regressions.py", *common]),
+        ("global recovery regressions", [sys.executable, "integration_tests/check_global_recovery_regressions.py", *common]),
+        ("WeaponStats regressions", [sys.executable, "integration_tests/check_weaponstats_regressions.py", *common]),
+        ("vtable regressions", [sys.executable, "integration_tests/check_vtable_regressions.py", *common]),
+        ("type-fixer regressions", [sys.executable, "integration_tests/check_type_fixer_regressions.py", *common]),
+        ("existing-type matcher regressions", [sys.executable, "integration_tests/check_type_matcher_regressions.py", *common]),
+        ("typed-array solver regressions", [sys.executable, "integration_tests/check_array_regressions.py", *common]),
+        ("type-application identity regressions", [sys.executable, "integration_tests/check_type_application_regressions.py", *common]),
+        ("signature mapping and target ABI regressions", [sys.executable, "integration_tests/check_signature_abi_regressions.py", *common]),
+        ("bounded symbolic type query status", [sys.executable, "integration_tests/check_type_query_status.py", *common]),
+        ("experimental instruction semantics identity", [sys.executable, "integration_tests/check_instruction_semantics_identity.py", *common]),
+        ("type lattice materialization", [sys.executable, "integration_tests/check_type_lattice_regressions.py", *common]),
     ]
 
-    labels = [
-        "external CMake consumer",
-        "C++ API surface",
-        "index guard regressions",
-        "assignment and call evaluation regressions",
-        "branch-sensitive alias regressions",
-        "exact fixture contracts",
-        "fresh-database determinism regressions",
-        "structure-persistence regressions",
-        "global recovery regressions",
-        "WeaponStats regressions",
-        "vtable regressions",
-        "type-fixer regressions",
-        "existing-type matcher regressions",
-        "typed-array solver regressions",
-        "type-application identity regressions",
-        "signature mapping and target ABI regressions",
-        "experimental instruction semantics identity",
-        "type lattice materialization",
-    ]
-
-    for cmd, label in zip(suites, labels, strict=True):
+    for label, cmd in suites:
         run(cmd, cwd=repo_root, label=label)
 
     total_elapsed = time.monotonic() - total_start
