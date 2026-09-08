@@ -243,6 +243,8 @@ private:
     /// Check if unsigned integer a is subtype of unsigned integer b  
     [[nodiscard]] bool unsigned_int_subtype(BaseType a, BaseType b) const noexcept;
     
+    [[nodiscard]] InferredType join_alternatives(std::vector<InferredType> alternatives) const;
+
     /// Internal LUB implementation without caching
     [[nodiscard]] InferredType lub_impl(const InferredType& a, const InferredType& b) const;
     

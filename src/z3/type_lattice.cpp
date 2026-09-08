@@ -2,6 +2,7 @@
 #include "structor/z3/context.hpp"
 #include <algorithm>
 #include <functional>
+#include <limits>
 
 namespace structor::z3 {
 
@@ -169,7 +170,10 @@ uint32_t InferredType::size(uint32_t ptr_size) const noexcept {
             return ptr_size;
         case Kind::Array:
             if (element_type_) {
-                return element_type_->size(ptr_size) * array_count_;
+                const std::uint64_t element_size = element_type_->size(ptr_size);
+                const std::uint64_t extent = element_size * array_count_;
+                return extent <= std::numeric_limits<std::uint32_t>::max()
+                    ? static_cast<std::uint32_t>(extent) : 0;
             }
             return 0;
         case Kind::Struct:
@@ -180,7 +184,9 @@ uint32_t InferredType::size(uint32_t ptr_size) const noexcept {
             if (!sum_alternatives_.empty()) {
                 uint32_t max_size = 0;
                 for (const auto& alt : sum_alternatives_) {
-                    max_size = std::max(max_size, alt->size(ptr_size));
+                    const auto alternative_size = alt->size(ptr_size);
+                    if (alternative_size == 0) return 0;
+                    max_size = std::max(max_size, alternative_size);
                 }
                 return max_size;
             }
@@ -255,13 +261,37 @@ tinfo_t InferredType::to_tinfo() const {
             }
             break;
             
-        case Kind::Sum:
-            // For sum types, we use the first alternative as representative
-            // (IDA doesn't have native sum types)
-            if (!sum_alternatives_.empty()) {
-                type = sum_alternatives_[0]->to_tinfo();
+        case Kind::Sum: {
+            // Alternative abstract interpretations are not interchangeable.
+            // A materialized C union preserves each representable object view;
+            // unresolved, void, or bare-function alternatives have no such view.
+            if (sum_alternatives_.empty()) break;
+            udt_type_data_t members;
+            members.is_union = true;
+            members.pack = 1; // SDK logarithmic pack(1): preserve observed extent.
+            std::size_t index = 0;
+            for (const auto& alternative : sum_alternatives_) {
+                if (alternative->is_unknown() || alternative->is_bottom()) return {};
+                tinfo_t member_type = alternative->to_tinfo();
+                const auto member_size = member_type.get_size();
+                if (member_type.empty() || member_type.is_void() || member_type.is_func() ||
+                    member_size == BADSIZE || member_size == 0 ||
+                    member_size > std::numeric_limits<std::uint64_t>::max() / 8) return {};
+                udm_t member;
+                member.name.sprnt("alternative_%zu", index++);
+                member.offset = 0;
+                member.size = static_cast<std::uint64_t>(member_size) * 8;
+                member.type = member_type;
+                members.push_back(std::move(member));
+                members.total_size = std::max(members.total_size, member_size);
             }
+            // IDA consumes members during create_udt(); retain the expected
+            // extent before handing its storage to the SDK.
+            const auto expected_size = members.total_size;
+            if (!type.create_udt(members, BTF_UNION) ||
+                type.get_size() != expected_size) return {};
             break;
+        }
     }
     
     return type;
@@ -550,24 +580,19 @@ bool TypeLattice::is_subtype(const InferredType& a, const InferredType& b) const
     // Everything is subtype of Unknown (top)
     if (b.is_unknown()) return true;
     
-    // Unknown is only subtype of itself
-    if (a.is_unknown()) return b.is_unknown();
-    
-    // Same kinds
-    if (a.kind() != b.kind()) {
-        // Special case: signed/unsigned integers can be subtypes
-        if (a.is_base() && b.is_base()) {
-            // Allow widening: int8 <: int32 etc.
-            if (is_signed_int(a.base_type()) && is_signed_int(b.base_type())) {
-                return signed_int_subtype(a.base_type(), b.base_type());
-            }
-            if (is_unsigned_int(a.base_type()) && is_unsigned_int(b.base_type())) {
-                return unsigned_int_subtype(a.base_type(), b.base_type());
-            }
-        }
-        return false;
+    // A sum is a union of alternatives. Check the source first so two
+    // sums require every source alternative to have a destination supertype.
+    if (a.is_sum()) {
+        return std::all_of(a.sum_alternatives().begin(), a.sum_alternatives().end(),
+            [&](const auto& alternative) { return is_subtype(*alternative, b); });
     }
-    
+    if (b.is_sum()) {
+        return std::any_of(b.sum_alternatives().begin(), b.sum_alternatives().end(),
+            [&](const auto& alternative) { return is_subtype(a, *alternative); });
+    }
+    if (a.is_unknown()) return b.is_unknown();
+    if (a.kind() != b.kind()) return false;
+
     switch (a.kind()) {
         case InferredType::Kind::Base:
             if (a.base_type() == b.base_type()) return true;
@@ -608,11 +633,7 @@ bool TypeLattice::is_subtype(const InferredType& a, const InferredType& b) const
             return a.struct_tid() == b.struct_tid();
             
         case InferredType::Kind::Sum:
-            // a <: (b1 | b2 | ...) if a <: bi for some i
-            for (const auto& alt : b.sum_alternatives()) {
-                if (is_subtype(a, *alt)) return true;
-            }
-            return false;
+            return false; // Handled before kind comparison.
     }
     
     return false;
@@ -638,63 +659,75 @@ InferredType TypeLattice::lub(const InferredType& a, const InferredType& b) cons
     return result;
 }
 
-InferredType TypeLattice::lub_impl(const InferredType& a, const InferredType& b) const {
-    // If one is subtype of other, return the supertype
-    if (is_subtype(a, b)) return b;
-    if (is_subtype(b, a)) return a;
-    
-    // Same kinds - try to find common supertype
-    if (a.kind() == b.kind()) {
-        switch (a.kind()) {
-            case InferredType::Kind::Base:
-                // Both signed integers -> larger width
-                if (is_signed_int(a.base_type()) && is_signed_int(b.base_type())) {
-                    BaseType larger = static_cast<BaseType>(
-                        std::max(static_cast<int>(a.base_type()), 
-                                 static_cast<int>(b.base_type())));
-                    return InferredType::make_base(larger);
-                }
-                // Both unsigned integers -> larger width
-                if (is_unsigned_int(a.base_type()) && is_unsigned_int(b.base_type())) {
-                    BaseType larger = static_cast<BaseType>(
-                        std::max(static_cast<int>(a.base_type()), 
-                                 static_cast<int>(b.base_type())));
-                    return InferredType::make_base(larger);
-                }
-                // Mixed signed/unsigned -> unsigned of larger width
-                if (is_integer(a.base_type()) && is_integer(b.base_type())) {
-                    uint32_t size_a = base_type_size(a.base_type(), ptr_size_);
-                    uint32_t size_b = base_type_size(b.base_type(), ptr_size_);
-                    uint32_t max_size = std::max(size_a, size_b);
-                    return InferredType::make_base(base_type_from_size(max_size, false));
-                }
-                break;
-                
-            case InferredType::Kind::Pointer:
-                // LUB of pointers: pointer to LUB of pointees
-                if (a.pointee() && b.pointee()) {
-                    return InferredType::make_ptr(lub(*a.pointee(), *b.pointee()));
-                }
-                // One is void pointer
-                return InferredType::make_ptr(InferredType::unknown());
-                
-            case InferredType::Kind::Array:
-                // Arrays must have same count, element types get LUB
-                if (a.array_count() == b.array_count() && 
-                    a.element_type() && b.element_type()) {
-                    return InferredType::make_array(
-                        lub(*a.element_type(), *b.element_type()),
-                        a.array_count());
-                }
-                break;
-                
-            default:
-                break;
+namespace {
+int compare_type_values(const InferredType& a, const InferredType& b) {
+    const auto compare = [](const auto& left, const auto& right) {
+        return left < right ? -1 : (right < left ? 1 : 0);
+    };
+    const auto compare_child = [&](const InferredType* left, const InferredType* right) {
+        if (!left || !right) return compare(left != nullptr, right != nullptr);
+        return compare_type_values(*left, *right);
+    };
+    const auto compare_list = [&](const auto& left, const auto& right) {
+        for (std::size_t i = 0; i < std::min(left.size(), right.size()); ++i) {
+            if (const auto order = compare_child(left[i].get(), right[i].get())) return order;
         }
+        return compare(left.size(), right.size());
+    };
+    if (const auto order = compare(a.kind(), b.kind())) return order;
+    switch (a.kind()) {
+        case InferredType::Kind::Base: return compare(a.base_type(), b.base_type());
+        case InferredType::Kind::Pointer: return compare_child(a.pointee(), b.pointee());
+        case InferredType::Kind::Array:
+            if (const auto order = compare(a.array_count(), b.array_count())) return order;
+            return compare_child(a.element_type(), b.element_type());
+        case InferredType::Kind::Struct: return compare(a.struct_tid(), b.struct_tid());
+        case InferredType::Kind::Function:
+            if (const auto order = compare_child(a.return_type(), b.return_type())) return order;
+            return compare_list(a.param_types(), b.param_types());
+        case InferredType::Kind::Sum:
+            return compare_list(a.sum_alternatives(), b.sum_alternatives());
     }
-    
-    // No common supertype within same hierarchy -> return unknown
-    return InferredType::unknown();
+    return 0;
+}
+} // namespace
+
+InferredType TypeLattice::join_alternatives(std::vector<InferredType> alternatives) const {
+    // Flatten finite unions and retain an antichain under the subtype order.
+    // Hashes and printed names do not participate in semantic equality.
+    std::vector<InferredType> flat;
+    const auto append = [&](const auto& self, const InferredType& type) -> void {
+        if (type.is_sum()) {
+            for (const auto& alternative : type.sum_alternatives()) self(self, *alternative);
+        } else if (!type.is_bottom()) {
+            flat.push_back(type);
+        }
+    };
+    for (const auto& alternative : alternatives) append(append, alternative);
+    std::sort(flat.begin(), flat.end(), [](const auto& a, const auto& b) {
+        return compare_type_values(a, b) < 0;
+    });
+    std::vector<InferredType> result;
+    for (const auto& candidate : flat) {
+        bool covered = false;
+        for (const auto& existing : result) {
+            if (is_subtype(candidate, existing)) { covered = true; break; }
+        }
+        if (covered) continue;
+        result.erase(std::remove_if(result.begin(), result.end(),
+            [&](const auto& existing) { return is_subtype(existing, candidate); }), result.end());
+        result.push_back(candidate);
+    }
+    if (result.empty()) return InferredType::bottom();
+    if (result.size() == 1) return result.front();
+    return InferredType::make_sum(std::move(result));
+}
+
+InferredType TypeLattice::lub_impl(const InferredType& a, const InferredType& b) const {
+    // An explicit finite union is below every common supertype. Replacing
+    // incomparable signedness or pointee alternatives with one representation
+    // would either discard an interpretation or fail the least-bound law.
+    return join_alternatives({a, b});
 }
 
 InferredType TypeLattice::glb(const InferredType& a, const InferredType& b) const {
@@ -718,52 +751,47 @@ InferredType TypeLattice::glb(const InferredType& a, const InferredType& b) cons
 }
 
 InferredType TypeLattice::glb_impl(const InferredType& a, const InferredType& b) const {
-    // If one is subtype of other, return the subtype
+    if (a.is_sum() || b.is_sum()) {
+        std::vector<InferredType> alternatives;
+        if (a.is_sum()) {
+            for (const auto& alternative : a.sum_alternatives())
+                alternatives.push_back(glb(*alternative, b));
+        } else {
+            for (const auto& alternative : b.sum_alternatives())
+                alternatives.push_back(glb(a, *alternative));
+        }
+        return join_alternatives(std::move(alternatives));
+    }
     if (is_subtype(a, b)) return a;
     if (is_subtype(b, a)) return b;
-    
-    // Same kinds - try to find common subtype
-    if (a.kind() == b.kind()) {
-        switch (a.kind()) {
-            case InferredType::Kind::Base:
-                // Both signed integers -> smaller width
-                if (is_signed_int(a.base_type()) && is_signed_int(b.base_type())) {
-                    BaseType smaller = static_cast<BaseType>(
-                        std::min(static_cast<int>(a.base_type()), 
-                                 static_cast<int>(b.base_type())));
-                    return InferredType::make_base(smaller);
-                }
-                // Both unsigned integers -> smaller width
-                if (is_unsigned_int(a.base_type()) && is_unsigned_int(b.base_type())) {
-                    BaseType smaller = static_cast<BaseType>(
-                        std::min(static_cast<int>(a.base_type()), 
-                                 static_cast<int>(b.base_type())));
-                    return InferredType::make_base(smaller);
-                }
-                // Incompatible base types
-                return InferredType::bottom();
-                
-            case InferredType::Kind::Pointer:
-                // GLB of pointers: pointer to GLB of pointees
-                if (a.pointee() && b.pointee()) {
-                    auto elem_glb = glb(*a.pointee(), *b.pointee());
-                    if (elem_glb.is_bottom()) return InferredType::bottom();
-                    return InferredType::make_ptr(std::move(elem_glb));
-                }
-                break;
-                
-            default:
-                break;
-        }
+    if (a.kind() != b.kind()) return InferredType::bottom();
+    switch (a.kind()) {
+        case InferredType::Kind::Pointer:
+            if (a.pointee() && b.pointee())
+                return InferredType::make_ptr(glb(*a.pointee(), *b.pointee()));
+            break;
+        case InferredType::Kind::Array:
+            if (a.array_count() == b.array_count() && a.element_type() && b.element_type())
+                return InferredType::make_array(glb(*a.element_type(), *b.element_type()), a.array_count());
+            break;
+        case InferredType::Kind::Function:
+            if (a.param_types().size() == b.param_types().size() && a.return_type() && b.return_type()) {
+                std::vector<InferredType> parameters;
+                parameters.reserve(a.param_types().size());
+                for (std::size_t i = 0; i < a.param_types().size(); ++i)
+                    parameters.push_back(lub(*a.param_types()[i], *b.param_types()[i]));
+                return InferredType::make_func(glb(*a.return_type(), *b.return_type()), std::move(parameters));
+            }
+            break;
+        default:
+            break;
     }
-    
-    // Incompatible types
     return InferredType::bottom();
 }
 
 bool TypeLattice::are_compatible(const InferredType& a, const InferredType& b) const {
     // Compatible if GLB is not bottom
-    return !glb(a, b).is_bottom();
+    return !is_subtype(glb(a, b), InferredType::bottom());
 }
 
 InferredType TypeLattice::widen_to_size(const InferredType& type, uint32_t target_size) const {

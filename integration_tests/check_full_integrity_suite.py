@@ -88,6 +88,7 @@ def main() -> int:
         [sys.executable, "integration_tests/check_type_application_regressions.py", *common],
         [sys.executable, "integration_tests/check_signature_abi_regressions.py", *common],
         [sys.executable, "integration_tests/check_instruction_semantics_identity.py", *common],
+        [sys.executable, "integration_tests/check_type_lattice_regressions.py", *common],
     ]
 
     labels = [
@@ -107,6 +108,7 @@ def main() -> int:
         "type-application identity regressions",
         "signature mapping and target ABI regressions",
         "experimental instruction semantics identity",
+        "type lattice materialization",
     ]
 
     for cmd, label in zip(suites, labels, strict=True):

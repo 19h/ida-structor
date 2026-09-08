@@ -226,6 +226,15 @@ target_link_libraries(test_type_lattice PRIVATE structor_z3)
 structor_enable_test_assertions(test_type_lattice)
 add_test(NAME type_lattice COMMAND test_type_lattice)
 
+add_z3_test(test_type_lattice_laws test_type_lattice_laws.cpp)
+target_sources(test_type_lattice_laws PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/z3/type_lattice.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/context.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/type_encoding.cpp
+)
+target_include_directories(test_type_lattice_laws PRIVATE ${PROJECT_SOURCE_DIR}/test)
+add_test(NAME type_lattice_laws COMMAND test_type_lattice_laws)
+
 add_z3_test(test_type_variable_identity test_type_variable_identity.cpp)
 add_test(NAME type_variable_identity COMMAND test_type_variable_identity)
 
@@ -257,6 +266,7 @@ add_custom_target(check
             test_z3_synthesis_integration
             test_e2e_synthesis
             test_type_lattice
+            test_type_lattice_laws
             test_type_variable_identity
             test_instruction_semantics_identity
 )
@@ -277,6 +287,7 @@ add_custom_target(check_z3
             test_z3_synthesis_integration
             test_e2e_synthesis
             test_type_lattice
+            test_type_lattice_laws
             test_type_variable_identity
             test_instruction_semantics_identity
     VERBATIM

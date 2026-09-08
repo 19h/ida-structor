@@ -82,6 +82,7 @@ install:
 		inspect_base_inference inspect_existing_type_matcher \
 		inspect_array_layout inspect_type_application_identity \
 		inspect_instruction_semantics_identity check_assignment_order_ctree \
+		check_type_lattice_materialization \
 		inspect_signature_mapping inspect_target_calling_convention; do \
 		if strings "$(INSTALL_STAGE_DIR)/plugins/structor$(PLUGIN_EXT)" | \
 			grep -F -- "$$marker" >/dev/null; then \

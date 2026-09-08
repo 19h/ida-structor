@@ -319,11 +319,12 @@ TEST(type_lattice_lub_mixed) {
     auto int32 = InferredType::make_base(BaseType::Int32);
     auto uint32 = InferredType::make_base(BaseType::UInt32);
     
-    // LUB of signed and unsigned widens to unsigned of same size
-    // (reasonable choice: preserves bit pattern interpretation)
-    auto lub = lattice.lub(int32, uint32);
-    ASSERT_TRUE(lub.is_base());
-    ASSERT_EQ(lub.base_type(), BaseType::UInt32);
+    // Signed and unsigned observations remain separate interpretations;
+    // choosing one signedness is not an upper bound under this subtype order.
+    auto joined = lattice.lub(int32, uint32);
+    ASSERT_TRUE(joined.is_sum());
+    ASSERT_TRUE(lattice.is_subtype(int32, joined));
+    ASSERT_TRUE(lattice.is_subtype(uint32, joined));
 }
 
 TEST(type_lattice_glb) {
@@ -566,6 +567,39 @@ TEST(bv_encoder_constraints) {
     ASSERT_TRUE(has_size_4.is_bool());
 }
 
+TEST(type_extent_checked) {
+    const auto scalar = InferredType::make_base(BaseType::Float64);
+    ASSERT_EQ(InferredType::make_array(scalar, 536870911).size(8), 4294967288u);
+    ASSERT_EQ(InferredType::make_array(scalar, 536870912).size(8), 0u);
+    ASSERT_EQ(InferredType::make_array(scalar, UINT32_MAX).size(8), 0u);
+    const auto unknown_extent = InferredType::make_sum({scalar, InferredType::make_struct(12)});
+    ASSERT_EQ(unknown_extent.size(8), 0u);
+}
+
+TEST(type_sum_materialization) {
+    const auto integer = InferredType::make_base(BaseType::Int32);
+    const auto floating = InferredType::make_base(BaseType::Float32);
+    auto value = InferredType::make_sum({integer, floating}).to_tinfo();
+    ASSERT_TRUE(value.is_union());
+    udt_type_data_t members;
+    ASSERT_TRUE(value.get_udt_details(&members));
+    ASSERT_EQ(members.size(), 2u);
+    ASSERT_EQ(value.get_size(), 4u);
+    ASSERT_EQ(members[0].offset, 0u);
+    ASSERT_EQ(members[1].offset, 0u);
+    ASSERT_TRUE(members[0].type.equals_to(integer.to_tinfo()));
+    ASSERT_TRUE(members[1].type.is_floating());
+    const auto bytes = InferredType::make_array(InferredType::make_base(BaseType::UInt8), 3);
+    const auto word = InferredType::make_base(BaseType::UInt16);
+    auto packed = InferredType::make_sum({bytes, word}).to_tinfo();
+    ASSERT_TRUE(packed.is_union());
+    ASSERT_EQ(packed.get_size(), 3u);
+    ASSERT_TRUE(InferredType::make_sum({integer, InferredType::unknown()}).to_tinfo().empty());
+    ASSERT_TRUE(InferredType::make_sum({integer, InferredType::bottom()}).to_tinfo().empty());
+    ASSERT_TRUE(InferredType::make_sum({integer, InferredType::make_base(BaseType::Void)}).to_tinfo().empty());
+    ASSERT_TRUE(InferredType::make_sum({integer, InferredType::make_func(integer, {})}).to_tinfo().empty());
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -618,6 +652,8 @@ int main() {
     RUN_TEST(bv_encoder_basic);
     RUN_TEST(bv_encoder_encode_decode);
     RUN_TEST(bv_encoder_constraints);
+    RUN_TEST(type_extent_checked);
+    RUN_TEST(type_sum_materialization);
     
     std::cout << "\n=== All tests passed! ===" << std::endl;
     return 0;

@@ -212,6 +212,7 @@ jobs:
             STRUCTOR_INTEGRATION_TESTING \
             STRUCTOR_TEST_PERSISTENCE_FAULT \
             check_assignment_order_ctree \
+            check_type_lattice_materialization \
             inspect_instruction_semantics_identity \
             fault_global_tinfo_rollback \
             inspect_base_inference \
@@ -299,6 +300,7 @@ jobs:
               "STRUCTOR_INTEGRATION_TESTING",
               "STRUCTOR_TEST_PERSISTENCE_FAULT",
               "check_assignment_order_ctree",
+              "check_type_lattice_materialization",
               "inspect_instruction_semantics_identity",
               "fault_global_tinfo_rollback",
               "inspect_base_inference",

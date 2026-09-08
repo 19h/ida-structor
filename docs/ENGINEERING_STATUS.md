@@ -16,13 +16,14 @@ or completion of this project-wide objective.
 | Distinguish the type of a pointer base from the type of its loaded field | Production access inference helper tests and real `TypeFixer::analyze_variable` calls | Twenty-two focused helper cases and 13 live type-fixer cases pass |
 | Preserve full function/variable identity in inference caches | Production composite-key and semantics tests, forced collisions, distinct high addresses/SSA versions, and live ctree extraction | Caller cache and experimental variable identities verified; live extraction emits 19 constraints from 16 expressions |
 | Preserve complete type values in lattice caches | Real function/structure hash collisions, mutable child aliases, and returned-result mutation | Directed production lattice tests pass; cache entries own detached snapshots |
+| Preserve the declared abstract subtype order when joining, meeting, and materializing types | Production-linked law enumeration and actual IDA union/member/extent checks | 43 types, 1849 pairs, and 79507 triples pass the sampled laws; all 12 live materialization checks pass |
 | Merge existing types without losing evidence, observed storage, padding, or protected names | Production matcher unit tests and anonymous IDA type checks | Standalone tests and 11 real-IDA checks pass |
 | Return solver diagnostics that remain valid after the synthesis context is destroyed | Production solver/optimizer UNSAT tests and public API return/destruction checks | Standalone lifetime checks and public API UNSAT/relaxation checks pass |
 | Reject inference results belonging to another function before applying types | Real local/prototype snapshots, foreign/unknown/high-address rejection, and positive application controls | All nine live checks pass within the active IDB |
 | Map signature arguments to actual locals and distinguish target ABI defaults from recovered function evidence | Fifteen portable tests, five live argument-map cases, and six target-family cases | All pass; two foreign-ABI fixtures explicitly falsify the assumption that every function follows its target default |
 | Preserve pointer forwarding as address evidence rather than inventing a field load | Alias-only call/comparison negatives and loaded-field positive controls | Live controls pass; original-collector isolation confirms removal of a fictitious linked-list pointer observation |
-| Maintain public API, deterministic layouts, transactional persistence, global recovery, vtables, and type fixing | Full licensed integrity suite and external CMake consumer | All 16 combined integrity suites pass (352.2 s), including the external consumer; no contract expectations changed for sequencing/ABI integration |
-| Maintain reproducible, usable builds and diagnostics | CMake build, CTest, compile-gated hook checks, explicit `idump` runtime diagnostics | 195 standalone CTest entries pass; the release build excludes all 11 hook markers and its installed copy passes codesign verification |
+| Maintain public API, deterministic layouts, transactional persistence, global recovery, vtables, and type fixing | Full licensed integrity suite and external CMake consumer | The 16-suite sequencing/ABI baseline at `b0491a0` passes (352.2 s); the additional lattice suite passes separately |
+| Maintain reproducible, usable builds and diagnostics | CMake build, CTest, compile-gated hook checks, explicit `idump` runtime diagnostics | 196 standalone CTest entries pass; the release build excludes all 12 hook markers and its installed copy passes codesign verification |
 | Extend adaptive and interprocedural inference beyond existing supported paths | Production implementation, adversarial fixtures, convergence/resource tests | Incomplete; see remaining work |
 
 ## Assumption register
@@ -43,6 +44,7 @@ Dependent findings reference these identifiers.
 | A10 | Abstract types are finite acyclic trees. Cached keys/results must not retain caller-mutable child aliases; Z3 expressions and external encoders borrow their context. | Mutate the ninth function parameter without changing its hash, mutate a returned cached result, and instantiate multiple encoders in one context. | Lattice cache snapshots and shared sort declarations |
 | A11 | Assignment state changes follow operand observations; call-body effects follow argument observations. Ctree sibling order does not prove argument evaluation order. | Actual `q = *q`, indexed assignments, pre/post increments, loads around escaped-index calls, and constructed sibling reference/write combinations. | Expression sequencing |
 | A12 | Signature parameters follow the recovered `argidx`; target defaults do not prove a particular function's ABI. Location models require a complete lowered fixed prototype. | Nonidentity/invalid maps, six cross-target binaries, foreign ABI overrides, hidden return pointers, mixed register banks, and stack exhaustion. | Signature/ABI facts; details in [SIGNATURE_ABI_INFERENCE.md](SIGNATURE_ABI_INFERENCE.md) |
+| A13 | The lattice is the finite abstract order specified in [TYPE_LATTICE_CONTRACT.md](TYPE_LATTICE_CONTRACT.md), and materialized sums preserve complete object alternatives. | Exhaustive checks over the recorded finite sample; actual IDA packed/nested/function-pointer unions, invalid alternatives, and extent boundaries. | CPU lattice algebra and union conversion; this is not a C conversion or source-type recovery claim |
 
 ## Changes and reproducibility
 
@@ -142,8 +144,20 @@ use two nine-parameter functions with the same bounded hash and a scalar/struct
 hash collision. Snapshot tests also mutate shared parameter children after a
 cache insertion and mutate cache-hit results; keys and cached values now remain
 unchanged. Multiple encoders in one context share its BaseType declaration.
-These repairs do not establish lossless compound encoding or complete lattice
-algebra; those remain separate work. [A6, A10]
+These cache repairs are separate from the compound SMT encoding. [A6, A10]
+
+The CPU lattice now checks source-sum alternatives before destination sums,
+retains incomparable alternatives in joins, and distributes meets over sums.
+The production-linked finite law check covers 43 types, 1849 ordered pairs,
+and 79507 ordered triples, including associativity and deterministic
+operand-order representation. Original code fails 11 sampled law groups.
+All 12 actual IDA conversion/extent checks pass, including a 3-byte packed union
+whose two alternative widths are 3 and 2 bytes. Live validation exposed IDA's
+consuming `create_udt` API: the expected size must be saved before creation.
+The mock now models that ownership rule. Byte-size multiplication uses a
+64-bit intermediate and reports unknown on overflow. The detailed contract,
+assumptions, and complexity limits are in
+[TYPE_LATTICE_CONTRACT.md](TYPE_LATTICE_CONTRACT.md). [A1, A10, A13]
 
 The installed `idump` on the development machine could load the plugin but could
 not initialize its own decompiler API. It returned success with assembly-only
@@ -203,6 +217,9 @@ platforms.
   for persistent keys, current-pass expression nodes, and name bytes. [A9]
 - Type-cache snapshots: O(T) time and space for T logical tree nodes. Complete
   equality resolves collisions; caches do not use hashes as type values. [A10]
+- Type joins: O(k log k) structural comparisons and O(k²) subtype comparisons
+  for k flattened alternatives. Meets can distribute over Cartesian products;
+  detailed output-sensitive bounds are in the lattice contract. [A13]
 - Sibling-effect scans: O(V²) worst-case time across a pathological call tree
   containing V expression nodes; each scan uses O(H) stack for tree height H.
   Indexed expansion remains capped at 32 candidate values. [A11]
@@ -210,8 +227,9 @@ platforms.
 ## Bounded scope expansion and remaining work
 
 - **High impact — experimental type representation:** compound Z3 encoding still
-  loses structure IDs and compound details; sum subtyping and join/meet laws need
-  directed algebra checks. Memory-result indexing is separate from the repaired
+  loses structure IDs and compound details. CPU sum subtyping and join/meet laws
+  are repaired under the documented abstract order and pass the finite sample;
+  this does not repair the SMT representation. Memory-result indexing is separate from the repaired
   variable interner. Moving a context with its cached TypeEncoder also needs a
   wrapper-reference repair. The experimental pipeline remains disabled by default.
 - **High impact — function ABI and revision identity:** prototype mapping and

@@ -184,7 +184,7 @@ public:
         pointed_type_ = element;
     }
     bool create_func(const struct func_type_data_t& ftd);
-    bool create_udt(const udt_type_data_t& udt, std::uint32_t kind);
+    bool create_udt(udt_type_data_t& udt, std::uint32_t kind);
     bool get_udt_details(udt_type_data_t* out) const;
 
     bool is_ptr() const { return is_ptr_; }
@@ -301,7 +301,7 @@ struct udt_type_data_t : public qvector<udm_t> {
     unsigned pack = 0;
 };
 
-inline bool tinfo_t::create_udt(const udt_type_data_t& udt, std::uint32_t kind) {
+inline bool tinfo_t::create_udt(udt_type_data_t& udt, std::uint32_t kind) {
     if (kind != BTF_STRUCT && kind != BTF_UNION) return false;
     *this = tinfo_t();
     is_struct_ = kind == BTF_STRUCT;
@@ -314,6 +314,8 @@ inline bool tinfo_t::create_udt(const udt_type_data_t& udt, std::uint32_t kind) 
             static_cast<size_t>((member.offset + member.size + 7) / 8));
     }
     udt_->total_size = udt_size_;
+    // IDA's create_udt overload consumes its input, including total_size.
+    udt = udt_type_data_t{};
     return true;
 }
 

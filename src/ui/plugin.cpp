@@ -11,6 +11,7 @@
 #include "type_matcher_live_checks.hpp"
 #include "type_application_live_checks.hpp"
 #include "signature_abi_live_checks.hpp"
+#include "type_lattice_live_checks.hpp"
 #include "../../integration_tests/assignment_order_ctree_probe.hpp"
 #endif
 #include <expr.hpp>
@@ -1518,6 +1519,28 @@ static bool run_pending_api_command_impl(const qstring& command_text) {
 #endif
 
 #if defined(STRUCTOR_LIVE_TEST_HOOKS)
+    if (command == "check_type_lattice_materialization") {
+        const auto checks = detail::run_live_type_lattice_checks();
+        const bool success = !checks.empty() &&
+            std::all_of(checks.begin(), checks.end(), [](const auto& check) {
+                return check.second;
+            });
+        std::string payload = "\"success\":";
+        append_json_bool(payload, success);
+        payload += ",\"checks\":{";
+        bool first = true;
+        for (const auto& [name, passed] : checks) {
+            if (!first) payload += ',';
+            first = false;
+            append_json_string(payload, name);
+            payload += ':';
+            append_json_bool(payload, passed);
+        }
+        payload += '}';
+        export_api_json(command.c_str(), payload);
+        return success;
+    }
+
     if (command == "check_assignment_order_ctree") {
         if (parts.size() != 2) {
             export_api_error(command.c_str(), "Expected carrier function");
