@@ -245,9 +245,18 @@ public:
         static_cast<cblock_t*>(statement->ctry)->swap(*body->cblock);
         statement->ctry->catchs.resize(1);
         auto& handler = statement->ctry->catchs[0];
+#ifdef CTRY_WIND
         handler.convert_to_finally();
-        static_cast<cblock_t&>(handler).swap(*finalizer->cblock);
         if (wind) statement->ctry->flags |= CTRY_WIND;
+#else
+        // Pinned legacy SDKs encode wind cleanup as a catch-all handler and
+        // cannot represent a normal finally block. A live request for the
+        // latter must report its unsupported setup instead of testing a
+        // different control-flow construct under the same case name.
+        if (!wind) throw std::runtime_error("SDK has no normal-finally ctree representation");
+        statement->ctry->is_wind = true;
+#endif
+        static_cast<cblock_t&>(handler).swap(*finalizer->cblock);
         return statement;
     }
 

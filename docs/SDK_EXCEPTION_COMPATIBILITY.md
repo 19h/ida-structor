@@ -24,7 +24,13 @@ The failed build is recorded in
 
 Each isolated build starts from Structor `c60dd403` plus this compatibility
 change. All 209 standalone CTest entries pass against each pinned SDK
-(32.39 s and 32.52 s). The combined worktree also compiles against the local
+(32.39 s and 32.52 s). These first pinned builds disabled live-test hooks.
+Enabling hooks in CI exposed the same SDK representation difference in the
+constructed-ctree builder. Its legacy branch now constructs wind cleanup as a
+catch-all and explicitly reports unsupported setup for normal-finally cases,
+which that SDK cannot represent. The complete plugin subsequently compiles
+with hooks enabled against both exact pinned SDKs. The current-SDK builder
+retains its existing finally/wind construction. The combined worktree also compiles against the local
 9.4 SDK. These checks establish compile compatibility and helper behavior;
 they do not constitute a new native exception-runtime matrix. [C1, C2]
 
