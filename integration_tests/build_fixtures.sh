@@ -99,6 +99,7 @@ if [ "$#" -gt 0 ]; then
 fi
 
 build_c "$root/test_simple_struct.c"
+build_c "$root/test_memory_inference.c"
 build_c "$root/test_function_ptr.c"
 build_c "$root/test_linked_list.c"
 build_c "$root/test_mixed_access.c"

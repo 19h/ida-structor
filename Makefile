@@ -84,6 +84,7 @@ install:
 		inspect_instruction_semantics_identity check_assignment_order_ctree \
 		check_type_lattice_materialization \
 		inspect_symbolic_query_status \
+		inspect_memory_inference \
 		check_alias_flow_ctree \
 		inspect_signature_mapping inspect_target_calling_convention; do \
 		if strings "$(INSTALL_STAGE_DIR)/plugins/structor$(PLUGIN_EXT)" | \

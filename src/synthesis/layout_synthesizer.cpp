@@ -3648,66 +3648,13 @@ LayoutSynthesizer::synthesize_with_type_inference(cfunc_t *cfunc, int var_idx,
         return result;
     }
 
-    // Step 3: Enhance access pattern with type inference results
-    if (last_type_inference_.has_value() && last_type_inference_->success) {
-        // Get inferred type for the target variable
-        auto var_type = last_type_inference_->get_var_type(var_idx);
-        if (var_type.has_value()) {
-            detail::synth_log("[Structor] Using inferred type for variable %d: %s\n",
-                                                var_idx, var_type->to_string().c_str());
+    // The adjunct's memory records use absolute data origins. The selected
+    // local pointer has no established absolute value here, so those records
+    // cannot refine its relative field offsets. A function EA is not a data
+    // origin for the selected pointer.
 
-            // If it's a pointer type, this confirms our target is a pointer to struct
-            if (var_type->is_pointer()) {
-                // Enhance field accesses with inferred pointee types
-                for (auto &access : pattern.accesses) {
-                    // Check if we have inferred memory type at this offset
-                    auto mem_type = last_type_inference_->get_mem_type(cfunc->entry_ea,
-                                                                                                                         access.offset);
-                    if (mem_type.has_value()) {
-                        // Use inferred type if we don't have a better one
-                        if (access.inferred_type.empty() ||
-                                access.inferred_type.is_void()) {
-                            access.inferred_type = mem_type->to_tinfo();
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Step 4: Run structure synthesis
+    // Step 3: Run structure synthesis
     result = synthesize(pattern, opts);
-
-    // Step 5: Apply type inference results to improve field types
-    if (last_type_inference_.has_value() && last_type_inference_->success) {
-        for (auto &field : result.structure.fields) {
-            if (field.is_padding)
-                continue;
-
-            // Look for inferred memory type at this field's offset
-            auto mem_type =
-                    last_type_inference_->get_mem_type(cfunc->entry_ea, field.offset);
-            if (mem_type.has_value() && !mem_type->is_unknown()) {
-                tinfo_t inferred = mem_type->to_tinfo();
-
-                // Use inferred type if current type is generic
-                if (field.type.empty() || field.type.is_ptr_or_array()) {
-                    // For pointers, use the more specific type
-                    if (field.type.is_ptr() && inferred.is_ptr()) {
-                        tinfo_t current_pointee = field.type.get_pointed_object();
-                        tinfo_t inferred_pointee = inferred.get_pointed_object();
-
-                        // Prefer non-void pointee
-                        if (current_pointee.is_void() && !inferred_pointee.is_void()) {
-                            field.type = inferred;
-                        }
-                    } else if (field.type.empty()) {
-                        field.type = inferred;
-                    }
-                }
-            }
-        }
-    }
 
     auto end_time = std::chrono::steady_clock::now();
     result.synthesis_time = std::chrono::duration_cast<std::chrono::milliseconds>(

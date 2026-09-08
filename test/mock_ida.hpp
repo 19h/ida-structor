@@ -199,6 +199,8 @@ public:
     bool is_void() const { return type_flags_ == BTF_VOID; }
     bool is_union() const { return is_union_; }
     bool is_partial() const { return type_flags_ == BT_UNK_QWORD; }
+    bool is_bool() const { return type_flags_ == BTF_BOOL; }
+    bool is_integral() const { return is_signed() || is_unsigned() || is_bool(); }
     bool is_signed() const { 
         return !(type_flags_ & BTMT_UNSIGNED) &&
                (type_flags_ & (BTF_INT8 | BTF_INT16 | BTF_INT32 | BTF_INT64)) != 0;
@@ -622,9 +624,17 @@ public:
 
     int apply_to(citem_t* item, void*) {
         if (!item) return 0;
+        struct ParentGuard {
+            qvector<citem_t*>& stack;
+            bool active;
+            ParentGuard(qvector<citem_t*>& parents, citem_t* parent, bool enabled)
+                : stack(parents), active(enabled) { if (active) stack.push_back(parent); }
+            ~ParentGuard() { if (active) stack.pop_back(); }
+        };
         if (item->is_expr()) {
             auto* expression = static_cast<cexpr_t*>(item);
             if (const int result = visit_expr(expression)) return result;
+            ParentGuard guard(parents, item, (flags_ & CV_PARENTS) != 0);
             if (const int result = apply_to(expression->x, nullptr)) return result;
             if (const int result = apply_to(expression->y, nullptr)) return result;
             if (expression->op == cot_call && expression->a) {
@@ -635,6 +645,7 @@ public:
         } else {
             auto* instruction = static_cast<cinsn_t*>(item);
             if (const int result = visit_insn(instruction)) return result;
+            ParentGuard guard(parents, item, (flags_ & CV_PARENTS) != 0);
             if (instruction->op == cit_block && instruction->cblock) {
                 for (auto& child : *instruction->cblock) {
                     if (const int result = apply_to(&child, nullptr)) return result;
@@ -647,7 +658,8 @@ public:
     }
 
     const cexpr_t* parent_expr() const {
-        return parents.empty() ? nullptr : static_cast<const cexpr_t*>(parents.back());
+        return parents.empty() || !parents.back()->is_expr() ? nullptr :
+            static_cast<const cexpr_t*>(parents.back());
     }
 
 protected:

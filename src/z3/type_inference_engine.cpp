@@ -23,6 +23,8 @@ qstring TypeInferenceStats::summary() const {
     result.sprnt("Type Inference Statistics:\n");
     result.cat_sprnt("  Functions analyzed: %u\n", functions_analyzed);
     result.cat_sprnt("  Variables typed: %u\n", variables_typed);
+    result.cat_sprnt("  Absolute memory: %u typed, %u omitted, %u unresolved expressions\n",
+                    memory_locations_typed, memory_locations_omitted, unresolved_memory_accesses);
     result.cat_sprnt("  Constraints: %u hard, %u soft\n", 
                     type_constraints_hard, type_constraints_soft);
     if (constraints_relaxed > 0) {
@@ -61,15 +63,16 @@ std::optional<InferredType> FunctionTypeInferenceResult::get_var_type(int var_id
 }
 
 std::optional<InferredType> FunctionTypeInferenceResult::get_mem_type(
+    ea_t base, sval_t offset, std::uint32_t size) const
+{
+    return find_memory_type(memory_types, {base, offset, size});
+}
+
+std::optional<InferredType> FunctionTypeInferenceResult::get_mem_type(
     ea_t base, 
     sval_t offset) const
 {
-    std::size_t hash = std::hash<ea_t>{}(base) ^ (std::hash<sval_t>{}(offset) << 1);
-    auto it = memory_types.find(hash);
-    if (it != memory_types.end()) {
-        return it->second;
-    }
-    return std::nullopt;
+    return find_unambiguous_memory_type(memory_types, base, offset);
 }
 
 std::unordered_map<int, tinfo_t> FunctionTypeInferenceResult::to_ida_types() const {
@@ -302,6 +305,8 @@ void TypeInferenceEngine::phase_constraint_extraction(cfunc_t* cfunc) {
     last_stats_.type_constraints_hard = static_cast<unsigned>(current_constraints_.hard_count());
     last_stats_.type_constraints_soft = static_cast<unsigned>(current_constraints_.soft_count());
     last_stats_.variables_typed = static_cast<unsigned>(var_to_type_var_.size());
+    last_stats_.unresolved_memory_accesses =
+        static_cast<unsigned>(semantics_extractor_->stats().unresolved_memory_accesses);
 }
 
 void TypeInferenceEngine::phase_alias_analysis(cfunc_t* cfunc) {
@@ -422,6 +427,13 @@ void TypeInferenceEngine::extract_results(
     const ::z3::model& model,
     FunctionTypeInferenceResult& result)
 {
+    auto memory = extract_memory_type_evidence(current_constraints_, type_encoder_,
+                                               model, ctx_.pointer_size());
+    result.memory_types = std::move(memory.types);
+    result.memory_provenance = std::move(memory.provenance);
+    result.memory_diagnostics = std::move(memory.diagnostics);
+    last_stats_.memory_locations_typed = static_cast<unsigned>(result.memory_types.size());
+    last_stats_.memory_locations_omitted = static_cast<unsigned>(result.memory_diagnostics.size());
     for (const auto& [var_idx, tv] : var_to_type_var_) {
         InferredVariableType ivt;
         ivt.var_idx = var_idx;

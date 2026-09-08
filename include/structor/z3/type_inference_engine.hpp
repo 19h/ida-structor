@@ -5,6 +5,7 @@
 #include "structor/z3/calling_convention_model.hpp"
 #include "structor/z3/type_lattice.hpp"
 #include "structor/z3/instruction_semantics.hpp"
+#include "structor/z3/memory_type_evidence.hpp"
 #include "structor/z3/alias_analysis.hpp"
 #include "structor/z3/layout_constraints.hpp"
 #include "structor/synth_types.hpp"
@@ -23,8 +24,9 @@ namespace structor::z3 {
 /// Configuration for the experimental type inference adjunct.
 ///
 /// This pipeline is independent of the production structure-layout solver.
-/// It is disabled by default because memory-location inference, signature
-/// inference, and interprocedural fixed-point inference are not implemented.
+/// It is disabled by default. Memory inference is limited to constrained
+/// absolute/global scalar views; signature-result inference and interprocedural
+/// fixed-point inference are not implemented.
 struct TypeInferenceConfig {
     /// Explicit opt-in required by every inference entry point.
     bool enable_experimental_pipeline = false;
@@ -72,6 +74,9 @@ struct TypeInferenceStats {
     // Counts
     unsigned functions_analyzed = 0;
     unsigned variables_typed = 0;
+    unsigned memory_locations_typed = 0;
+    unsigned memory_locations_omitted = 0;
+    unsigned unresolved_memory_accesses = 0;
     unsigned type_constraints_hard = 0;
     unsigned type_constraints_soft = 0;
     // Compatibility counters: the adjunct has no relaxation phase and these
@@ -120,10 +125,12 @@ struct FunctionTypeInferenceResult {
     // Inferred types for local variables
     qvector<InferredVariableType> local_types;
     
-    // External-result slots. The current engine leaves memory and signature
-    // outputs empty; callers may populate them only in explicitly constructed
-    // FunctionTypeInferenceResult values.
-    std::unordered_map<std::size_t, InferredType> memory_types;  // hash -> type
+    // Exact absolute/global locations; these are not selected-pointer-relative
+    // structure fields. Conflicting or unsupported views remain diagnostic.
+    InferredMemoryTypes memory_types;
+    ExactMemoryLocationMap<MemoryTypeProvenance> memory_provenance;
+    std::vector<MemoryInferenceDiagnostic> memory_diagnostics;
+    // Signature-result inference remains unavailable.
     std::optional<InferredType> return_type;
     qvector<InferredType> param_types;
     
@@ -142,7 +149,11 @@ struct FunctionTypeInferenceResult {
     /// Get inferred type for a variable
     [[nodiscard]] std::optional<InferredType> get_var_type(int var_idx) const;
     
-    /// Get inferred type for a memory location
+    /// Get one exact memory view, including its access width in bytes.
+    [[nodiscard]] std::optional<InferredType> get_mem_type(
+        ea_t base, sval_t offset, std::uint32_t size) const;
+    /// Compatibility lookup returns no result when multiple widths exist.
+    [[deprecated("supply the memory access width for an exact lookup")]]
     [[nodiscard]] std::optional<InferredType> get_mem_type(ea_t base, sval_t offset) const;
     
     /// Convert all inferred types to IDA tinfo_t
@@ -201,6 +212,7 @@ public:
 private:
 #if defined(STRUCTOR_LIVE_TEST_HOOKS)
     friend struct TypeInferenceSignatureTestAccess;
+    friend struct TypeInferenceMemoryTestAccess;
     friend struct TypeInferenceQueryStatusTestAccess;
 #endif
     Z3Context& ctx_;

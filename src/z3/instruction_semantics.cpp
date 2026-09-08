@@ -1,5 +1,7 @@
 #include "structor/z3/instruction_semantics.hpp"
+#include "structor/z3/memory_type_evidence.hpp"
 #include <algorithm>
+#include <bit>
 #include <functional>
 #include <limits>
 #include <stdexcept>
@@ -22,6 +24,173 @@ std::optional<uint32_t> storage_width(const tinfo_t& type) {
         return std::nullopt;
     }
     return static_cast<uint32_t>(size);
+}
+
+struct AbsoluteMemoryAddress {
+    ea_t base;
+    sval_t offset;
+};
+
+std::optional<AbsoluteMemoryAddress> resolve_memory_address(
+    const cexpr_t* expression, uint32_t pointer_size, unsigned depth);
+
+std::optional<sval_t> constant_displacement(const cexpr_t* expression) {
+    if (!expression || expression->op != cot_num ||
+        (!expression->type.is_signed() && !expression->type.is_unsigned()) ||
+        !storage_width(expression->type) || expression->type.get_size() > 8) {
+        return std::nullopt;
+    }
+    const auto bits = static_cast<std::uint64_t>(expression->numval());
+    return expression->type.is_signed()
+        ? std::optional<sval_t>(std::bit_cast<std::int64_t>(bits))
+        : checked_sval_from_u64(bits);
+}
+
+std::optional<sval_t> address_stride(const tinfo_t& type, uint32_t pointer_size) {
+    tinfo_t element;
+    if (type.is_ptr()) element = type.get_pointed_object();
+    else if (type.is_array()) {
+        array_type_data_t details;
+        if (!type.get_array_details(&details)) return std::nullopt;
+        element = details.elem_type;
+    } else if ((type.is_signed() || type.is_unsigned()) &&
+               type.get_size() == pointer_size) {
+        return 1;
+    } else return std::nullopt;
+    const auto size = storage_width(element);
+    return size ? std::optional<sval_t>(*size) : std::nullopt;
+}
+
+std::optional<AbsoluteMemoryAddress> displace_address(
+    std::optional<AbsoluteMemoryAddress> address, sval_t displacement,
+    uint32_t pointer_size)
+{
+    if (!address) return std::nullopt;
+    const auto offset = checked_sval_add(address->offset, displacement);
+    if (!offset || !valid_memory_location(
+            {address->base, *offset, 1}, pointer_size)) return std::nullopt;
+    return AbsoluteMemoryAddress{address->base, *offset};
+}
+
+std::optional<AbsoluteMemoryAddress> resolve_pointer_address(
+    const cexpr_t* expression, uint32_t pointer_size, unsigned depth)
+{
+    if (!expression || depth == 0) return std::nullopt;
+    switch (expression->op) {
+        case cot_ref:
+            return resolve_memory_address(expression->x, pointer_size, depth - 1);
+        case cot_obj:
+            // Array decay is an address. A global pointer value is a load;
+            // the address of its storage does not locate its pointee.
+            if (expression->type.is_array() && expression->obj_ea != BADADDR &&
+                valid_memory_location({expression->obj_ea, 0, 1}, pointer_size)) {
+                return AbsoluteMemoryAddress{expression->obj_ea, 0};
+            }
+            return std::nullopt;
+        case cot_num: {
+            const auto size = storage_width(expression->type);
+            if (!size || *size > pointer_size ||
+                (!expression->type.is_signed() && !expression->type.is_unsigned() &&
+                 !expression->type.is_ptr())) return std::nullopt;
+            const auto address = static_cast<ea_t>(expression->numval());
+            return valid_memory_location({address, 0, 1}, pointer_size)
+                ? std::optional<AbsoluteMemoryAddress>({address, 0}) : std::nullopt;
+        }
+        case cot_cast: {
+            if (!expression->x) return std::nullopt;
+            const auto address_kind = [](const tinfo_t& type) {
+                return type.is_ptr() || type.is_signed() || type.is_unsigned();
+            };
+            const auto source_size = storage_width(expression->x->type);
+            if (!address_kind(expression->type) || !address_kind(expression->x->type) ||
+                expression->type.get_size() != pointer_size || !source_size ||
+                (*source_size != pointer_size && expression->x->op != cot_num) ||
+                *source_size > pointer_size) return std::nullopt;
+            return resolve_pointer_address(expression->x, pointer_size, depth - 1);
+        }
+        case cot_add:
+        case cot_sub: {
+            const cexpr_t* base = expression->x;
+            const cexpr_t* index = expression->y;
+            if (expression->op == cot_add && base && base->op == cot_num &&
+                index && index->op != cot_num) std::swap(base, index);
+            const auto constant = constant_displacement(index);
+            const auto stride = base ? address_stride(base->type, pointer_size) : std::nullopt;
+            if (!constant || !stride || expression->type.get_size() != pointer_size) {
+                return std::nullopt;
+            }
+            const auto scaled = checked_sval_mul(*constant, *stride);
+            if (!scaled) return std::nullopt;
+            const auto displacement = expression->op == cot_sub
+                ? checked_sval_sub(0, *scaled) : scaled;
+            if (!displacement) return std::nullopt;
+            return displace_address(resolve_pointer_address(base, pointer_size, depth - 1),
+                                    *displacement, pointer_size);
+        }
+        default:
+            return std::nullopt;
+    }
+}
+
+std::optional<AbsoluteMemoryAddress> resolve_memory_address(
+    const cexpr_t* expression, uint32_t pointer_size, unsigned depth)
+{
+    if (!expression || depth == 0) return std::nullopt;
+    switch (expression->op) {
+        case cot_obj:
+            if (!expression->type.is_func() && expression->obj_ea != BADADDR &&
+                valid_memory_location({expression->obj_ea, 0, 1}, pointer_size)) {
+                return AbsoluteMemoryAddress{expression->obj_ea, 0};
+            }
+            return std::nullopt;
+        case cot_ptr:
+            return resolve_pointer_address(expression->x, pointer_size, depth - 1);
+        case cot_idx: {
+            const auto index = constant_displacement(expression->y);
+            const auto stride = expression->x
+                ? address_stride(expression->x->type, pointer_size) : std::nullopt;
+            if (!index || !stride) return std::nullopt;
+            const auto offset = checked_sval_mul(*index, *stride);
+            return offset ? displace_address(resolve_pointer_address(
+                expression->x, pointer_size, depth - 1), *offset, pointer_size) : std::nullopt;
+        }
+        case cot_memptr:
+            return displace_address(resolve_pointer_address(expression->x, pointer_size, depth - 1),
+                                    static_cast<sval_t>(expression->m), pointer_size);
+        case cot_memref:
+            return displace_address(resolve_memory_address(expression->x, pointer_size, depth - 1),
+                                    static_cast<sval_t>(expression->m), pointer_size);
+        default:
+            return std::nullopt;
+    }
+}
+
+// Restrict concrete observations to represented scalar/pointer types. Partial
+// storage types, enums, aggregates and function prototypes need richer evidence.
+std::optional<InferredType> memory_type_from_tinfo(
+    const tinfo_t& type, uint32_t pointer_size, unsigned depth = 64)
+{
+    if (depth == 0 || type.empty() || type.is_partial() || type.is_decl_bitfield()) {
+        return std::nullopt;
+    }
+    if (type.is_void()) return InferredType::make_base(BaseType::Void);
+    if (type.is_ptr()) {
+        if (type.get_size() != pointer_size) return std::nullopt;
+        const auto pointed = memory_type_from_tinfo(type.get_pointed_object(), pointer_size, depth - 1);
+        return pointed ? std::optional<InferredType>(InferredType::make_ptr(*pointed)) : std::nullopt;
+    }
+    const auto size = storage_width(type);
+    if (!size) return std::nullopt;
+    if (type.is_floating()) {
+        if (*size == 4) return InferredType::make_base(BaseType::Float32);
+        if (*size == 8) return InferredType::make_base(BaseType::Float64);
+        return std::nullopt;
+    }
+    if (type.is_bool()) return InferredType::make_base(BaseType::Bool);
+    if (!type.is_integral() || (!type.is_signed() && !type.is_unsigned())) return std::nullopt;
+    const auto base = base_type_from_size(*size, type.is_signed());
+    return base == BaseType::Unknown ? std::nullopt
+        : std::optional<InferredType>(InferredType::make_base(base));
 }
 
 } // namespace
@@ -187,16 +356,19 @@ int InstructionSemanticsExtractor::allocate_diagnostic_id() {
 void InstructionSemanticsExtractor::begin_expression_pass(cfunc_t* cfunc) {
     identities_.begin_expression_pass();
     expression_vars_.clear();
+    observed_memory_types_.clear();
     current_cfunc_ = cfunc;
     current_func_ea_ = cfunc->entry_ea;
     stats_.expressions_analyzed = 0;
     stats_.constraints_extracted = 0;
     stats_.hard_constraints = 0;
     stats_.soft_constraints = 0;
+    stats_.unresolved_memory_accesses = 0;
 }
 
 void InstructionSemanticsExtractor::end_expression_pass() {
     expression_vars_.clear();
+    observed_memory_types_.clear();
     identities_.end_expression_pass();
     current_cfunc_ = nullptr;
     current_func_ea_ = BADADDR;
@@ -303,6 +475,14 @@ void InstructionSemanticsExtractor::analyze_node(
     stats_.expressions_analyzed++;
     
     switch (expr->op) {
+        // Direct data loads also occur without an assignment/arithmetic parent,
+        // for example `return global`. The visitor excludes address operands.
+        case cot_obj:
+            if (config_.extract_from_memory_ops && !expr->type.is_func() &&
+                !expr->type.is_array()) {
+                (void)get_expr_type(expr, constraints);
+            }
+            break;
         // Assignment
         case cot_asg:
         case cot_asgbor:
@@ -408,8 +588,8 @@ void InstructionSemanticsExtractor::extract_from_assignment(
 {
     if (!expr->x || !expr->y) return;
     
-    TypeVariable lhs_type = get_expr_type(expr->x);
-    TypeVariable rhs_type = get_expr_type(expr->y);
+    TypeVariable lhs_type = get_expr_type(expr->x, constraints);
+    TypeVariable rhs_type = get_expr_type(expr->y, constraints);
     
     // Assignment implies type equality (modulo implicit conversions)
     constraints.push_back(
@@ -418,7 +598,7 @@ void InstructionSemanticsExtractor::extract_from_assignment(
     );
     
     // If RHS has known type from decompiler, use it
-    if (!expr->y->type.empty()) {
+    if (!rhs_type.is_memory() && !expr->y->type.empty()) {
         auto inferred = infer_from_tinfo(expr->y->type);
         if (inferred) {
             constraints.push_back(
@@ -437,8 +617,8 @@ void InstructionSemanticsExtractor::extract_from_ptr_deref(
     if (!expr->x) return;
     
     // expr->x is the pointer being dereferenced
-    TypeVariable ptr_type = get_expr_type(expr->x);
-    TypeVariable deref_type = get_expr_type(expr);
+    TypeVariable ptr_type = get_expr_type(expr->x, constraints);
+    TypeVariable deref_type = get_expr_type(expr, constraints);
     
     // The pointer must be a pointer type
     constraints.push_back(
@@ -448,11 +628,14 @@ void InstructionSemanticsExtractor::extract_from_ptr_deref(
     
     // The dereferenced type should match the pointee
     // ptr_type = ptr(deref_type)
-    constraints.push_back(
-        TypeConstraint::make_is_pointer_to(ptr_type, 
-            InferredType::from_tinfo(expr->type), expr->ea)
-            .describe("dereference pointee type")
-    );
+    const auto pointee = ptr_type.is_memory()
+        ? memory_type_from_tinfo(expr->type, ctx_.pointer_size())
+        : std::optional<InferredType>(InferredType::from_tinfo(expr->type));
+    if (pointee) {
+        constraints.push_back(
+            TypeConstraint::make_is_pointer_to(ptr_type, *pointee, expr->ea)
+                .describe("dereference pointee type"));
+    }
     
     // Size constraint from access
     if (const auto access_size = storage_width(expr->type)) {
@@ -469,8 +652,8 @@ void InstructionSemanticsExtractor::extract_from_comparison(
 {
     if (!expr->x || !expr->y) return;
     
-    TypeVariable lhs_type = get_expr_type(expr->x);
-    TypeVariable rhs_type = get_expr_type(expr->y);
+    TypeVariable lhs_type = get_expr_type(expr->x, constraints);
+    TypeVariable rhs_type = get_expr_type(expr->y, constraints);
     
     // Both operands should have compatible types
     constraints.push_back(
@@ -519,12 +702,12 @@ void InstructionSemanticsExtractor::extract_from_arithmetic(
     cexpr_t* expr, 
     qvector<TypeConstraint>& constraints)
 {
-    TypeVariable result_type = get_expr_type(expr);
+    TypeVariable result_type = get_expr_type(expr, constraints);
     
     // Unary operators
     if (!expr->y) {
         if (expr->x) {
-            TypeVariable operand_type = get_expr_type(expr->x);
+            TypeVariable operand_type = get_expr_type(expr->x, constraints);
             
             switch (expr->op) {
                 case cot_neg:  // Unary minus - implies signed
@@ -550,8 +733,8 @@ void InstructionSemanticsExtractor::extract_from_arithmetic(
     }
     
     // Binary operators
-    TypeVariable lhs_type = get_expr_type(expr->x);
-    TypeVariable rhs_type = get_expr_type(expr->y);
+    TypeVariable lhs_type = get_expr_type(expr->x, constraints);
+    TypeVariable rhs_type = get_expr_type(expr->y, constraints);
     
     switch (expr->op) {
         case cot_sdiv:
@@ -621,8 +804,8 @@ void InstructionSemanticsExtractor::extract_from_cast(
 {
     if (!expr->x) return;
     
-    TypeVariable src_type = get_expr_type(expr->x);
-    TypeVariable dst_type = get_expr_type(expr);
+    TypeVariable src_type = get_expr_type(expr->x, constraints);
+    TypeVariable dst_type = get_expr_type(expr, constraints);
     
     // Cast target type is known from the expression
     if (!expr->type.empty()) {
@@ -660,7 +843,7 @@ void InstructionSemanticsExtractor::extract_from_call(
         get_tinfo(&func_type, callee);
     } else {
         // Indirect call - function pointer
-        TypeVariable fptr_type = get_expr_type(expr->x);
+        TypeVariable fptr_type = get_expr_type(expr->x, constraints);
         constraints.push_back(
             TypeConstraint::make_is_pointer(fptr_type, expr->ea)
                 .describe("indirect call target is function pointer")
@@ -676,9 +859,11 @@ void InstructionSemanticsExtractor::extract_from_call(
             if (args) {
                 for (size_t i = 0; i < args->size() && i < ftd.size(); ++i) {
                     cexpr_t* arg = &(*args)[i];
-                    TypeVariable arg_type = get_expr_type(arg);
+                    TypeVariable arg_type = get_expr_type(arg, constraints);
                     
-                    auto param_inferred = infer_from_tinfo(ftd[i].type);
+                    auto param_inferred = arg_type.is_memory()
+                        ? memory_type_from_tinfo(ftd[i].type, ctx_.pointer_size())
+                        : infer_from_tinfo(ftd[i].type);
                     if (param_inferred) {
                         constraints.push_back(
                             TypeConstraint::make_one_of(arg_type, {*param_inferred}, expr->ea)
@@ -690,7 +875,7 @@ void InstructionSemanticsExtractor::extract_from_call(
             }
             
             // Return type constraint
-            TypeVariable ret_type = get_expr_type(expr);
+            TypeVariable ret_type = get_expr_type(expr, constraints);
             auto ret_inferred = infer_from_tinfo(ftd.rettype);
             if (ret_inferred) {
                 constraints.push_back(
@@ -709,9 +894,9 @@ void InstructionSemanticsExtractor::extract_from_array_access(
 {
     if (!expr->x || !expr->y) return;
     
-    TypeVariable base_type = get_expr_type(expr->x);
-    TypeVariable index_type = get_expr_type(expr->y);
-    TypeVariable elem_type = get_expr_type(expr);
+    TypeVariable base_type = get_expr_type(expr->x, constraints);
+    TypeVariable index_type = get_expr_type(expr->y, constraints);
+    TypeVariable elem_type = get_expr_type(expr, constraints);
     
     // Base must be pointer or array
     constraints.push_back(
@@ -742,11 +927,12 @@ void InstructionSemanticsExtractor::extract_from_member_access(
 {
     if (!expr->x) return;
     
-    TypeVariable struct_type = get_expr_type(expr->x);
-    TypeVariable member_type = get_expr_type(expr);
+    TypeVariable member_type = get_expr_type(expr, constraints);
     
     if (expr->op == cot_memptr) {
-        // Through pointer - base must be pointer to struct
+        // Through pointer - the pointer value is read; a direct member
+        // base designates aggregate storage without loading the whole object.
+        TypeVariable struct_type = get_expr_type(expr->x, constraints);
         constraints.push_back(
             TypeConstraint::make_is_pointer(struct_type, expr->ea)
                 .describe("member access through pointer")
@@ -754,7 +940,7 @@ void InstructionSemanticsExtractor::extract_from_member_access(
     }
     
     // Member type from expression type
-    if (!expr->type.empty()) {
+    if (!member_type.is_memory() && !expr->type.empty()) {
         auto inferred = infer_from_tinfo(expr->type);
         if (inferred) {
             constraints.push_back(
@@ -771,7 +957,8 @@ std::optional<InferredType> InstructionSemanticsExtractor::infer_from_tinfo(cons
     return InferredType::from_tinfo(type);
 }
 
-TypeVariable InstructionSemanticsExtractor::get_expr_type(cexpr_t* expr) {
+TypeVariable InstructionSemanticsExtractor::get_expr_type(
+    cexpr_t* expr, qvector<TypeConstraint>& constraints) {
     if (!expr) {
         // Missing operands are not a shared program variable.
         return TypeVariable::for_temp(
@@ -784,6 +971,34 @@ TypeVariable InstructionSemanticsExtractor::get_expr_type(cexpr_t* expr) {
     const auto identity = identities_.expression(expr);
     if (const auto found = expression_vars_.find(identity); found != expression_vars_.end()) {
         return found->second;
+    }
+    const bool memory_expression = !expr->type.is_array() &&
+        (expr->op == cot_ptr || expr->op == cot_idx || expr->op == cot_memptr ||
+         expr->op == cot_memref || (expr->op == cot_obj && !expr->type.is_func()));
+    if (config_.extract_from_memory_ops && memory_expression) {
+        const auto width = storage_width(expr->type);
+        const auto address = resolve_memory_address(expr, ctx_.pointer_size(), 64);
+        if (width && address && valid_memory_location(
+                {address->base, address->offset, *width}, ctx_.pointer_size())) {
+            TypeVariable memory = get_mem_type(address->base, address->offset, *width);
+            expression_vars_.emplace(identity, memory);
+            constraints.push_back(TypeConstraint::make_has_size(memory, *width, expr->ea)
+                .describe("absolute-memory access width"));
+            const auto observed = memory_type_from_tinfo(expr->type, ctx_.pointer_size());
+            if (observed && !observed->is_unknown() &&
+                config_.generate_soft_constraints && config_.weight_from_decompiler > 0) {
+                auto& views = observed_memory_types_[memory.identity];
+                if (std::none_of(views.begin(), views.end(),
+                        [&](const InferredType& view) { return view == *observed; })) {
+                    views.push_back(observed->snapshot());
+                    constraints.push_back(TypeConstraint::make_one_of(memory, {*observed}, expr->ea)
+                        .soft(config_.weight_from_decompiler)
+                        .describe("concrete absolute-memory view"));
+                }
+            }
+            return memory;
+        }
+        ++stats_.unresolved_memory_accesses;
     }
     qstring name;
     name.sprnt("expr_%llX_%d", static_cast<unsigned long long>(expr->ea), expr->op);
@@ -1060,7 +1275,7 @@ std::size_t TypeConstraintSet::soft_count() const noexcept {
 ConstraintExtractionVisitor::ConstraintExtractionVisitor(
     InstructionSemanticsExtractor& extractor,
     qvector<TypeConstraint>& constraints)
-    : ctree_visitor_t(CV_FAST)
+    : ctree_visitor_t(CV_PARENTS)
     , extractor_(extractor)
     , constraints_(constraints)
 {}
@@ -1068,7 +1283,12 @@ ConstraintExtractionVisitor::ConstraintExtractionVisitor(
 int ConstraintExtractionVisitor::visit_expr(cexpr_t* e) {
     // The owning extract() call already established one function/pass. A
     // public extract_expr() call would start a separate pass for every node.
-    extractor_.analyze_node(e, constraints_);
+    const auto* parent = parent_expr();
+    // Address-taking evaluates pointer/index children but does not read the
+    // designated lvalue. Direct member bases likewise designate storage.
+    const bool address_operand = parent && parent->x == e &&
+        (parent->op == cot_ref || parent->op == cot_memref);
+    if (!address_operand) extractor_.analyze_node(e, constraints_);
     return 0;  // Continue visiting
 }
 

@@ -19,13 +19,14 @@ or completion of this project-wide objective.
 | Preserve complete type values in lattice caches | Real function/structure hash collisions, mutable child aliases, and returned-result mutation | Directed production lattice tests pass; cache entries own detached snapshots |
 | Preserve the declared abstract subtype order when joining, meeting, and materializing types | Production-linked law enumeration and actual IDA union/member/extent checks | 43 types, 1849 pairs, and 79507 triples pass the sampled laws; all 12 live materialization checks pass |
 | Preserve complete compound type values and bounded-query provenance in the experimental SMT path | Production-linked codec/semantics tests, sanitizer probes, and public IDA engine calls | Ten codec groups and 12 live engine cases pass; full structure IDs, recursive values, soft candidates, and distinct bound failures are preserved |
+| Publish absolute-memory types with complete address/displacement/width identity and explicit evidence | Forced collisions, checked address intervals, production extraction, and public IDA engine scenarios | Twelve portable groups and 28 live cases pass against the compound backend; insufficient/conflicting views are omitted and hard/soft provenance is retained |
 | Merge existing types without losing evidence, observed storage, padding, or protected names | Production matcher unit tests and anonymous IDA type checks | Standalone tests and 11 real-IDA checks pass |
 | Return solver diagnostics that remain valid after the synthesis context is destroyed | Production solver/optimizer UNSAT tests and public API return/destruction checks | Standalone lifetime checks and public API UNSAT/relaxation checks pass |
 | Reject inference results belonging to another function before applying types | Real local/prototype snapshots, foreign/unknown/high-address rejection, and positive application controls | All nine live checks pass within the active IDB |
 | Map signature arguments to actual locals and distinguish target ABI defaults from recovered function evidence | Fifteen portable tests, five live argument-map cases, and six target-family cases | All pass; two foreign-ABI fixtures explicitly falsify the assumption that every function follows its target default |
 | Preserve pointer forwarding as address evidence rather than inventing a field load | Alias-only call/comparison negatives and loaded-field positive controls | Live controls pass; original-collector isolation confirms removal of a fictitious linked-list pointer observation |
-| Maintain public API, deterministic layouts, transactional persistence, global recovery, vtables, and type fixing | Full licensed integrity suite and external CMake consumer | All 19 registered checks pass against the compound build: 18 in the aggregate run and the final lattice check separately after a runner-label defect was corrected; no layout contracts changed |
-| Maintain reproducible, usable builds and diagnostics | CMake build, CTest, compile-gated hook checks, explicit `idump` runtime diagnostics | 197 standalone CTest entries pass; the release build excludes all 14 hook markers and its installed copy passes codesign verification |
+| Maintain public API, deterministic layouts, transactional persistence, global recovery, vtables, and type fixing | Full licensed integrity suite and external CMake consumer | All 20 suites pass against the combined compound/memory artifact (364.9 s); no layout contracts changed |
+| Maintain reproducible, usable builds and diagnostics | CMake build, CTest, compile-gated hook checks, explicit `idump` runtime diagnostics | 198 standalone CTest entries pass; the release build excludes all 15 hook markers and its installed copy passes codesign verification |
 | Extend adaptive and interprocedural inference beyond existing supported paths | Production implementation, adversarial fixtures, convergence/resource tests | Incomplete; see remaining work |
 
 ## Assumption register
@@ -49,6 +50,7 @@ Dependent findings reference these identifiers.
 | A13 | The lattice is the finite abstract order specified in [TYPE_LATTICE_CONTRACT.md](TYPE_LATTICE_CONTRACT.md), and materialized sums preserve complete object alternatives. | Exhaustive checks over the recorded finite sample; actual IDA packed/nested/function-pointer unions, invalid alternatives, and extent boundaries. | CPU lattice algebra and union conversion; this is not a C conversion or source-type recovery claim |
 | A14 | Reaching aliases and simple path predicates are tracked within a bounded state domain; widening and unknown goto/exception entry lose precision. | Divergent/sibling branches, loop backedges, complementary/stale predicates, 18-way overflow, switch fallthrough, irreducible goto entry, finally, and wind cleanup. | Branch analysis; limits and further assumptions in [BRANCH_ALIAS_ANALYSIS.md](BRANCH_ALIAS_ANALYSIS.md) |
 | A15 | Compound values retain the current abstract type domain; generic symbolic predicates use recorded bounds and optional candidate extensions. | Full-width IDs/counts, deep round trips, complete parameter lists, conflicting hard equalities, deep soft candidates, bound increases, budget exhaustion, and engine reuse. | SMT codec and query status; [COMPOUND_TYPE_ENCODING.md](COMPOUND_TYPE_ENCODING.md) and [TYPE_QUERY_STATUS.md](TYPE_QUERY_STATUS.md) |
+| A16 | Absolute-memory origins must be established from address expressions; a concrete view requires actual constraint evidence and matching width/model. | High/colliding addresses, overlapping widths, negative offsets, wraparound, partial storage, conflicting views, local unknown pointees, and address-only controls. | [MEMORY_TYPE_INFERENCE.md](MEMORY_TYPE_INFERENCE.md); no pointer-relative/global alias inference is implied |
 
 ## Changes and reproducibility
 
@@ -185,7 +187,16 @@ selected model value. [A15]
 The combined run completed 18 checks before a new command lacked its matching
 label in the runner's parallel registries. The omitted final lattice check
 passed separately. Each command now owns its label in one registry, eliminating
-that registration mismatch. The 197 standalone CTest entries also pass. [A1]
+that registration mismatch. The complete 20-suite run now passes with the corrected registry and memory implementation. All 198 standalone CTest entries also pass. [A1]
+
+Absolute-memory inference now keys outputs by full origin, signed byte
+displacement, and access width. Actual constraints must supply one concrete
+view that matches the model and storage width. Conflicting or storage-only
+views are omitted with diagnostics; soft preferences retain their provenance.
+Four native functions each pass seven public-engine scenarios against the
+compound backend, including explicit `_QWORD` and conflicting SDK ctree controls.
+The layout synthesizer no longer treats a function address as the origin of a
+selected pointer's fields. [A16]
 
 The installed `idump` on the development machine could load the plugin but could
 not initialize its own decompiler API. It returned success with assembly-only
@@ -259,7 +270,9 @@ platforms.
 
 - **High impact — experimental type representation:** complete compound values,
   context move adoption, and bounded-query status are now implemented and tested.
-  Memory-result indexing remains separate work. The current abstract type domain
+  Absolute-memory result indexing and direct evidence publication are also
+  implemented. Pointer-relative memory and global alias equivalence remain
+  separate work. The current abstract type domain
   lacks structure layout, qualifiers, variadic mode, and per-function ABI
   metadata; a complete encoding of that domain does not recover those absent
   facts. The experimental pipeline remains disabled by default.

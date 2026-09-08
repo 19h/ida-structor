@@ -186,6 +186,7 @@ public:
         int soft_constraints = 0;
         int type_variables = 0;
         int expressions_analyzed = 0;
+        int unresolved_memory_accesses = 0;
     };
     [[nodiscard]] const Stats& stats() const noexcept { return stats_; }
 
@@ -202,6 +203,9 @@ private:
                                              TypeVariableIdentityHash>;
     VariableCache persistent_vars_;
     VariableCache expression_vars_;
+    // Repeated uses of one concrete memory view do not multiply its weight.
+    std::unordered_map<TypeVariableIdentity, std::vector<InferredType>,
+                       TypeVariableIdentityHash> observed_memory_types_;
     
     // Current function being analyzed
     cfunc_t* current_cfunc_ = nullptr;
@@ -229,7 +233,8 @@ private:
     [[nodiscard]] std::optional<InferredType> infer_from_tinfo(const tinfo_t& type);
     
     /// Get type variable for an expression (creates temp if needed)
-    [[nodiscard]] TypeVariable get_expr_type(cexpr_t* expr);
+    [[nodiscard]] TypeVariable get_expr_type(cexpr_t* expr,
+                                            qvector<TypeConstraint>& constraints);
     
     /// Check if comparison uses signed semantics (jl/jg vs jb/ja)
     [[nodiscard]] bool is_signed_comparison(ctype_t cmp_op) const noexcept;

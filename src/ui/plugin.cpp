@@ -11,6 +11,7 @@
 #include "type_matcher_live_checks.hpp"
 #include "type_application_live_checks.hpp"
 #include "signature_abi_live_checks.hpp"
+#include "memory_inference_live_checks.hpp"
 #include "type_query_status_live_checks.hpp"
 #include "type_lattice_live_checks.hpp"
 #include "../../integration_tests/assignment_order_ctree_probe.hpp"
@@ -1579,6 +1580,119 @@ static bool run_pending_api_command_impl(const qstring& command_text) {
         append_json_bool(payload, success);
         export_api_json(command.c_str(), payload);
         return success;
+    }
+
+    if (command == "inspect_memory_inference") {
+        if (parts.size() != 2) {
+            export_api_error(command.c_str(), "Expected function");
+            return false;
+        }
+        ea_t function_ea = BADADDR;
+        if (!resolve_function_spec(qstring(parts[1].c_str()), function_ea)) {
+            export_api_error(command.c_str(), "Function not found");
+            return false;
+        }
+        cfuncptr_t function = utils::get_cfunc(function_ea);
+        if (!function) {
+            export_api_error(command.c_str(), "Failed to decompile function");
+            return false;
+        }
+        const auto* original_body = function->body.cblock;
+        const auto original_arguments = function->argidx;
+        std::vector<tinfo_t> original_local_types;
+        for (const auto& local : *function->get_lvars()) original_local_types.push_back(local.type());
+        tinfo_t original_saved_type;
+        const bool had_saved_type = get_tinfo(&original_saved_type, function_ea);
+        const auto observations = z3::TypeInferenceMemoryTestAccess::collect(function);
+        bool unchanged = original_body == function->body.cblock &&
+            original_arguments == function->argidx &&
+            original_local_types.size() == function->get_lvars()->size();
+        for (std::size_t index = 0; unchanged && index < original_local_types.size(); ++index) {
+            unchanged &= original_local_types[index].equals_to((*function->get_lvars())[index].type());
+        }
+        tinfo_t saved_type;
+        const bool has_saved_type = get_tinfo(&saved_type, function_ea);
+        unchanged &= had_saved_type == has_saved_type &&
+            (!has_saved_type || saved_type.equals_to(original_saved_type));
+        std::string payload = "\"success\":true,\"function_unchanged\":";
+        append_json_bool(payload, unchanged);
+        payload += ",\"source_object_types\":[";
+        struct ObjectTypeVisitor : ctree_visitor_t {
+            std::string& output;
+            bool first = true;
+            explicit ObjectTypeVisitor(std::string& out) : ctree_visitor_t(CV_FAST), output(out) {}
+            int idaapi visit_expr(cexpr_t* expression) override {
+                if (expression->op != cot_obj || expression->type.is_func()) return 0;
+                if (!first) output += ',';
+                first = false;
+                output += "{\"base\":";
+                append_json_string(output, std::to_string(expression->obj_ea).c_str());
+                qstring type;
+                expression->type.print(&type);
+                output += ",\"type\":";
+                append_json_string(output, type.c_str());
+                output += ",\"partial_storage\":";
+                append_json_bool(output, expression->type.is_partial());
+                output += '}';
+                return 0;
+            }
+        } object_types(payload);
+        object_types.apply_to(&function->body, nullptr);
+        payload += "],\"cases\":[";
+        bool first = true;
+        for (const auto& observation : observations) {
+            if (!first) payload += ',';
+            first = false;
+            const auto& result = observation.result;
+            payload += "{\"name\":";
+            append_json_string(payload, observation.name);
+            payload += ",\"status\":" + std::to_string(static_cast<unsigned>(result.status));
+            payload += ",\"success\":";
+            append_json_bool(payload, result.success);
+            payload += ",\"exact_lookups_passed\":";
+            append_json_bool(payload, observation.exact_lookups_passed);
+            payload += ",\"error\":";
+            append_json_string(payload, result.error_message);
+            payload += ",\"solve_iterations\":" + std::to_string(result.stats.solve_iterations);
+            payload += ",\"local_type_count\":" + std::to_string(result.local_types.size());
+            payload += ",\"unresolved_memory_accesses\":" +
+                std::to_string(result.stats.unresolved_memory_accesses);
+            payload += ",\"memory_types\":[";
+            bool first_memory = true;
+            const auto append_location = [&](const z3::MemoryLocationKey& key) {
+                payload += "{\"base\":";
+                append_json_string(payload, std::to_string(key.base).c_str());
+                payload += ",\"offset\":" + std::to_string(key.offset) +
+                    ",\"size\":" + std::to_string(key.size);
+            };
+            for (const auto& [key, type] : result.memory_types) {
+                if (!first_memory) payload += ',';
+                first_memory = false;
+                append_location(key);
+                payload += ",\"type\":";
+                append_json_string(payload, type.to_string().c_str());
+                const auto provenance = result.memory_provenance.find(key);
+                payload += ",\"evidence\":";
+                append_json_string(payload, provenance == result.memory_provenance.end() ? "missing" :
+                    provenance->second.kind == z3::MemoryTypeEvidenceKind::HardConcreteConstraint ?
+                    "hard_concrete_constraint" : "soft_concrete_preference");
+                payload += '}';
+            }
+            payload += "],\"diagnostics\":[";
+            bool first_diagnostic = true;
+            for (const auto& diagnostic : result.memory_diagnostics) {
+                if (!first_diagnostic) payload += ',';
+                first_diagnostic = false;
+                if (diagnostic.location) append_location(*diagnostic.location);
+                else payload += "{\"base\":null,\"offset\":null,\"size\":null";
+                payload += ",\"issue\":" + std::to_string(static_cast<unsigned>(diagnostic.issue));
+                payload += ",\"view_count\":" + std::to_string(diagnostic.concrete_views.size()) + '}';
+            }
+            payload += "]}";
+        }
+        payload += ']';
+        export_api_json(command.c_str(), payload);
+        return true;
     }
 
     if (command == "inspect_symbolic_query_status") {
