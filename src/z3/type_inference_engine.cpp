@@ -34,6 +34,9 @@ qstring TypeInferenceStats::summary() const {
     result.cat_sprnt("  Types inferred: %u (ptr=%u, int=%u, float=%u, unknown=%u)\n",
                     types_inferred, types_pointer, types_integer, 
                     types_floating, types_unknown);
+    result.cat_sprnt("  Model values: %u determined, %u ambiguous, %u unverified (%u queries, %lldms)\n",
+                    model_values_determined, model_values_ambiguous, model_values_unverified,
+                    model_evidence_queries, static_cast<long long>(model_evidence_time.count()));
     result.cat_sprnt("  Solve iterations: %u\n", solve_iterations);
     result.cat_sprnt("  Timings:\n");
     result.cat_sprnt("    Constraint extraction: %lldms\n",
@@ -75,10 +78,13 @@ std::optional<InferredType> FunctionTypeInferenceResult::get_mem_type(
     return find_unambiguous_memory_type(memory_types, base, offset);
 }
 
-std::unordered_map<int, tinfo_t> FunctionTypeInferenceResult::to_ida_types() const {
+std::unordered_map<int, tinfo_t> FunctionTypeInferenceResult::to_ida_types(
+    bool include_model_candidates) const {
     std::unordered_map<int, tinfo_t> result;
     for (const auto& vt : local_types) {
-        result[vt.var_idx] = vt.type.to_tinfo();
+        if (!vt.may_apply_model_value(include_model_candidates)) continue;
+        auto type = vt.type.to_tinfo();
+        if (!type.empty()) result.emplace(vt.var_idx, std::move(type));
     }
     return result;
 }
@@ -109,6 +115,7 @@ void TypeInferenceEngine::initialize_analyzers() {
 void TypeInferenceEngine::reset_state() {
     current_cfunc_ = nullptr;
     current_constraints_.clear();
+    hard_constraints_use_symbolic_bounds_ = false;
     var_to_type_var_.clear();
 }
 
@@ -212,7 +219,7 @@ FunctionTypeInferenceResult TypeInferenceEngine::infer_function(cfunc_t* cfunc) 
             }
         } else {
             report_progress("Extracting", 90, "Extracting inferred types");
-            extract_results(model, result);
+            extract_results(model, opt.assertions(), result);
             result.status = TypeInferenceStatus::Success;
             result.success = true;
         }
@@ -342,6 +349,7 @@ void TypeInferenceEngine::add_type_preferences() {
         current_constraints_.add(
             TypeConstraint::make_is_signed(tv, BADADDR)
                 .soft(config_.weight_signed_over_unsigned)
+                .sourced_from(TypeConstraintOrigin::Heuristic)
                 .describe("prefer signed integers")
         );
     }
@@ -376,6 +384,7 @@ void TypeInferenceEngine::add_calling_convention_constraints(cfunc_t* cfunc) {
         current_constraints_.add(
             TypeConstraint::make_one_of(it->second, {inferred}, cfunc->entry_ea)
                 .soft(config_.weight_from_signature)
+                .sourced_from(TypeConstraintOrigin::FunctionSignature)
                 .describe("parameter type from signature")
         );
     }
@@ -391,6 +400,7 @@ void TypeInferenceEngine::add_calling_convention_constraints(cfunc_t* cfunc) {
     
     // Add hard constraints
     ::z3::expr_vector hard = current_constraints_.to_z3_hard(type_encoder_);
+    hard_constraints_use_symbolic_bounds_ = type_encoder_.bounded_symbolic_queries_used();
     for (unsigned i = 0; i < hard.size(); ++i) {
         opt.add(hard[i]);
     }
@@ -425,6 +435,7 @@ void TypeInferenceEngine::add_calling_convention_constraints(cfunc_t* cfunc) {
 
 void TypeInferenceEngine::extract_results(
     const ::z3::model& model,
+    const ::z3::expr_vector& hard_constraints,
     FunctionTypeInferenceResult& result)
 {
     auto memory = extract_memory_type_evidence(current_constraints_, type_encoder_,
@@ -434,10 +445,22 @@ void TypeInferenceEngine::extract_results(
     result.memory_diagnostics = std::move(memory.diagnostics);
     last_stats_.memory_locations_typed = static_cast<unsigned>(result.memory_types.size());
     last_stats_.memory_locations_omitted = static_cast<unsigned>(result.memory_diagnostics.size());
-    for (const auto& [var_idx, tv] : var_to_type_var_) {
+    const ConstraintSourceIndex source_index(current_constraints_);
+    const auto evidence_start = std::chrono::steady_clock::now();
+    ModelValueEvidenceProbe probe(hard_constraints, model, config_.model_evidence_budget);
+    // Stable order makes a shared query budget reproducible across hash orders.
+    std::vector<int> ordered_variables;
+    ordered_variables.reserve(var_to_type_var_.size());
+    for (const auto& [index, unused] : var_to_type_var_) ordered_variables.push_back(index);
+    std::sort(ordered_variables.begin(), ordered_variables.end());
+    qvector<InferredVariableType> local_types;
+    local_types.reserve(ordered_variables.size());
+    for (const auto var_idx : ordered_variables) {
+        const auto& tv = var_to_type_var_.at(var_idx);
         InferredVariableType ivt;
         ivt.var_idx = var_idx;
         ivt.var_name = tv.name;
+        ivt.record_source_evidence(source_index.for_variable(tv));
         
         // Get the Z3 expression for this type variable
         ::z3::expr z3_var = current_constraints_.get_z3_var(tv, type_encoder_);
@@ -445,9 +468,23 @@ void TypeInferenceEngine::extract_results(
         // Decode the model value
         ivt.type = type_encoder_.decode(z3_var, model);
         
-        // Determine confidence based on constraint sources
-        // Higher confidence if multiple consistent constraints
-        ivt.confidence = TypeConfidence::Medium;
+        const auto selected_value = model.eval(z3_var, true);
+        const auto evidence = probe.inspect(z3_var, selected_value);
+        ivt.model_value_status = evidence.status;
+        ivt.model_value_reason = evidence.reason.c_str();
+        if (hard_constraints_use_symbolic_bounds_)
+            ivt.evidence_query_bounds = type_encoder_.symbolic_query_bounds();
+        if (evidence.alternative)
+            ivt.alternative_type = type_encoder_.decode(*evidence.alternative, model).snapshot();
+        // These levels are evidence categories, not calibrated probabilities.
+        ivt.confidence = ivt.may_apply_model_value()
+            ? TypeConfidence::Medium : TypeConfidence::Low;
+        if (evidence.status == ModelValueStatus::DeterminedByHardConstraints)
+            ++last_stats_.model_values_determined;
+        else if (evidence.status == ModelValueStatus::AlternativeModelExists)
+            ++last_stats_.model_values_ambiguous;
+        else
+            ++last_stats_.model_values_unverified;
         
         // Categorize for statistics
         if (ivt.type.is_pointer()) {
@@ -463,8 +500,12 @@ void TypeInferenceEngine::extract_results(
         }
         last_stats_.types_inferred++;
         
-        result.local_types.push_back(std::move(ivt));
+        local_types.push_back(std::move(ivt));
     }
+    last_stats_.model_evidence_queries = probe.queries_used();
+    last_stats_.model_evidence_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - evidence_start);
+    result.local_types = std::move(local_types);
 }
 
 TypeVariable TypeInferenceEngine::get_type_var(int var_idx) {

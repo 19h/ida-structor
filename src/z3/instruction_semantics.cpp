@@ -594,6 +594,7 @@ void InstructionSemanticsExtractor::extract_from_assignment(
     // Assignment implies type equality (modulo implicit conversions)
     constraints.push_back(
         TypeConstraint::make_equal(lhs_type, rhs_type, expr->ea)
+            .sourced_from(TypeConstraintOrigin::InstructionUsage)
             .describe("assignment type equality")
     );
     
@@ -604,6 +605,7 @@ void InstructionSemanticsExtractor::extract_from_assignment(
             constraints.push_back(
                 TypeConstraint::make_one_of(rhs_type, {*inferred}, expr->ea)
                     .soft(config_.weight_from_decompiler)
+                    .sourced_from(TypeConstraintOrigin::DecompilerType)
                     .describe("decompiler type hint")
             );
         }
@@ -623,6 +625,7 @@ void InstructionSemanticsExtractor::extract_from_ptr_deref(
     // The pointer must be a pointer type
     constraints.push_back(
         TypeConstraint::make_is_pointer(ptr_type, expr->ea)
+            .sourced_from(TypeConstraintOrigin::InstructionUsage)
             .describe("dereference requires pointer")
     );
     
@@ -634,6 +637,7 @@ void InstructionSemanticsExtractor::extract_from_ptr_deref(
     if (pointee) {
         constraints.push_back(
             TypeConstraint::make_is_pointer_to(ptr_type, *pointee, expr->ea)
+                .sourced_from(TypeConstraintOrigin::DecompilerType)
                 .describe("dereference pointee type"));
     }
     
@@ -641,6 +645,7 @@ void InstructionSemanticsExtractor::extract_from_ptr_deref(
     if (const auto access_size = storage_width(expr->type)) {
         constraints.push_back(
             TypeConstraint::make_has_size(deref_type, *access_size, expr->ea)
+                .sourced_from(TypeConstraintOrigin::DecompilerType)
                 .describe("dereference size")
         );
     }
@@ -659,6 +664,7 @@ void InstructionSemanticsExtractor::extract_from_comparison(
     constraints.push_back(
         TypeConstraint::make_equal(lhs_type, rhs_type, expr->ea)
             .soft(5)
+            .sourced_from(TypeConstraintOrigin::InstructionUsage)
             .describe("comparison operand compatibility")
     );
     
@@ -666,19 +672,23 @@ void InstructionSemanticsExtractor::extract_from_comparison(
     if (is_signed_comparison(expr->op)) {
         constraints.push_back(
             TypeConstraint::make_is_signed(lhs_type, expr->ea)
+                .sourced_from(TypeConstraintOrigin::InstructionUsage)
                 .describe("signed comparison implies signed type")
         );
         constraints.push_back(
             TypeConstraint::make_is_signed(rhs_type, expr->ea)
+                .sourced_from(TypeConstraintOrigin::InstructionUsage)
                 .describe("signed comparison implies signed type")
         );
     } else if (is_unsigned_comparison(expr->op)) {
         constraints.push_back(
             TypeConstraint::make_is_unsigned(lhs_type, expr->ea)
+                .sourced_from(TypeConstraintOrigin::InstructionUsage)
                 .describe("unsigned comparison implies unsigned type")
         );
         constraints.push_back(
             TypeConstraint::make_is_unsigned(rhs_type, expr->ea)
+                .sourced_from(TypeConstraintOrigin::InstructionUsage)
                 .describe("unsigned comparison implies unsigned type")
         );
     }
@@ -691,6 +701,7 @@ void InstructionSemanticsExtractor::extract_from_comparison(
                 constraints.push_back(
                     TypeConstraint::make_is_integer(lhs_type, expr->ea)
                         .soft(config_.weight_int_for_small_const)
+                        .sourced_from(TypeConstraintOrigin::Heuristic)
                         .describe("small constant comparison suggests integer")
                 );
             }
@@ -714,6 +725,7 @@ void InstructionSemanticsExtractor::extract_from_arithmetic(
                     constraints.push_back(
                         TypeConstraint::make_is_signed(operand_type, expr->ea)
                             .soft(config_.weight_signed_preference)
+                            .sourced_from(TypeConstraintOrigin::Heuristic)
                             .describe("unary minus suggests signed")
                     );
                     break;
@@ -721,6 +733,7 @@ void InstructionSemanticsExtractor::extract_from_arithmetic(
                 case cot_bnot:  // Bitwise NOT - implies integer
                     constraints.push_back(
                         TypeConstraint::make_is_integer(operand_type, expr->ea)
+                            .sourced_from(TypeConstraintOrigin::InstructionUsage)
                             .describe("bitwise NOT requires integer")
                     );
                     break;
@@ -743,10 +756,12 @@ void InstructionSemanticsExtractor::extract_from_arithmetic(
             // Signed division/modulo/shift - operands are signed
             constraints.push_back(
                 TypeConstraint::make_is_signed(lhs_type, expr->ea)
+                    .sourced_from(TypeConstraintOrigin::InstructionUsage)
                     .describe("signed operation implies signed operand")
             );
             constraints.push_back(
                 TypeConstraint::make_is_signed(rhs_type, expr->ea)
+                    .sourced_from(TypeConstraintOrigin::InstructionUsage)
                     .describe("signed operation implies signed operand")
             );
             break;
@@ -757,10 +772,12 @@ void InstructionSemanticsExtractor::extract_from_arithmetic(
             // Unsigned operations
             constraints.push_back(
                 TypeConstraint::make_is_unsigned(lhs_type, expr->ea)
+                    .sourced_from(TypeConstraintOrigin::InstructionUsage)
                     .describe("unsigned operation implies unsigned operand")
             );
             constraints.push_back(
                 TypeConstraint::make_is_unsigned(rhs_type, expr->ea)
+                    .sourced_from(TypeConstraintOrigin::InstructionUsage)
                     .describe("unsigned operation implies unsigned operand")
             );
             break;
@@ -773,6 +790,7 @@ void InstructionSemanticsExtractor::extract_from_arithmetic(
                 constraints.push_back(
                     TypeConstraint::make_is_pointer(lhs_type, expr->ea)
                         .soft(5)
+                        .sourced_from(TypeConstraintOrigin::Heuristic)
                         .describe("add/sub with constant might be pointer arithmetic")
                 );
             }
@@ -785,10 +803,12 @@ void InstructionSemanticsExtractor::extract_from_arithmetic(
             // Bitwise operations require integers
             constraints.push_back(
                 TypeConstraint::make_is_integer(lhs_type, expr->ea)
+                    .sourced_from(TypeConstraintOrigin::InstructionUsage)
                     .describe("bitwise operation requires integer")
             );
             constraints.push_back(
                 TypeConstraint::make_is_integer(rhs_type, expr->ea)
+                    .sourced_from(TypeConstraintOrigin::InstructionUsage)
                     .describe("bitwise operation requires integer")
             );
             break;
@@ -813,6 +833,7 @@ void InstructionSemanticsExtractor::extract_from_cast(
         if (inferred) {
             constraints.push_back(
                 TypeConstraint::make_one_of(dst_type, {*inferred}, expr->ea)
+                    .sourced_from(TypeConstraintOrigin::DecompilerType)
                     .describe("cast target type")
             );
         }
@@ -823,6 +844,7 @@ void InstructionSemanticsExtractor::extract_from_cast(
         if (const auto src_size = storage_width(expr->x->type)) {
             constraints.push_back(
                 TypeConstraint::make_has_size(src_type, *src_size, expr->ea)
+                    .sourced_from(TypeConstraintOrigin::DecompilerType)
                     .describe("cast source size")
             );
         }
@@ -846,6 +868,7 @@ void InstructionSemanticsExtractor::extract_from_call(
         TypeVariable fptr_type = get_expr_type(expr->x, constraints);
         constraints.push_back(
             TypeConstraint::make_is_pointer(fptr_type, expr->ea)
+                .sourced_from(TypeConstraintOrigin::InstructionUsage)
                 .describe("indirect call target is function pointer")
         );
         func_type = expr->x->type;
@@ -868,6 +891,7 @@ void InstructionSemanticsExtractor::extract_from_call(
                         constraints.push_back(
                             TypeConstraint::make_one_of(arg_type, {*param_inferred}, expr->ea)
                                 .soft(config_.weight_from_signature)
+                                .sourced_from(TypeConstraintOrigin::FunctionSignature)
                                 .describe("function parameter type")
                         );
                     }
@@ -881,6 +905,7 @@ void InstructionSemanticsExtractor::extract_from_call(
                 constraints.push_back(
                     TypeConstraint::make_one_of(ret_type, {*ret_inferred}, expr->ea)
                         .soft(config_.weight_from_signature)
+                        .sourced_from(TypeConstraintOrigin::FunctionSignature)
                         .describe("function return type")
                 );
             }
@@ -901,12 +926,14 @@ void InstructionSemanticsExtractor::extract_from_array_access(
     // Base must be pointer or array
     constraints.push_back(
         TypeConstraint::make_is_pointer(base_type, expr->ea)
+            .sourced_from(TypeConstraintOrigin::InstructionUsage)
             .describe("array access base is pointer")
     );
     
     // Index must be integer
     constraints.push_back(
         TypeConstraint::make_is_integer(index_type, expr->ea)
+            .sourced_from(TypeConstraintOrigin::InstructionUsage)
             .describe("array index is integer")
     );
     
@@ -915,6 +942,7 @@ void InstructionSemanticsExtractor::extract_from_array_access(
         if (const auto elem_size = storage_width(expr->type)) {
             constraints.push_back(
                 TypeConstraint::make_has_size(elem_type, *elem_size, expr->ea)
+                    .sourced_from(TypeConstraintOrigin::DecompilerType)
                     .describe("array element size")
             );
         }
@@ -935,6 +963,7 @@ void InstructionSemanticsExtractor::extract_from_member_access(
         TypeVariable struct_type = get_expr_type(expr->x, constraints);
         constraints.push_back(
             TypeConstraint::make_is_pointer(struct_type, expr->ea)
+                .sourced_from(TypeConstraintOrigin::InstructionUsage)
                 .describe("member access through pointer")
         );
     }
@@ -946,6 +975,7 @@ void InstructionSemanticsExtractor::extract_from_member_access(
             constraints.push_back(
                 TypeConstraint::make_one_of(member_type, {*inferred}, expr->ea)
                     .soft(config_.weight_from_decompiler)
+                    .sourced_from(TypeConstraintOrigin::DecompilerType)
                     .describe("member type")
             );
         }
@@ -983,6 +1013,7 @@ TypeVariable InstructionSemanticsExtractor::get_expr_type(
             TypeVariable memory = get_mem_type(address->base, address->offset, *width);
             expression_vars_.emplace(identity, memory);
             constraints.push_back(TypeConstraint::make_has_size(memory, *width, expr->ea)
+                .sourced_from(TypeConstraintOrigin::DecompilerType)
                 .describe("absolute-memory access width"));
             const auto observed = memory_type_from_tinfo(expr->type, ctx_.pointer_size());
             if (observed && !observed->is_unknown() &&
@@ -993,6 +1024,7 @@ TypeVariable InstructionSemanticsExtractor::get_expr_type(
                     views.push_back(observed->snapshot());
                     constraints.push_back(TypeConstraint::make_one_of(memory, {*observed}, expr->ea)
                         .soft(config_.weight_from_decompiler)
+                        .sourced_from(TypeConstraintOrigin::DecompilerType)
                         .describe("concrete absolute-memory view"));
                 }
             }
@@ -1083,6 +1115,7 @@ TypeConstraintSet::ConstraintEvidence TypeConstraintSet::constraint_evidence() c
     ConcreteBindings roots;
     CandidateBindings choices;
     for (const auto& constraint : constraints_) {
+        if (constraint.is_soft && constraint.weight <= 0) continue;
         const InferredType* exact = nullptr;
         if ((constraint.kind == TypeConstraint::Kind::IsBase && constraint.concrete_type &&
              constraint.concrete_type->is_base()) ||
@@ -1250,7 +1283,7 @@ std::vector<std::pair<::z3::expr, int>> TypeConstraintSet::to_z3_soft(
     const auto bindings = hard_constraints_installed ? evidence.exact : ConcreteBindings{};
     
     for (const auto& c : constraints_) {
-        if (c.is_soft) {
+        if (c.is_soft && c.weight > 0) {
             result.emplace_back(constraint_to_z3(c, encoder, bindings, evidence.candidates), c.weight);
         }
     }
@@ -1310,19 +1343,23 @@ qvector<TypeConstraint> SignednessInferrer::analyze_comparison(
     if (implies_signed(cmp_expr->op)) {
         constraints.push_back(
             TypeConstraint::make_is_signed(lhs_type, cmp_expr->ea)
+                .sourced_from(TypeConstraintOrigin::InstructionUsage)
                 .describe("signed comparison")
         );
         constraints.push_back(
             TypeConstraint::make_is_signed(rhs_type, cmp_expr->ea)
+                .sourced_from(TypeConstraintOrigin::InstructionUsage)
                 .describe("signed comparison")
         );
     } else if (implies_unsigned(cmp_expr->op)) {
         constraints.push_back(
             TypeConstraint::make_is_unsigned(lhs_type, cmp_expr->ea)
+                .sourced_from(TypeConstraintOrigin::InstructionUsage)
                 .describe("unsigned comparison")
         );
         constraints.push_back(
             TypeConstraint::make_is_unsigned(rhs_type, cmp_expr->ea)
+                .sourced_from(TypeConstraintOrigin::InstructionUsage)
                 .describe("unsigned comparison")
         );
     }
@@ -1339,6 +1376,7 @@ qvector<TypeConstraint> SignednessInferrer::analyze_conditional(
     // Conditional expression result is typically boolean (int in C)
     constraints.push_back(
         TypeConstraint::make_is_integer(cond_type, cond_expr ? cond_expr->ea : BADADDR)
+            .sourced_from(TypeConstraintOrigin::Heuristic)
             .describe("conditional is integer")
     );
     
@@ -1394,6 +1432,7 @@ qvector<TypeConstraint> PointerIntegerDiscriminator::analyze_usage(
         constraints.push_back(
             TypeConstraint::make_is_pointer(var, BADADDR)
                 .soft(weights_.memory_base_is_pointer)
+                .sourced_from(TypeConstraintOrigin::Heuristic)
                 .describe("used as memory base suggests pointer")
         );
     }
@@ -1403,6 +1442,7 @@ qvector<TypeConstraint> PointerIntegerDiscriminator::analyze_usage(
         constraints.push_back(
             TypeConstraint::make_is_integer(var, BADADDR)
                 .soft(weights_.small_const_compare_is_int)
+                .sourced_from(TypeConstraintOrigin::Heuristic)
                 .describe("small constant comparison suggests integer")
         );
     }
@@ -1412,6 +1452,7 @@ qvector<TypeConstraint> PointerIntegerDiscriminator::analyze_usage(
         constraints.push_back(
             TypeConstraint::make_is_integer(var, BADADDR)
                 .soft(weights_.large_const_arithmetic_is_int)
+                .sourced_from(TypeConstraintOrigin::Heuristic)
                 .describe("large constant arithmetic suggests integer")
         );
     }

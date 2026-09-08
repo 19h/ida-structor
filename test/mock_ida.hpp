@@ -513,6 +513,7 @@ struct cexpr_t : public citem_t {
     tinfo_t type;
     cexpr_t* x = nullptr;
     cexpr_t* y = nullptr;
+    cexpr_t* z = nullptr;
     var_ref_t v;
     sval_t m = 0;  // member offset for memptr
     ea_t obj_ea = BADADDR;  // for cot_obj
@@ -637,6 +638,7 @@ public:
             ParentGuard guard(parents, item, (flags_ & CV_PARENTS) != 0);
             if (const int result = apply_to(expression->x, nullptr)) return result;
             if (const int result = apply_to(expression->y, nullptr)) return result;
+            if (const int result = apply_to(expression->z, nullptr)) return result;
             if (expression->op == cot_call && expression->a) {
                 for (auto& argument : *expression->a) {
                     if (const int result = apply_to(&argument, nullptr)) return result;

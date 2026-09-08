@@ -4,8 +4,10 @@
 #include "structor/z3/context.hpp"
 #include "structor/z3/calling_convention_model.hpp"
 #include "structor/z3/type_lattice.hpp"
+#include "structor/z3/model_value_evidence.hpp"
 #include "structor/z3/instruction_semantics.hpp"
 #include "structor/z3/memory_type_evidence.hpp"
+#include "structor/z3/constraint_source_evidence.hpp"
 #include "structor/z3/alias_analysis.hpp"
 #include "structor/z3/layout_constraints.hpp"
 #include "structor/synth_types.hpp"
@@ -44,6 +46,9 @@ struct TypeInferenceConfig {
     
     // Solver configuration
     unsigned solver_timeout_ms = 10000;
+
+    /// Shared budget for checking selected local values against hard constraints.
+    ModelEvidenceBudget model_evidence_budget;
     
     // Type preference weights (for MaxSMT)
     int weight_signed_over_unsigned = 5;
@@ -90,6 +95,11 @@ struct TypeInferenceStats {
     unsigned types_integer = 0;
     unsigned types_floating = 0;
     unsigned types_unknown = 0;
+    unsigned model_evidence_queries = 0;
+    unsigned model_values_determined = 0;
+    unsigned model_values_ambiguous = 0;
+    unsigned model_values_unverified = 0;
+    std::chrono::milliseconds model_evidence_time{0};
     
     // Solver iterations
     unsigned solve_iterations = 0;
@@ -104,14 +114,41 @@ struct InferredVariableType {
     qstring var_name;
     InferredType type;
     TypeConfidence confidence;
+
+    // Engine values are selected candidates. Absence of a status denotes an
+    // externally constructed result whose evidence is the caller's contract.
+    std::optional<ModelValueStatus> model_value_status;
+    std::optional<InferredType> alternative_type;
+    qstring model_value_reason;
+    // Present when the supplied hard formulas used generic symbolic bounds.
+    // Such uniqueness is relative to those formulas, not the full type domain.
+    std::optional<SymbolicTypeQueryBounds> evidence_query_bounds;
+
+    [[nodiscard]] bool may_apply_model_value(bool allow_candidates = false) const noexcept {
+        return allow_candidates || !model_value_status ||
+            (*model_value_status == ModelValueStatus::DeterminedByHardConstraints &&
+             !evidence_query_bounds);
+    }
     
-    // Reserved provenance slots. The current engine does not populate them.
+    // Source records from the connected effective-constraint component.
+    // The flags describe available origins, not causes or independent evidence.
+    std::vector<ConstraintSourceEvidence> source_evidence;
     qvector<ea_t> source_constraints;
     bool from_signature = false;
     bool from_decompiler = false;
     bool from_alias = false;
     bool from_usage = false;
     
+    void record_source_evidence(VariableSourceEvidence sources) {
+        source_evidence = std::move(sources.records);
+        source_constraints.clear();
+        for (const auto site : sources.source_sites) source_constraints.push_back(site);
+        from_signature = sources.from_signature;
+        from_decompiler = sources.from_decompiler;
+        from_alias = sources.from_alias;
+        from_usage = sources.from_usage;
+    }
+
     InferredVariableType()
         : var_idx(-1)
         , confidence(TypeConfidence::Low) {}
@@ -146,7 +183,7 @@ struct FunctionTypeInferenceResult {
     bool used_bounded_symbolic_queries = false;
     bool used_explicit_symbolic_candidates = false;
 
-    /// Get inferred type for a variable
+    /// Get the selected candidate; inspect local_types for its model evidence
     [[nodiscard]] std::optional<InferredType> get_var_type(int var_idx) const;
     
     /// Get one exact memory view, including its access width in bytes.
@@ -156,8 +193,10 @@ struct FunctionTypeInferenceResult {
     [[deprecated("supply the memory access width for an exact lookup")]]
     [[nodiscard]] std::optional<InferredType> get_mem_type(ea_t base, sval_t offset) const;
     
-    /// Convert all inferred types to IDA tinfo_t
-    [[nodiscard]] std::unordered_map<int, tinfo_t> to_ida_types() const;
+    /// Convert determined unbounded values, or explicitly include candidates.
+    /// Externally constructed results retain their caller-provided semantics.
+    [[nodiscard]] std::unordered_map<int, tinfo_t> to_ida_types(
+        bool include_model_candidates = false) const;
 };
 
 /// Callback for progress reporting
@@ -213,7 +252,9 @@ private:
 #if defined(STRUCTOR_LIVE_TEST_HOOKS)
     friend struct TypeInferenceSignatureTestAccess;
     friend struct TypeInferenceMemoryTestAccess;
+    friend struct TypeInferenceSourceTestAccess;
     friend struct TypeInferenceQueryStatusTestAccess;
+    friend struct TypeInferenceModelEvidenceTestAccess;
 #endif
     Z3Context& ctx_;
     TypeInferenceConfig config_;
@@ -228,6 +269,7 @@ private:
     // Current analysis state
     cfunc_t* current_cfunc_ = nullptr;
     TypeConstraintSet current_constraints_;
+    bool hard_constraints_use_symbolic_bounds_ = false;
     std::unordered_map<int, TypeVariable> var_to_type_var_;
     
     /// Phase 1: Extract type constraints from ctree
@@ -248,6 +290,7 @@ private:
     /// Phase 6: Extract results from model
     void extract_results(
         const ::z3::model& model,
+        const ::z3::expr_vector& hard_constraints,
         FunctionTypeInferenceResult& result
     );
     

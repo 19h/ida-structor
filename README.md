@@ -440,9 +440,16 @@ additionally requires `LayoutSynthConfig::use_type_inference=true`. Both
 defaults are false, applying its inferred secondary types defaults to false,
 and cross-function propagation in `TypeApplicationConfig` defaults to false.
 Disabled or unsupported adjunct operations return explicit status/error data.
-The current adjunct infers per-function local-variable types only; it does not
-produce memory-location types, function signatures, interprocedural fixed
-points, allocation provenance, or polymorphic type-scheme substitutions.
+The adjunct publishes per-function local candidates and directly evidenced
+absolute-memory types. It does not yet infer function signatures,
+interprocedural fixed points, allocation provenance, or polymorphic
+substitutions. [Memory evidence](docs/MEMORY_TYPE_INFERENCE.md) uses complete
+address/displacement/width identities and omits conflicting or unsupported views.
+Local candidates carry a separate [hard-formula determination result](docs/MODEL_VALUE_EVIDENCE.md).
+Default conversion/application requires unbounded hard-formula determination;
+explicit candidate opt-in remains available. [Consulted source records](docs/CONSTRAINT_SOURCE_EVIDENCE.md)
+retain producer origins, including soft hints the model may violate. Source
+record counts and confidence categories are not calibrated probabilities.
 Experimental type variables use exact session identities, including full
 function addresses and requested SSA versions. Diagnostic IDs and labels do
 not establish variable equality. Rebuild C++ consumers after updating the

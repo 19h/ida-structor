@@ -92,6 +92,8 @@ def main() -> int:
         ("signature mapping and target ABI regressions", [sys.executable, "integration_tests/check_signature_abi_regressions.py", *common]),
         ("bounded symbolic type query status", [sys.executable, "integration_tests/check_type_query_status.py", *common]),
         ("absolute-memory type evidence", [sys.executable, "integration_tests/check_memory_inference.py", *common]),
+        ("local model value evidence", [sys.executable, "integration_tests/check_type_model_evidence.py", *common]),
+        ("consulted constraint-source evidence", [sys.executable, "integration_tests/check_constraint_source_evidence.py", *common]),
         ("experimental instruction semantics identity", [sys.executable, "integration_tests/check_instruction_semantics_identity.py", *common]),
         ("type lattice materialization", [sys.executable, "integration_tests/check_type_lattice_regressions.py", *common]),
     ]

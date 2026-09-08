@@ -629,6 +629,7 @@ qvector<TypeConstraint> SteensgaardAliasAnalyzer::generate_type_constraints(
                     // Type equality for aliasing variables
                     constraints.push_back(
                         TypeConstraint::make_equal(*prev_type, it->second, BADADDR)
+                            .sourced_from(TypeConstraintOrigin::AliasRelation)
                             .describe("aliasing variables have same type (Steensgaard)")
                     );
                 }
@@ -834,6 +835,7 @@ qvector<TypeConstraint> AndersenAliasAnalyzer::generate_type_constraints(
         // Pointer must be a pointer type
         constraints.push_back(
             TypeConstraint::make_is_pointer(ptr_type, BADADDR)
+                .sourced_from(TypeConstraintOrigin::AliasRelation)
                 .describe("variable used as pointer (Andersen)")
         );
         
@@ -847,6 +849,7 @@ qvector<TypeConstraint> AndersenAliasAnalyzer::generate_type_constraints(
                 constraints.push_back(
                     TypeConstraint::make_equal(*prev_pointee_type, pointee_it->second, BADADDR)
                         .soft(5)
+                        .sourced_from(TypeConstraintOrigin::AliasRelation)
                         .describe("pointees should have compatible types (Andersen)")
                 );
             }

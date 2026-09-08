@@ -19,6 +19,10 @@ namespace structor::z3 {
 struct TypeApplicationConfig {
     /// Minimum confidence level to apply a type
     TypeConfidence min_confidence = TypeConfidence::Medium;
+
+    /// Explicitly allow ambiguous, unverified, or bounded-domain model values.
+    /// The confidence threshold is still checked independently.
+    bool allow_model_candidates = false;
     
     /// Whether to propagate types to callers/callees. Disabled unless the
     /// caller explicitly expands mutation beyond the selected function.

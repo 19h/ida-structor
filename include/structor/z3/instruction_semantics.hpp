@@ -63,6 +63,17 @@ struct TypeVariableHash {
     }
 };
 
+/// Origin of a generated constraint, independent of its strength or truth.
+/// Caller-constructed constraints remain Unspecified unless explicitly tagged.
+enum class TypeConstraintOrigin : std::uint8_t {
+    Unspecified,
+    InstructionUsage,
+    DecompilerType,
+    FunctionSignature,
+    AliasRelation,
+    Heuristic,
+};
+
 /// A type constraint relating one or more type variables
 struct TypeConstraint {
     enum class Kind {
@@ -99,6 +110,7 @@ struct TypeConstraint {
     std::vector<InferredType> alternatives;      // For OneOf
     
     // Source tracking
+    TypeConstraintOrigin origin = TypeConstraintOrigin::Unspecified;
     ea_t source_ea = BADADDR;
     qstring description;
     
@@ -121,13 +133,20 @@ struct TypeConstraint {
     static TypeConstraint make_has_size(TypeVariable t, uint32_t size, ea_t ea = BADADDR);
     static TypeConstraint make_one_of(TypeVariable t, std::vector<InferredType> types, ea_t ea = BADADDR);
     
-    /// Set as soft constraint with weight
+    /// Set as a soft constraint. Nonpositive weights remain recorded but are
+    /// inactive: they contribute neither an objective nor explicit candidates.
     TypeConstraint& soft(int w) {
         is_soft = true;
         weight = w;
         return *this;
     }
     
+    /// Record the emission source; this does not change constraint semantics.
+    TypeConstraint& sourced_from(TypeConstraintOrigin value) noexcept {
+        origin = value;
+        return *this;
+    }
+
     /// Add description
     TypeConstraint& describe(const char* desc) {
         description = desc;

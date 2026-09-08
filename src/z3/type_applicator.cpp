@@ -140,7 +140,8 @@ TypeApplicationResult TypeApplicator::apply(
         prepared.var_idx = ivt.var_idx;
         prepared.var_name = ivt.var_name;
         prepared.inferred = ivt.type;
-        prepared.applied = ivt.type.to_tinfo();
+        if (ivt.may_apply_model_value(config_.allow_model_candidates))
+            prepared.applied = ivt.type.to_tinfo();
         prepared.confidence = ivt.confidence;
         prepared_applied.push_back(std::move(prepared));
         if (ivt.var_idx >= 0 &&
@@ -158,6 +159,18 @@ TypeApplicationResult TypeApplicator::apply(
     try {
     for (const auto& ivt : inference_result.local_types) {
         qstring reason;
+        if (!ivt.may_apply_model_value(config_.allow_model_candidates)) {
+            TypeApplicationResult::SkippedType skipped;
+            skipped.var_idx = ivt.var_idx;
+            skipped.var_name = ivt.var_name;
+            skipped.reason = ivt.evidence_query_bounds
+                ? "selected type has only bounded-domain model evidence"
+                : "selected type is not determined by the hard constraints";
+            result.skipped.push_back(std::move(skipped));
+            ++result.skipped_count;
+            ++inference_index;
+            continue;
+        }
         cfuncptr_t current_cfunc = utils::get_cfunc(result.func_ea);
         const auto current_var_idx = stable_locators[inference_index].has_value()
             ? resolve_lvar_locator(

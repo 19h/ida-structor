@@ -15,18 +15,20 @@ or completion of this project-wide objective.
 | Observe assignment and call operands before their effects; reject bounds invalidated by sibling effects | Eleven native ctree and five constructed SDK ctree cases, plus the unchanged guard suite | All 16 sequencing cases and 35 guard cases pass; matched baseline fails 11 sequencing cases |
 | Preserve separate reaching aliases across branches, joins, loop backedges, and structured exits | 51 constructed SDK ctree cases with exact access expectations and carrier restoration | All 51 pass; the original collector fails four of six initial differential cases |
 | Distinguish the type of a pointer base from the type of its loaded field | Production access inference helper tests and real `TypeFixer::analyze_variable` calls | Twenty-two focused helper cases and 13 live type-fixer cases pass |
-| Preserve full function/variable identity in inference caches | Production composite-key and semantics tests, forced collisions, distinct high addresses/SSA versions, and live ctree extraction | Caller cache and experimental variable identities verified; live extraction emits 19 constraints from 16 expressions |
+| Preserve full function/variable identity in inference caches | Production composite-key and semantics tests, forced collisions, distinct high addresses/SSA versions, and live ctree extraction | Caller cache and experimental variable identities verified; live extraction emits 22 constraints from 16 expressions |
 | Preserve complete type values in lattice caches | Real function/structure hash collisions, mutable child aliases, and returned-result mutation | Directed production lattice tests pass; cache entries own detached snapshots |
 | Preserve the declared abstract subtype order when joining, meeting, and materializing types | Production-linked law enumeration and actual IDA union/member/extent checks | 43 types, 1849 pairs, and 79507 triples pass the sampled laws; all 12 live materialization checks pass |
 | Preserve complete compound type values and bounded-query provenance in the experimental SMT path | Production-linked codec/semantics tests, sanitizer probes, and public IDA engine calls | Ten codec groups and 12 live engine cases pass; full structure IDs, recursive values, soft candidates, and distinct bound failures are preserved |
 | Publish absolute-memory types with complete address/displacement/width identity and explicit evidence | Forced collisions, checked address intervals, production extraction, and public IDA engine scenarios | Twelve portable groups and 28 live cases pass against the compound backend; insufficient/conflicting views are omitted and hard/soft provenance is retained |
+| Separate a selected local type from hard-formula determination and qualify bounded proofs before application | Production evidence probes, compound sanitizer tests, and public IDA inference/application scenarios | Fifteen direct/compound groups and all 16 live inference/application scenarios pass; bounded/unverified values are skipped by default |
+| Preserve consulted producer origins without treating hints or repeated sites as proof | Production emission tests, complete-identity graph traversal, and public IDA engine checks | Nine source-index groups, six inactive-weight groups, four live engine cases, and native producer-origin checks pass |
 | Merge existing types without losing evidence, observed storage, padding, or protected names | Production matcher unit tests and anonymous IDA type checks | Standalone tests and 11 real-IDA checks pass |
 | Return solver diagnostics that remain valid after the synthesis context is destroyed | Production solver/optimizer UNSAT tests and public API return/destruction checks | Standalone lifetime checks and public API UNSAT/relaxation checks pass |
 | Reject inference results belonging to another function before applying types | Real local/prototype snapshots, foreign/unknown/high-address rejection, and positive application controls | All nine live checks pass within the active IDB |
 | Map signature arguments to actual locals and distinguish target ABI defaults from recovered function evidence | Fifteen portable tests, five live argument-map cases, and six target-family cases | All pass; two foreign-ABI fixtures explicitly falsify the assumption that every function follows its target default |
 | Preserve pointer forwarding as address evidence rather than inventing a field load | Alias-only call/comparison negatives and loaded-field positive controls | Live controls pass; original-collector isolation confirms removal of a fictitious linked-list pointer observation |
-| Maintain public API, deterministic layouts, transactional persistence, global recovery, vtables, and type fixing | Full licensed integrity suite and external CMake consumer | All 20 suites pass against the combined compound/memory artifact (364.9 s); no layout contracts changed |
-| Maintain reproducible, usable builds and diagnostics | CMake build, CTest, compile-gated hook checks, explicit `idump` runtime diagnostics | 198 standalone CTest entries pass; the release build excludes all 15 hook markers and its installed copy passes codesign verification |
+| Maintain public API, deterministic layouts, transactional persistence, global recovery, vtables, and type fixing | Full licensed integrity suite and external CMake consumer | All 22 suites pass against the combined model/source/memory artifact (387.7 s); no layout contracts changed |
+| Maintain reproducible, usable builds and diagnostics | CMake build, CTest, compile-gated hook checks, explicit `idump` runtime diagnostics | 202 standalone CTest entries pass; the release build excludes all 17 hook markers and its installed copy passes codesign verification |
 | Extend adaptive and interprocedural inference beyond existing supported paths | Production implementation, adversarial fixtures, convergence/resource tests | Incomplete; see remaining work |
 
 ## Assumption register
@@ -51,6 +53,8 @@ Dependent findings reference these identifiers.
 | A14 | Reaching aliases and simple path predicates are tracked within a bounded state domain; widening and unknown goto/exception entry lose precision. | Divergent/sibling branches, loop backedges, complementary/stale predicates, 18-way overflow, switch fallthrough, irreducible goto entry, finally, and wind cleanup. | Branch analysis; limits and further assumptions in [BRANCH_ALIAS_ANALYSIS.md](BRANCH_ALIAS_ANALYSIS.md) |
 | A15 | Compound values retain the current abstract type domain; generic symbolic predicates use recorded bounds and optional candidate extensions. | Full-width IDs/counts, deep round trips, complete parameter lists, conflicting hard equalities, deep soft candidates, bound increases, budget exhaustion, and engine reuse. | SMT codec and query status; [COMPOUND_TYPE_ENCODING.md](COMPOUND_TYPE_ENCODING.md) and [TYPE_QUERY_STATUS.md](TYPE_QUERY_STATUS.md) |
 | A16 | Absolute-memory origins must be established from address expressions; a concrete view requires actual constraint evidence and matching width/model. | High/colliding addresses, overlapping widths, negative offsets, wraparound, partial storage, conflicting views, local unknown pointees, and address-only controls. | [MEMORY_TYPE_INFERENCE.md](MEMORY_TYPE_INFERENCE.md); no pointer-relative/global alias inference is implied |
+| A17 | A selected model value can be applied by default only when it is forced by the actual hard formulas without generic symbolic bounds. | Hard/soft scalar and compound values, alternative witnesses, bounded-only uniqueness, query/time exhaustion, context destruction, and actual IDA writes/rejections. | [MODEL_VALUE_EVIDENCE.md](MODEL_VALUE_EVIDENCE.md); extraction correctness remains a separate requirement |
+| A18 | Source records identify consulted origins, including violated soft hints; nonpositive preferences are inactive. | Explicit versus misleading textual annotations, high/distinct identities, inactive relation bridges, repeated sites, and negative-weight objective/candidate controls. | [CONSTRAINT_SOURCE_EVIDENCE.md](CONSTRAINT_SOURCE_EVIDENCE.md); no causal attribution or independent-sample count is implied |
 
 ## Changes and reproducibility
 
@@ -266,6 +270,18 @@ platforms.
   exploration widens after 16 alternatives or 65536 stateful steps; these are
   not wall-clock or whole-CFG bounds. See the branch-analysis contract. [A14]
 
+For local model values, the engine checks `C_hard ∧ (x ≠ selected)` with soft
+objectives excluded. Only an unbounded UNSAT result qualifies the selected value
+for default conversion/application. SAT supplies an owned alternative type;
+unknown and resource limits remain explicit. A hard proof receives medium
+confidence, an evidence category rather than a probability. Source records are
+collected separately and include consulted hints the model may violate. [A17, A18]
+
+Nonpositive soft weights no longer reach the unsigned Z3 objective interface or
+extend explicit candidate domains. The reproduced `-1` conversion yielded
+`2^32 - 1 = 4294967295`, overwhelming a positive weight of 10. Six directed groups
+verify the inactive contract and unchanged positive/hard behavior. [A18]
+
 ## Bounded scope expansion and remaining work
 
 - **High impact — experimental type representation:** complete compound values,
@@ -286,8 +302,10 @@ platforms.
   a confidence calibration. Branch-state joins and loop-carried aliases now
   have reaching-definition checks within a bounded domain. Analysis precision
   diagnostics and configurable state limits remain separate work. The
-  experimental engine also needs to distinguish uniquely constrained types
-  from arbitrary values selected by one satisfiable model.
+  experimental engine now separates hard-formula determination, arbitrary
+  selected values, and consulted source records. Formula extraction accuracy,
+  dependency-specific bound qualification, and calibrated confidence remain
+  separate requirements.
 - **High impact — interprocedural inference:** the experimental fixed-point API
   remains explicitly unimplemented. Completing it requires convergence,
   recursion/SCC, widening, and resource-bound contracts; a successful local

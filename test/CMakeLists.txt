@@ -269,6 +269,45 @@ target_sources(test_memory_type_evidence PRIVATE
 )
 add_test(NAME memory_type_evidence COMMAND test_memory_type_evidence)
 
+add_z3_test(test_model_value_evidence test_model_value_evidence.cpp)
+target_sources(test_model_value_evidence PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/z3/model_value_evidence.cpp
+)
+add_test(NAME model_value_evidence COMMAND test_model_value_evidence)
+
+add_z3_test(test_compound_model_value_evidence test_compound_model_value_evidence.cpp)
+target_include_directories(test_compound_model_value_evidence PRIVATE ${PROJECT_SOURCE_DIR}/test)
+target_sources(test_compound_model_value_evidence PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/z3/model_value_evidence.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/instruction_semantics.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/type_lattice.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/context.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/type_encoding.cpp
+)
+add_test(NAME type_compound_model_value_evidence COMMAND test_compound_model_value_evidence)
+
+add_z3_test(test_constraint_sources test_constraint_sources.cpp)
+target_include_directories(test_constraint_sources PRIVATE ${PROJECT_SOURCE_DIR}/test)
+target_sources(test_constraint_sources PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/z3/constraint_source_evidence.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/alias_analysis.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/instruction_semantics.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/type_lattice.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/context.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/type_encoding.cpp
+)
+add_test(NAME constraint_source_evidence COMMAND test_constraint_sources)
+
+add_z3_test(test_inactive_type_preferences test_inactive_type_preferences.cpp)
+target_include_directories(test_inactive_type_preferences PRIVATE ${PROJECT_SOURCE_DIR}/test)
+target_sources(test_inactive_type_preferences PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/z3/instruction_semantics.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/type_lattice.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/context.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/type_encoding.cpp
+)
+add_test(NAME inactive_type_preferences COMMAND test_inactive_type_preferences)
+
 # Add combined test target
 add_custom_target(check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --no-tests=error
@@ -291,13 +330,17 @@ add_custom_target(check
             test_type_variable_identity
             test_instruction_semantics_identity
             test_memory_type_evidence
+            test_constraint_sources
+            test_inactive_type_preferences
+            test_model_value_evidence
+            test_compound_model_value_evidence
             test_compound_type_encoding
 )
 
 # Add z3-only test target for quick Z3 testing
-# Run tests matching z3_ or e2e_ or type_ pattern
+# Include all standalone solver and evidence contracts.
 add_custom_target(check_z3
-    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --no-tests=error -R "^z3_|^e2e_|^type_"
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --no-tests=error -R "^z3_|^e2e_|^type_|^model_value_|^memory_type_|^constraint_source_|^inactive_type_"
     DEPENDS test_z3_context
             test_constraint_diagnostics
             test_z3_type_encoding
@@ -314,6 +357,10 @@ add_custom_target(check_z3
             test_type_variable_identity
             test_instruction_semantics_identity
             test_memory_type_evidence
+            test_constraint_sources
+            test_inactive_type_preferences
+            test_model_value_evidence
+            test_compound_model_value_evidence
             test_compound_type_encoding
     VERBATIM
 )
