@@ -146,6 +146,10 @@ enum type_flags : std::uint32_t {
     BTF_STRUCT  = 0x4000,
     BTF_UNION   = 0x8000,
     BT_UNK_QWORD = 0x10000,
+    BTF_ENUM_MOCK = 0x20000,
+    BTF_EXTFLOAT_MOCK = 0x40000,
+    BTF_BOOL4_MOCK = 0x80000,
+    BTF_BITFIELD_MOCK = 0x100000,
 };
 
 constexpr int TCMP_IGNMODS = 1;
@@ -184,6 +188,7 @@ public:
         pointed_type_ = element;
     }
     bool create_func(const struct func_type_data_t& ftd);
+    void create_array(const struct array_type_data_t& atd);
     bool create_udt(udt_type_data_t& udt, std::uint32_t kind);
     bool get_udt_details(udt_type_data_t* out) const;
 
@@ -191,15 +196,16 @@ public:
     bool is_funcptr() const {
         return is_ptr_ && pointed_type_ && pointed_type_->is_func();
     }
-    bool is_floating() const { return type_flags_ & (BTF_FLOAT | BTF_DOUBLE); }
+    bool is_floating() const { return (type_flags_ & (BTF_FLOAT | BTF_DOUBLE)) || type_flags_ == BTF_EXTFLOAT_MOCK; }
+    bool is_enum() const { return type_flags_ == BTF_ENUM_MOCK; }
     bool is_struct() const { return is_struct_; }
     bool is_array() const { return is_array_; }
     bool is_func() const { return is_func_; }
-    bool is_decl_bitfield() const { return false; }
+    bool is_decl_bitfield() const { return type_flags_ == BTF_BITFIELD_MOCK; }
     bool is_void() const { return type_flags_ == BTF_VOID; }
     bool is_union() const { return is_union_; }
     bool is_partial() const { return type_flags_ == BT_UNK_QWORD; }
-    bool is_bool() const { return type_flags_ == BTF_BOOL; }
+    bool is_bool() const { return type_flags_ == BTF_BOOL || type_flags_ == BTF_BOOL4_MOCK; }
     bool is_integral() const { return is_signed() || is_unsigned() || is_bool(); }
     bool is_signed() const { 
         return !(type_flags_ & BTMT_UNSIGNED) &&
@@ -216,6 +222,9 @@ public:
         if (is_array_) return array_count_ * (pointed_type_ ? pointed_type_->get_size() : 1);
         if (is_struct_ || is_union_) return udt_size_;
         if (type_flags_ == BT_UNK_QWORD) return 8;
+        if (type_flags_ == BTF_EXTFLOAT_MOCK) return 16;
+        if (type_flags_ == BTF_ENUM_MOCK || type_flags_ == BTF_BOOL4_MOCK ||
+            type_flags_ == BTF_BITFIELD_MOCK) return 4;
         if (type_flags_ & (BTF_INT8 | BTF_UINT8 | BTF_BOOL)) return 1;
         if (type_flags_ & (BTF_INT16 | BTF_UINT16)) return 2;
         if (type_flags_ & (BTF_INT32 | BTF_UINT32 | BTF_FLOAT)) return 4;
@@ -279,6 +288,7 @@ private:
     bool is_array_ = false;
     bool is_union_ = false;
     size_t array_count_ = 0;
+    std::uint32_t array_base_ = 0;
     std::shared_ptr<tinfo_t> pointed_type_;
     tid_t struct_tid_ = BADADDR;
     size_t udt_size_ = 0;
@@ -358,6 +368,7 @@ struct func_type_data_t : public qvector<funcarg_t> {
 };
 
 struct array_type_data_t {
+    std::uint32_t base = 0;
     tinfo_t elem_type;
     size_t nelems = 0;
 };
@@ -401,7 +412,13 @@ inline bool tinfo_t::get_array_details(array_type_data_t* atd) const {
         atd->elem_type = *pointed_type_;
     }
     atd->nelems = array_count_;
+    atd->base = array_base_;
     return true;
+}
+
+inline void tinfo_t::create_array(const array_type_data_t& details) {
+    create_array(details.elem_type, details.nelems);
+    array_base_ = details.base;
 }
 
 inline bool get_tinfo(tinfo_t*, ea_t) { return false; }

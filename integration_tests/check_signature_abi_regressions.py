@@ -116,7 +116,21 @@ def main() -> int:
                 raise AssertionError(f"signature mapping {case}: {data}")
             if case in ("native", "permuted"):
                 mapped = data["argument_indexes"]
-                expected_facts = dict(zip(mapped, data["parameter_types"], strict=True))
+                # This actual SDK carrier retains a partial _QWORD pointer
+                # parameter beside two distinguishable represented scalars.
+                # Unknown projections must not become signature type facts.
+                if set(data["parameter_types"]) != {"unknown", "uint32", "float64"}:
+                    raise AssertionError(f"signature carrier lost its category controls: {data}")
+                issues = data["parameter_conversion_issues"]
+                if (issues != [2 if inferred == "unknown" else 0
+                               for inferred in data["parameter_types"]] or
+                        not all(data["parameter_source_types"])):
+                    raise AssertionError(f"signature omission lacks partial-storage provenance: {data}")
+                expected_facts = {
+                    local: inferred
+                    for local, inferred in zip(mapped, data["parameter_types"], strict=True)
+                    if inferred != "unknown"
+                }
                 actual = data["constraints"]
                 if (len(actual) != len(expected_facts) or
                         {fact["local_index"]: fact["type"] for fact in actual} != expected_facts):

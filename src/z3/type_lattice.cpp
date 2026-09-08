@@ -297,73 +297,76 @@ tinfo_t InferredType::to_tinfo() const {
     return type;
 }
 
-InferredType InferredType::from_tinfo(const tinfo_t& type) {
-    if (type.empty()) {
+InferredType InferredType::from_tinfo(const tinfo_t& type, TypeConversionIssue* issue) {
+    TypeConversionIssue observed_issue = TypeConversionIssue::None;
+    const auto fail = [&](TypeConversionIssue value) {
+        observed_issue = value;
         return unknown();
-    }
-    
-    // Check for pointer types first
-    if (type.is_ptr()) {
-        tinfo_t pointed = type.get_pointed_object();
-        if (pointed.is_func()) {
-            // Function pointer
-            func_type_data_t ftd;
-            if (pointed.get_func_details(&ftd)) {
-                std::vector<InferredType> params;
-                for (const auto& arg : ftd) {
-                    params.push_back(from_tinfo(arg.type));
-                }
-                auto func = make_func(from_tinfo(ftd.rettype), std::move(params));
-                return make_ptr(std::move(func));
+    };
+    std::function<InferredType(const tinfo_t&, unsigned)> convert;
+    convert = [&](const tinfo_t& current, unsigned remaining) -> InferredType {
+        if (remaining == 0) return fail(TypeConversionIssue::DepthLimit);
+        if (current.empty()) return fail(TypeConversionIssue::Empty);
+        if (current.is_partial()) return fail(TypeConversionIssue::PartialStorage);
+        if (current.is_decl_bitfield()) return fail(TypeConversionIssue::Bitfield);
+        if (current.is_enum()) return fail(TypeConversionIssue::Enumeration);
+        if (current.is_ptr()) {
+            auto pointed = convert(current.get_pointed_object(), remaining - 1);
+            return pointed.is_unknown() ? unknown() : make_ptr(std::move(pointed));
+        }
+        if (current.is_func()) {
+            func_type_data_t details;
+            if (!current.get_func_details(&details)) return fail(TypeConversionIssue::InvalidDetails);
+            auto returned = convert(details.rettype, remaining - 1);
+            if (returned.is_unknown()) return unknown();
+            std::vector<InferredType> parameters;
+            parameters.reserve(details.size());
+            for (const auto& argument : details) {
+                auto parameter = convert(argument.type, remaining - 1);
+                if (parameter.is_unknown()) return unknown();
+                parameters.push_back(std::move(parameter));
             }
+            return make_func(std::move(returned), std::move(parameters));
         }
-        return make_ptr(from_tinfo(pointed));
-    }
-    
-    // Check for function (non-pointer)
-    if (type.is_func()) {
-        func_type_data_t ftd;
-        if (type.get_func_details(&ftd)) {
-            std::vector<InferredType> params;
-            for (const auto& arg : ftd) {
-                params.push_back(from_tinfo(arg.type));
+        if (current.is_array()) {
+            array_type_data_t details;
+            if (!current.get_array_details(&details)) return fail(TypeConversionIssue::InvalidDetails);
+            if (details.base != 0 || details.nelems == 0 ||
+                static_cast<std::uint64_t>(details.nelems) > std::numeric_limits<std::uint32_t>::max()) {
+                return fail(TypeConversionIssue::UnsupportedArrayBounds);
             }
-            return make_func(from_tinfo(ftd.rettype), std::move(params));
+            auto element = convert(details.elem_type, remaining - 1);
+            return element.is_unknown() ? unknown()
+                : make_array(std::move(element), static_cast<std::uint32_t>(details.nelems));
         }
-    }
-    
-    // Check for array
-    if (type.is_array()) {
-        array_type_data_t atd;
-        if (type.get_array_details(&atd)) {
-            return make_array(from_tinfo(atd.elem_type), static_cast<uint32_t>(atd.nelems));
+        if (current.is_struct() || current.is_union()) {
+            const auto tid = current.get_tid();
+            return tid == BADADDR ? fail(TypeConversionIssue::AnonymousAggregate) : make_struct(tid);
         }
-    }
-    
-    // Check for struct/union
-    if (type.is_struct() || type.is_union()) {
-        tid_t tid = type.get_tid();
-        if (tid != BADADDR) {
-            return make_struct(tid);
+        if (current.is_void()) return make_base(BaseType::Void);
+        const auto width = current.get_size();
+        if (current.is_floating()) {
+            if (width == 4) return make_base(BaseType::Float32);
+            if (width == 8) return make_base(BaseType::Float64);
+            return fail(TypeConversionIssue::UnsupportedFloatingWidth);
         }
-    }
-    
-    // Check for void
-    if (type.is_void()) {
-        return make_base(BaseType::Void);
-    }
-    
-    // Check for floating point
-    if (type.is_floating()) {
-        size_t sz = type.get_size();
-        if (sz == 4) return make_base(BaseType::Float32);
-        if (sz == 8) return make_base(BaseType::Float64);
-    }
-    
-    // Integer types
-    size_t sz = type.get_size();
-    bool is_signed = type.is_signed();
-    return make_base(base_type_from_size(static_cast<uint32_t>(sz), is_signed));
+        if (current.is_bool()) {
+            return width == 1 ? make_base(BaseType::Bool)
+                : fail(TypeConversionIssue::UnsupportedBooleanWidth);
+        }
+        if (!current.is_integral()) return fail(TypeConversionIssue::UnsupportedCategory);
+        if (!current.is_signed() && !current.is_unsigned()) {
+            return fail(TypeConversionIssue::UnknownIntegerSignedness);
+        }
+        if (width == BADSIZE || width > std::numeric_limits<std::uint32_t>::max()) {
+            return fail(TypeConversionIssue::UnsupportedIntegerWidth);
+        }
+        const auto base = base_type_from_size(static_cast<std::uint32_t>(width), current.is_signed());
+        return base == BaseType::Unknown ? fail(TypeConversionIssue::UnsupportedIntegerWidth) : make_base(base);
+    };
+    auto result = convert(type, 64);
+    if (issue) *issue = observed_issue;
+    return result;
 }
 
 qstring InferredType::to_string() const {

@@ -167,6 +167,8 @@ struct FunctionTypeInferenceResult {
     InferredMemoryTypes memory_types;
     ExactMemoryLocationMap<MemoryTypeProvenance> memory_provenance;
     std::vector<MemoryInferenceDiagnostic> memory_diagnostics;
+    // Unsupported source type spellings and IDs are detached diagnostics only.
+    std::vector<TypeConversionObservation> unsupported_type_observations;
     // Signature-result inference remains unavailable.
     std::optional<InferredType> return_type;
     qvector<InferredType> param_types;
@@ -253,6 +255,7 @@ private:
     friend struct TypeInferenceSignatureTestAccess;
     friend struct TypeInferenceMemoryTestAccess;
     friend struct TypeInferenceSourceTestAccess;
+    friend struct TypeInferenceRepresentationTestAccess;
     friend struct TypeInferenceQueryStatusTestAccess;
     friend struct TypeInferenceModelEvidenceTestAccess;
 #endif

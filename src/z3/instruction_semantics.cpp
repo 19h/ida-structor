@@ -186,7 +186,8 @@ std::optional<InferredType> memory_type_from_tinfo(
         if (*size == 8) return InferredType::make_base(BaseType::Float64);
         return std::nullopt;
     }
-    if (type.is_bool()) return InferredType::make_base(BaseType::Bool);
+    if (type.is_bool()) return *size == 1
+        ? std::optional<InferredType>(InferredType::make_base(BaseType::Bool)) : std::nullopt;
     if (!type.is_integral() || (!type.is_signed() && !type.is_unsigned())) return std::nullopt;
     const auto base = base_type_from_size(*size, type.is_signed());
     return base == BaseType::Unknown ? std::nullopt
@@ -364,6 +365,7 @@ void InstructionSemanticsExtractor::begin_expression_pass(cfunc_t* cfunc) {
     stats_.hard_constraints = 0;
     stats_.soft_constraints = 0;
     stats_.unresolved_memory_accesses = 0;
+    unsupported_type_observations_.clear();
 }
 
 void InstructionSemanticsExtractor::end_expression_pass() {
@@ -600,7 +602,7 @@ void InstructionSemanticsExtractor::extract_from_assignment(
     
     // If RHS has known type from decompiler, use it
     if (!rhs_type.is_memory() && !expr->y->type.empty()) {
-        auto inferred = infer_from_tinfo(expr->y->type);
+        auto inferred = infer_from_tinfo(expr->y->type, expr->ea);
         if (inferred) {
             constraints.push_back(
                 TypeConstraint::make_one_of(rhs_type, {*inferred}, expr->ea)
@@ -629,11 +631,19 @@ void InstructionSemanticsExtractor::extract_from_ptr_deref(
             .describe("dereference requires pointer")
     );
     
+    // The value loaded through the address may itself be a pointer even when
+    // its pointee is unrepresented. This is independent of address ptr_type.
+    if (expr->type.is_ptr()) {
+        constraints.push_back(TypeConstraint::make_is_pointer(deref_type, expr->ea)
+            .sourced_from(TypeConstraintOrigin::DecompilerType)
+            .describe("loaded value has pointer shape"));
+    }
+
     // The dereferenced type should match the pointee
     // ptr_type = ptr(deref_type)
     const auto pointee = ptr_type.is_memory()
-        ? memory_type_from_tinfo(expr->type, ctx_.pointer_size())
-        : std::optional<InferredType>(InferredType::from_tinfo(expr->type));
+        ? observe_memory_type(expr->type, expr->ea)
+        : infer_from_tinfo(expr->type, expr->ea);
     if (pointee) {
         constraints.push_back(
             TypeConstraint::make_is_pointer_to(ptr_type, *pointee, expr->ea)
@@ -827,9 +837,15 @@ void InstructionSemanticsExtractor::extract_from_cast(
     TypeVariable src_type = get_expr_type(expr->x, constraints);
     TypeVariable dst_type = get_expr_type(expr, constraints);
     
+    if (expr->type.is_ptr()) {
+        constraints.push_back(TypeConstraint::make_is_pointer(dst_type, expr->ea)
+            .sourced_from(TypeConstraintOrigin::DecompilerType)
+            .describe("cast target has pointer shape"));
+    }
+
     // Cast target type is known from the expression
     if (!expr->type.empty()) {
-        auto inferred = infer_from_tinfo(expr->type);
+        auto inferred = infer_from_tinfo(expr->type, expr->ea);
         if (inferred) {
             constraints.push_back(
                 TypeConstraint::make_one_of(dst_type, {*inferred}, expr->ea)
@@ -885,8 +901,8 @@ void InstructionSemanticsExtractor::extract_from_call(
                     TypeVariable arg_type = get_expr_type(arg, constraints);
                     
                     auto param_inferred = arg_type.is_memory()
-                        ? memory_type_from_tinfo(ftd[i].type, ctx_.pointer_size())
-                        : infer_from_tinfo(ftd[i].type);
+                        ? observe_memory_type(ftd[i].type, expr->ea)
+                        : infer_from_tinfo(ftd[i].type, expr->ea);
                     if (param_inferred) {
                         constraints.push_back(
                             TypeConstraint::make_one_of(arg_type, {*param_inferred}, expr->ea)
@@ -900,7 +916,7 @@ void InstructionSemanticsExtractor::extract_from_call(
             
             // Return type constraint
             TypeVariable ret_type = get_expr_type(expr, constraints);
-            auto ret_inferred = infer_from_tinfo(ftd.rettype);
+            auto ret_inferred = infer_from_tinfo(ftd.rettype, expr->ea);
             if (ret_inferred) {
                 constraints.push_back(
                     TypeConstraint::make_one_of(ret_type, {*ret_inferred}, expr->ea)
@@ -970,7 +986,7 @@ void InstructionSemanticsExtractor::extract_from_member_access(
     
     // Member type from expression type
     if (!member_type.is_memory() && !expr->type.empty()) {
-        auto inferred = infer_from_tinfo(expr->type);
+        auto inferred = infer_from_tinfo(expr->type, expr->ea);
         if (inferred) {
             constraints.push_back(
                 TypeConstraint::make_one_of(member_type, {*inferred}, expr->ea)
@@ -982,9 +998,42 @@ void InstructionSemanticsExtractor::extract_from_member_access(
     }
 }
 
-std::optional<InferredType> InstructionSemanticsExtractor::infer_from_tinfo(const tinfo_t& type) {
-    if (type.empty()) return std::nullopt;
-    return InferredType::from_tinfo(type);
+namespace {
+TypeConversionObservation conversion_observation(
+    const tinfo_t& type, ea_t site, TypeConversionIssue issue)
+{
+    TypeConversionObservation result;
+    result.source_ea = site;
+    result.issue = issue;
+    type.print(&result.original_type_spelling);
+    const auto tid = type.get_tid();
+    if (tid != BADADDR) result.original_tid = tid;
+    const auto width = type.get_size();
+    if (width != BADSIZE && width != 0) result.byte_width = static_cast<std::uint64_t>(width);
+    return result;
+}
+} // namespace
+
+std::optional<InferredType> InstructionSemanticsExtractor::observe_type(const tinfo_t& type, ea_t site) {
+    return infer_from_tinfo(type, site);
+}
+
+std::optional<InferredType> InstructionSemanticsExtractor::infer_from_tinfo(const tinfo_t& type, ea_t site) {
+    TypeConversionIssue issue;
+    auto inferred = InferredType::from_tinfo(type, &issue);
+    if (!inferred.is_unknown()) return inferred;
+    unsupported_type_observations_.push_back(conversion_observation(type, site, issue));
+    return std::nullopt;
+}
+
+std::optional<InferredType> InstructionSemanticsExtractor::observe_memory_type(const tinfo_t& type, ea_t site) {
+    const auto inferred = memory_type_from_tinfo(type, ctx_.pointer_size());
+    if (inferred) return inferred;
+    TypeConversionIssue issue;
+    (void)InferredType::from_tinfo(type, &issue);
+    if (issue == TypeConversionIssue::None) issue = TypeConversionIssue::RestrictedMemoryView;
+    unsupported_type_observations_.push_back(conversion_observation(type, site, issue));
+    return std::nullopt;
 }
 
 TypeVariable InstructionSemanticsExtractor::get_expr_type(
@@ -1015,7 +1064,7 @@ TypeVariable InstructionSemanticsExtractor::get_expr_type(
             constraints.push_back(TypeConstraint::make_has_size(memory, *width, expr->ea)
                 .sourced_from(TypeConstraintOrigin::DecompilerType)
                 .describe("absolute-memory access width"));
-            const auto observed = memory_type_from_tinfo(expr->type, ctx_.pointer_size());
+            const auto observed = observe_memory_type(expr->type, expr->ea);
             if (observed && !observed->is_unknown() &&
                 config_.generate_soft_constraints && config_.weight_from_decompiler > 0) {
                 auto& views = observed_memory_types_[memory.identity];

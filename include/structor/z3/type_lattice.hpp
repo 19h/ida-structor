@@ -73,6 +73,25 @@ enum class BaseType : unsigned {
 /// Get base type from size and signedness
 [[nodiscard]] BaseType base_type_from_size(uint32_t size, bool is_signed) noexcept;
 
+/// Why an IDA source type has no complete value in this represented type domain.
+/// Nested failures report the first unsupported child category.
+enum class TypeConversionIssue : unsigned {
+    None, Empty, PartialStorage, Bitfield, Enumeration, AnonymousAggregate,
+    UnsupportedFloatingWidth, UnsupportedBooleanWidth, UnsupportedIntegerWidth,
+    UnknownIntegerSignedness, UnsupportedArrayBounds, InvalidDetails,
+    UnsupportedCategory, DepthLimit, RestrictedMemoryView
+};
+
+/// Detached diagnostic metadata. The spelling is display text, never type or
+/// variable identity; numeric TIDs retain their original IDB meaning only.
+struct TypeConversionObservation {
+    ea_t source_ea = BADADDR;
+    TypeConversionIssue issue = TypeConversionIssue::None;
+    qstring original_type_spelling;
+    std::optional<tid_t> original_tid;
+    std::optional<std::uint64_t> byte_width;
+};
+
 /// Inferred type in the type lattice (supports recursive pointer types)
 /// This represents types as: BaseType | Ptr(InferredType) | Func(args, ret) | Array(elem, count)
 class InferredType {
@@ -158,8 +177,13 @@ public:
     /// Convert to IDA tinfo_t
     [[nodiscard]] tinfo_t to_tinfo() const;
     
-    /// Create from IDA tinfo_t
-    static InferredType from_tinfo(const tinfo_t& type);
+    /// Project a complete represented IDA type. Unsupported categories or
+    /// children return Unknown, never an integer guessed from storage width.
+    /// Functions preserve return/ordered parameter types, not ABI metadata;
+    /// declaration qualifiers are outside this abstract domain. Traversal is
+    /// limited to 64 nested nodes. Optional issue reports conversion failure.
+    static InferredType from_tinfo(const tinfo_t& type,
+                                  TypeConversionIssue* issue = nullptr);
     
     /// Get human-readable string representation
     [[nodiscard]] qstring to_string() const;

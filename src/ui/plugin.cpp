@@ -14,6 +14,7 @@
 #include "signature_abi_live_checks.hpp"
 #include "memory_inference_live_checks.hpp"
 #include "source_evidence_live_checks.hpp"
+#include "represented_types_live_checks.hpp"
 #include "type_query_status_live_checks.hpp"
 #include "type_lattice_live_checks.hpp"
 #include "../../integration_tests/assignment_order_ctree_probe.hpp"
@@ -1781,6 +1782,98 @@ static bool run_pending_api_command_impl(const qstring& command_text) {
         return true;
     }
 
+    if (command == "inspect_represented_types") {
+        if (parts.size() != 2) {
+            export_api_error(command.c_str(), "Expected function");
+            return false;
+        }
+        ea_t function_ea = BADADDR;
+        if (!resolve_function_spec(qstring(parts[1].c_str()), function_ea)) {
+            export_api_error(command.c_str(), "Function not found");
+            return false;
+        }
+        cfuncptr_t function = utils::get_cfunc(function_ea);
+        if (!function) {
+            export_api_error(command.c_str(), "Failed to decompile function");
+            return false;
+        }
+        const auto* original_body = function->body.cblock;
+        const auto original_arguments = function->argidx;
+        std::vector<tinfo_t> original_local_types;
+        for (const auto& local : *function->get_lvars()) original_local_types.push_back(local.type());
+        tinfo_t original_saved_type;
+        const bool had_saved_type = get_tinfo(&original_saved_type, function_ea);
+        const auto checks = z3::TypeInferenceRepresentationTestAccess::collect(function);
+        bool unchanged = original_body == function->body.cblock &&
+            original_arguments == function->argidx &&
+            original_local_types.size() == function->get_lvars()->size();
+        for (std::size_t index = 0; unchanged && index < original_local_types.size(); ++index) {
+            unchanged &= original_local_types[index].equals_to((*function->get_lvars())[index].type());
+        }
+        tinfo_t saved_type;
+        const bool has_saved_type = get_tinfo(&saved_type, function_ea);
+        unchanged &= had_saved_type == has_saved_type &&
+            (!has_saved_type || saved_type.equals_to(original_saved_type));
+        std::string payload = "\"success\":true,\"function_unchanged\":";
+        append_json_bool(payload, unchanged);
+        payload += ",\"cases\":[";
+        bool first = true;
+        for (const auto& observation : checks) {
+            if (!first) payload += ',';
+            first = false;
+            payload += "{\"name\":";
+            append_json_string(payload, observation.name);
+            payload += ",\"source\":";
+            qstring source; observation.source.print(&source);
+            append_json_string(payload, source);
+            payload += ",\"source_size\":" + std::to_string(observation.source.get_size());
+            payload += ",\"source_created\":"; append_json_bool(payload, !observation.source.empty());
+            payload += ",\"source_partial\":"; append_json_bool(payload, observation.source.is_partial());
+            payload += ",\"source_integral\":"; append_json_bool(payload, observation.source.is_integral());
+            payload += ",\"inferred\":"; append_json_string(payload, observation.inferred.to_string());
+            payload += ",\"unknown\":"; append_json_bool(payload, observation.inferred.is_unknown());
+            payload += ",\"conversion_issue\":" + std::to_string(static_cast<unsigned>(observation.issue));
+            payload += ",\"pointer_constraints\":" + std::to_string(observation.pointer_constraints);
+            payload += ",\"concrete_pointees\":" + std::to_string(observation.concrete_pointees);
+            payload += ",\"concrete_types\":" + std::to_string(observation.concrete_types);
+            payload += ",\"address_pointer_constraints\":" + std::to_string(observation.address_pointer_constraints);
+            payload += ",\"value_pointer_constraints\":" + std::to_string(observation.value_pointer_constraints);
+            payload += ",\"size_constraints\":" + std::to_string(observation.size_constraints);
+            payload += ",\"status\":" + std::to_string(static_cast<unsigned>(observation.result.status));
+            payload += ",\"success\":"; append_json_bool(payload, observation.result.success);
+            payload += ",\"unsupported_observations\":[";
+            bool first_observation = true;
+            for (const auto& unsupported : observation.result.unsupported_type_observations) {
+                if (!first_observation) payload += ',';
+                first_observation = false;
+                payload += "{\"issue\":" + std::to_string(static_cast<unsigned>(unsupported.issue));
+                payload += ",\"site\":";
+                append_json_string(payload, std::to_string(unsupported.source_ea).c_str());
+                payload += ",\"spelling\":"; append_json_string(payload, unsupported.original_type_spelling);
+                payload += ",\"tid\":";
+                if (unsupported.original_tid) append_json_string(payload, std::to_string(*unsupported.original_tid).c_str());
+                else payload += "null";
+                payload += ",\"byte_width\":";
+                if (unsupported.byte_width) payload += std::to_string(*unsupported.byte_width);
+                else payload += "null";
+                payload += '}';
+            }
+            payload += "],\"locals\":[";
+            bool first_local = true;
+            for (const auto& local : observation.result.local_types) {
+                if (!first_local) payload += ',';
+                first_local = false;
+                payload += "{\"index\":" + std::to_string(local.var_idx) + ",\"type\":";
+                append_json_string(payload, local.type.to_string());
+                payload += '}';
+            }
+            payload += "]}";
+        }
+        payload += ']';
+        export_api_json(command.c_str(), payload);
+        return true;
+    }
+
     if (command == "inspect_constraint_sources") {
         if (parts.size() != 2) {
             export_api_error(command.c_str(), "Expected function");
@@ -1983,6 +2076,20 @@ static bool run_pending_api_command_impl(const qstring& command_text) {
             if (!first) payload += ',';
             first = false;
             append_json_string(payload, type);
+        }
+        payload += "],\"parameter_source_types\":[";
+        first = true;
+        for (const auto& type : evidence.parameter_source_types) {
+            if (!first) payload += ',';
+            first = false;
+            append_json_string(payload, type);
+        }
+        payload += "],\"parameter_conversion_issues\":[";
+        first = true;
+        for (const auto issue : evidence.parameter_conversion_issues) {
+            if (!first) payload += ',';
+            first = false;
+            payload += std::to_string(static_cast<unsigned>(issue));
         }
         payload += "],\"constraints\":[";
         first = true;

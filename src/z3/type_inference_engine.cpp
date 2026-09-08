@@ -147,12 +147,16 @@ FunctionTypeInferenceResult TypeInferenceEngine::infer_function(cfunc_t* cfunc) 
     }
 
     const auto total_start = std::chrono::steady_clock::now();
+    bool analyzers_initialized = false;
     const auto finish = [&]() {
         const auto total_end = std::chrono::steady_clock::now();
         last_stats_.total_time =
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 total_end - total_start);
         result.stats = last_stats_;
+        if (analyzers_initialized && semantics_extractor_) {
+            result.unsupported_type_observations = semantics_extractor_->unsupported_type_observations();
+        }
         result.used_bounded_symbolic_queries = type_encoder_.bounded_symbolic_queries_used();
         result.used_explicit_symbolic_candidates = type_encoder_.explicit_candidate_queries_used();
     };
@@ -161,6 +165,7 @@ FunctionTypeInferenceResult TypeInferenceEngine::infer_function(cfunc_t* cfunc) 
         // Recreate analyzers so mutations made through config() between calls
         // are reflected instead of silently retaining constructor-time values.
         initialize_analyzers();
+        analyzers_initialized = true;
 
         reset_state();
         current_cfunc_ = cfunc;
@@ -378,11 +383,12 @@ void TypeInferenceEngine::add_calling_convention_constraints(cfunc_t* cfunc) {
         auto it = var_to_type_var_.find(binding.local_index);
         if (it == var_to_type_var_.end()) continue;
         
-        auto inferred = InferredType::from_tinfo(ftd[binding.parameter_index].type);
-        if (inferred.is_unknown()) continue;
+        const auto inferred = semantics_extractor_->observe_type(
+            ftd[binding.parameter_index].type, cfunc->entry_ea);
+        if (!inferred) continue;
         
         current_constraints_.add(
-            TypeConstraint::make_one_of(it->second, {inferred}, cfunc->entry_ea)
+            TypeConstraint::make_one_of(it->second, {*inferred}, cfunc->entry_ea)
                 .soft(config_.weight_from_signature)
                 .sourced_from(TypeConstraintOrigin::FunctionSignature)
                 .describe("parameter type from signature")
@@ -681,7 +687,8 @@ std::optional<InferredType> CallingConventionDetector::get_return_constraint(
     func_type_data_t ftd;
     if (!func_type.get_func_details(&ftd)) return std::nullopt;
     
-    return InferredType::from_tinfo(ftd.rettype);
+    auto inferred = InferredType::from_tinfo(ftd.rettype);
+    return inferred.is_unknown() ? std::nullopt : std::optional<InferredType>(std::move(inferred));
 }
 
 std::vector<CallingConventionDetector::ParamLocation>

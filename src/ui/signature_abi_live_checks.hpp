@@ -19,6 +19,9 @@ struct TypeInferenceSignatureTestAccess {
         TypeInferenceConfig config;
         config.weight_from_signature = 73;
         TypeInferenceEngine engine(context, config);
+        // The production inference entry initializes the observation collector
+        // before signature extraction. This focused friend seam must do so too.
+        engine.initialize_analyzers();
         auto* locals = cfunc->get_lvars();
         for (std::size_t index = 0; index < locals->size(); ++index) {
             const auto local = static_cast<int>(index);
@@ -46,6 +49,8 @@ struct SignatureMappingEvidence {
     std::vector<std::pair<const char*, bool>> checks;
     std::vector<int> argument_indexes;
     std::vector<qstring> parameter_types;
+    std::vector<qstring> parameter_source_types;
+    std::vector<z3::TypeConversionIssue> parameter_conversion_issues;
     std::vector<SignatureConstraintEvidence> constraints;
     qstring error;
 };
@@ -101,8 +106,13 @@ inline SignatureMappingEvidence run_live_signature_mapping_check(
                 return evidence;
             }
             for (std::size_t parameter = 0; parameter < details.size(); ++parameter) {
-                const auto inferred = z3::InferredType::from_tinfo(details[parameter].type);
+                z3::TypeConversionIssue issue;
+                const auto inferred = z3::InferredType::from_tinfo(details[parameter].type, &issue);
                 evidence.parameter_types.push_back(inferred.to_string());
+                qstring source_type;
+                details[parameter].type.print(&source_type);
+                evidence.parameter_source_types.push_back(std::move(source_type));
+                evidence.parameter_conversion_issues.push_back(issue);
                 if (!inferred.is_unknown()) expected.emplace(cfunc->argidx[parameter], inferred);
                 if (parameter != 0 && !(inferred ==
                         z3::InferredType::from_tinfo(details[0].type))) {

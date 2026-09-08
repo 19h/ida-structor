@@ -198,6 +198,13 @@ public:
     /// Get the type encoder
     [[nodiscard]] TypeLatticeEncoder& type_encoder() noexcept { return encoder_; }
     
+    /// Convert observed source type metadata without emitting a constraint.
+    /// Unsupported observations are retained as detached diagnostics.
+    [[nodiscard]] std::optional<InferredType> observe_type(const tinfo_t& type, ea_t site = BADADDR);
+    [[nodiscard]] const std::vector<TypeConversionObservation>& unsupported_type_observations() const noexcept {
+        return unsupported_type_observations_;
+    }
+
     /// Get statistics
     struct Stats {
         int constraints_extracted = 0;
@@ -214,6 +221,7 @@ private:
     TypeLatticeEncoder encoder_;
     InstructionSemanticsConfig config_;
     Stats stats_;
+    std::vector<TypeConversionObservation> unsupported_type_observations_;
     
     // Type variable management
     int next_var_id_ = 0;
@@ -249,7 +257,8 @@ private:
     void extract_from_member_access(cexpr_t* expr, qvector<TypeConstraint>& constraints);
     
     /// Infer type from expression's decompiler type
-    [[nodiscard]] std::optional<InferredType> infer_from_tinfo(const tinfo_t& type);
+    [[nodiscard]] std::optional<InferredType> infer_from_tinfo(const tinfo_t& type, ea_t site);
+    [[nodiscard]] std::optional<InferredType> observe_memory_type(const tinfo_t& type, ea_t site);
     
     /// Get type variable for an expression (creates temp if needed)
     [[nodiscard]] TypeVariable get_expr_type(cexpr_t* expr,

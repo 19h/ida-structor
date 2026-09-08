@@ -21,6 +21,7 @@ or completion of this project-wide objective.
 | Preserve the declared abstract subtype order when joining, meeting, and materializing types | Production-linked law enumeration and actual IDA union/member/extent checks | 43 types, 1849 pairs, and 79507 triples pass the sampled laws; all 12 live materialization checks pass |
 | Preserve complete compound type values and bounded-query provenance in the experimental SMT path | Production-linked codec/semantics tests, sanitizer probes, and public IDA engine calls | Ten codec groups and 12 live engine cases pass; full structure IDs, recursive values, soft candidates, and distinct bound failures are preserved |
 | Publish absolute-memory types with complete address/displacement/width identity and explicit evidence | Forced collisions, checked address intervals, production extraction, and public IDA engine scenarios | Twelve portable groups and 28 live cases pass against the compound backend; insufficient/conflicting views are omitted and hard/soft provenance is retained |
+| Preserve represented IDA categories without fabricating integer types from storage width | Production conversion groups and actual SDK/public engine controls | Eight portable groups and all 23 SDK controls pass in the combined artifact; all nine affected runtime suites pass |
 | Separate a selected local type from hard-formula determination and qualify bounded proofs before application | Production evidence probes, compound sanitizer tests, and public IDA inference/application scenarios | Fifteen direct/compound groups and all 16 live inference/application scenarios pass; bounded/unverified values are skipped by default |
 | Preserve consulted producer origins without treating hints or repeated sites as proof | Production emission tests, complete-identity graph traversal, and public IDA engine checks | Nine source-index groups, six inactive-weight groups, four live engine cases, and native producer-origin checks pass |
 | Merge existing types without losing evidence, observed storage, padding, or protected names | Production matcher unit tests and anonymous IDA type checks | Standalone tests and 11 real-IDA checks pass |
@@ -29,7 +30,7 @@ or completion of this project-wide objective.
 | Map signature arguments to actual locals and distinguish target ABI defaults from recovered function evidence | Fifteen portable tests, five live argument-map cases, and six target-family cases | All pass; two foreign-ABI fixtures explicitly falsify the assumption that every function follows its target default |
 | Preserve pointer forwarding as address evidence rather than inventing a field load | Alias-only call/comparison negatives and loaded-field positive controls | Live controls pass; original-collector isolation confirms removal of a fictitious linked-list pointer observation |
 | Maintain public API, deterministic layouts, transactional persistence, global recovery, vtables, and type fixing | Full licensed integrity suite and external CMake consumer | All 24 suites pass against the combined flow/model/source/memory artifact (403.1 s); no existing layout contracts changed |
-| Maintain reproducible, usable builds and diagnostics | CMake build, CTest, compile-gated hook checks, explicit `idump` runtime diagnostics | 205 standalone CTest entries pass; the release build excludes all 18 hook markers and its installed copy passes codesign verification |
+| Maintain reproducible, usable builds and diagnostics | CMake build, CTest, compile-gated hook checks, explicit `idump` runtime diagnostics | 206 standalone CTest entries pass; the release build excludes all 19 hook markers and its installed copy passes codesign verification |
 | Extend adaptive and interprocedural inference beyond existing supported paths | Production implementation, adversarial fixtures, convergence/resource tests | Incomplete; see remaining work |
 
 ## Assumption register
@@ -57,6 +58,7 @@ Dependent findings reference these identifiers.
 | A17 | A selected model value can be applied by default only when it is forced by the actual hard formulas without generic symbolic bounds. | Hard/soft scalar and compound values, alternative witnesses, bounded-only uniqueness, query/time exhaustion, context destruction, and actual IDA writes/rejections. | [MODEL_VALUE_EVIDENCE.md](MODEL_VALUE_EVIDENCE.md); extraction correctness remains a separate requirement |
 | A18 | Source records identify consulted origins, including violated soft hints; nonpositive preferences are inactive. | Explicit versus misleading textual annotations, high/distinct identities, inactive relation bridges, repeated sites, and negative-weight objective/candidate controls. | [CONSTRAINT_SOURCE_EVIDENCE.md](CONSTRAINT_SOURCE_EVIDENCE.md); no causal attribution or independent-sample count is implied |
 | A19 | Flow limits bound retained state precision, not complete traversal time; lost alias precision cannot establish an aggregate extent from a finite observed prefix. | Low/high state and step limits, repeated site ordinals, empty scans, global reconstruction, early failures, and reusable synthesizer controls. | [Flow precision](../integration_tests/FLOW_PRECISION.md); absence of recorded loss is not a completeness proof |
+| A20 | The represented domain includes specific scalar categories and complete compound children; equal storage width alone does not establish those categories. | Actual partial storage, Boolean widths, enums, anonymous aggregates, complete/partial compound children, array bases and depth limits. | [REPRESENTED_TYPE_CONVERSION.md](REPRESENTED_TYPE_CONVERSION.md); qualifiers and ABI metadata remain outside the domain |
 
 ## Changes and reproducibility
 
@@ -207,10 +209,11 @@ pointer under default limits. A bounded UNSAT result and an exhausted expansion
 budget have distinct public statuses. This does not establish uniqueness of a
 selected model value. [A15]
 
-The combined run completed 18 checks before a new command lacked its matching
-label in the runner's parallel registries. The omitted final lattice check
-passed separately. Each command now owns its label in one registry, eliminating
-that registration mismatch. The complete 20-suite run now passes with the corrected registry and memory implementation. All 198 standalone CTest entries also pass. [A1]
+Each integrity-suite command owns its label in one registry, preventing a
+registration mismatch from silently skipping a late check. The latest full
+run covers the 24 suites present before conversion integration. The subsequent
+conversion change passes all nine affected runtime suites; the new conversion
+checker is also registered for future full runs. [A1]
 
 Absolute-memory inference now keys outputs by full origin, signed byte
 displacement, and access width. Actual constraints must supply one concrete
@@ -220,6 +223,18 @@ Four native functions each pass seven public-engine scenarios against the
 compound backend, including explicit `_QWORD` and conflicting SDK ctree controls.
 The layout synthesizer no longer treats a function address as the origin of a
 selected pointer's fields. [A16]
+
+IDA conversion now rejects unsupported source categories rather than assigning
+an integer base from width alone. The old conversion asserted `_QWORD`, a
+four-byte Boolean, an enum, and an anonymous aggregate as concrete integer
+pointees; compound children inherited that claim. Supported scalars and complete
+compound projections remain available. Unsupported observations carry detached
+source metadata, while independently known pointer shape and storage width
+remain constraints. Nonzero array bases and bounded conversion failures are
+reported explicitly. The native signature carrier contains `_QWORD *`,
+`unsigned int`, and `double`: the partial pointer contributes no concrete
+signature fact, while the two scalar facts retain their mapped parameter
+identities, including a permuted `argidx`. [A20]
 
 The installed `idump` on the development machine could load the plugin but could
 not initialize its own decompiler API. It returned success with assembly-only
@@ -310,7 +325,10 @@ verify the inactive contract and unchanged positive/hard behavior. [A18]
   separate work. The current abstract type domain
   lacks structure layout, qualifiers, variadic mode, and per-function ABI
   metadata; a complete encoding of that domain does not recover those absent
-  facts. The experimental pipeline remains disabled by default.
+  facts. Unsupported IDA categories now remain unknown with conversion
+  diagnostics instead of acquiring integer meaning from width. Extending the
+  domain to enums, qualifiers, and anonymous layouts remains separate work.
+  The experimental pipeline remains disabled by default.
 - **High impact — function ABI and revision identity:** prototype mapping and
   target-default selection are repaired. Per-function ABI overrides absent from
   recovered metadata still require machine-code evidence; stale inference across

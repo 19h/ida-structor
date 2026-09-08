@@ -308,6 +308,16 @@ target_sources(test_inactive_type_preferences PRIVATE
 )
 add_test(NAME inactive_type_preferences COMMAND test_inactive_type_preferences)
 
+add_z3_test(test_represented_type_conversion test_represented_type_conversion.cpp)
+target_include_directories(test_represented_type_conversion PRIVATE ${PROJECT_SOURCE_DIR}/test)
+target_sources(test_represented_type_conversion PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/z3/instruction_semantics.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/type_lattice.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/context.cpp
+    ${PROJECT_SOURCE_DIR}/src/z3/type_encoding.cpp
+)
+add_test(NAME represented_type_conversion COMMAND test_represented_type_conversion)
+
 # Add combined test target
 add_custom_target(check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --no-tests=error
@@ -332,6 +342,7 @@ add_custom_target(check
             test_memory_type_evidence
             test_constraint_sources
             test_inactive_type_preferences
+            test_represented_type_conversion
             test_model_value_evidence
             test_compound_model_value_evidence
             test_compound_type_encoding
@@ -340,7 +351,7 @@ add_custom_target(check
 # Add z3-only test target for quick Z3 testing
 # Include all standalone solver and evidence contracts.
 add_custom_target(check_z3
-    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --no-tests=error -R "^z3_|^e2e_|^type_|^model_value_|^memory_type_|^constraint_source_|^inactive_type_"
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --no-tests=error -R "^z3_|^e2e_|^type_|^model_value_|^memory_type_|^constraint_source_|^inactive_type_|^represented_type_"
     DEPENDS test_z3_context
             test_constraint_diagnostics
             test_z3_type_encoding
@@ -359,6 +370,7 @@ add_custom_target(check_z3
             test_memory_type_evidence
             test_constraint_sources
             test_inactive_type_preferences
+            test_represented_type_conversion
             test_model_value_evidence
             test_compound_model_value_evidence
             test_compound_type_encoding
