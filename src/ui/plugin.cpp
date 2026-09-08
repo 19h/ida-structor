@@ -13,6 +13,7 @@
 #include "signature_abi_live_checks.hpp"
 #include "type_lattice_live_checks.hpp"
 #include "../../integration_tests/assignment_order_ctree_probe.hpp"
+#include "../../integration_tests/alias_flow_ctree_probe.hpp"
 #endif
 #include <expr.hpp>
 #include <auto.hpp>
@@ -1720,6 +1721,44 @@ static bool run_pending_api_command_impl(const qstring& command_text) {
             detector.get_param_locations(convention, scalar_model).size());
         export_api_json(command.c_str(), payload);
         return true;
+    }
+
+    if (command == "check_alias_flow_ctree") {
+        if (parts.size() != 2) {
+            export_api_error(command.c_str(), "Expected carrier function");
+            return false;
+        }
+        ea_t func_ea = BADADDR;
+        if (!resolve_function_spec(qstring(parts[1].c_str()), func_ea)) {
+            export_api_error(command.c_str(), "Carrier function not found");
+            return false;
+        }
+        cfuncptr_t cfunc = utils::get_cfunc(func_ea);
+        const auto observations = testing::probe_alias_flow_ctree(cfunc);
+        bool success = true;
+        std::string payload = "\"evidence\":\"constructed SDK ctree\",\"cases\":[";
+        for (size_t i = 0; i < observations.size(); ++i) {
+            const auto& observation = observations[i];
+            const bool passed = observation.matches_expected &&
+                observation.original_body_restored && observation.error.empty();
+            success &= passed;
+            if (i != 0) payload += ',';
+            payload += "{\"name\":";
+            append_json_string(payload, observation.name.c_str());
+            payload += ",\"passed\":";
+            append_json_bool(payload, passed);
+            payload += ",\"original_body_restored\":";
+            append_json_bool(payload, observation.original_body_restored);
+            payload += ",\"error\":";
+            append_json_string(payload, observation.error.c_str());
+            payload += ",\"pattern\":";
+            append_access_pattern_json(payload, observation.pattern);
+            payload += '}';
+        }
+        payload += "],\"success\":";
+        append_json_bool(payload, success);
+        export_api_json(command.c_str(), payload);
+        return success;
     }
 
     if (command == "inspect_base_inference") {

@@ -56,6 +56,56 @@ private:
         IndexRange when_false;
     };
 
+    enum class FlowExit { Normal, Return, Break, Continue };
+    enum class PredicateRelation { Equal, SignedLess, SignedLessEqual,
+                                   UnsignedLess, UnsignedLessEqual };
+    struct PathPredicate {
+        int var_idx = -1;
+        std::size_t version = 0;
+        PredicateRelation relation = PredicateRelation::Equal;
+        std::uint64_t value = 0;
+        unsigned width = 0;
+        bool truth = false;
+    };
+
+    // Each alternative describes one reaching definition environment. An
+    // alias present on only one branch is never installed in another branch.
+    struct FlowState {
+        std::unordered_map<int, FieldAccess> aliases;
+        std::unordered_set<int> address_aliases;
+        std::unordered_map<int, qvector<std::uint64_t>> pending_constants;
+        std::unordered_map<const cexpr_t*, IndexComparison> comparisons;
+        std::unordered_map<int, std::size_t> versions;
+        std::unordered_set<int> escaped;
+        std::vector<PathPredicate> predicates;
+        std::unordered_map<const cexpr_t*, std::pair<int, std::size_t>> variable_uses;
+        std::unordered_map<const cexpr_t*, const cexpr_t*> expression_values;
+        FlowExit exit = FlowExit::Normal;
+        bool aliases_widened = false;
+    };
+    using FlowStates = std::vector<FlowState>;
+    static constexpr std::size_t max_flow_states = 16;
+    static constexpr std::size_t max_flow_steps = 65536;
+
+    [[nodiscard]] FlowState take_flow_state();
+    void restore_flow_state(FlowState state);
+    [[nodiscard]] FlowStates walk_item(citem_t* item, citem_t* parent, FlowStates states);
+    [[nodiscard]] FlowStates walk_block(cblock_t* block, citem_t* parent, FlowStates states);
+    [[nodiscard]] FlowStates walk_loop(cinsn_t* loop, FlowStates states);
+    [[nodiscard]] FlowStates assume_condition(const cexpr_t* condition, bool truth,
+                                              FlowStates states, int depth = 0);
+    [[nodiscard]] std::optional<PathPredicate> condition_predicate(
+        const cexpr_t* condition, bool truth, const FlowState& state) const;
+    [[nodiscard]] bool add_path_predicate(FlowState& state, const PathPredicate& predicate) const;
+    [[nodiscard]] bool same_flow_state(const FlowState& lhs, const FlowState& rhs) const;
+    [[nodiscard]] FlowState widen_flow_states(const FlowStates& states);
+    void normalize_flow_states(FlowStates& states);
+    void publish_flow_states(FlowStates states);
+    int observe_expr(cexpr_t* expr);
+    [[nodiscard]] const cexpr_t* evaluated_expression(const cexpr_t* expr) const;
+    [[nodiscard]] std::optional<std::uint64_t> known_scalar_value(const cexpr_t* expr, int depth = 0) const;
+    void remember_scalar_value(int var_idx, const tinfo_t& type, std::uint64_t value);
+
     void process_dereference(cexpr_t* expr, const cexpr_t* ptr_expr);
     void process_memptr_access(cexpr_t* expr);
     void process_call_argument_use(const cexpr_t* call_expr, const cexpr_t* argument);
@@ -106,6 +156,16 @@ private:
     std::unordered_map<int, std::size_t> local_var_versions_;
     std::unordered_set<int> escaped_local_vars_;
     mutable std::unordered_map<const cinsn_t*, LoopIndexEffects> loop_index_effects_;
+    std::vector<PathPredicate> path_predicates_;
+    std::unordered_map<const cexpr_t*, std::pair<int, std::size_t>> variable_uses_;
+    std::unordered_map<const cexpr_t*, const cexpr_t*> expression_values_;
+    FlowExit flow_exit_ = FlowExit::Normal;
+    bool aliases_widened_ = false;
+    std::optional<FlowStates> node_results_;
+    // Epoch allocation is deliberately not rolled back with branch snapshots.
+    std::size_t next_value_epoch_ = 1;
+    std::size_t flow_steps_ = 0;
+    bool flow_budget_exhausted_ = false;
 };
 
 /// Collects all access patterns for a variable in a function

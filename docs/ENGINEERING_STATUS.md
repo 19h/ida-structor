@@ -13,6 +13,7 @@ or completion of this project-wide objective.
 | Preserve selected array element types when extracting nested subobjects | Residual-fragment helper tests and exact recursive-constructor contracts | Nine helper cases and both live constructor contracts pass; known residual types survive byte-array fallback |
 | Use index bounds only where the comparison holds for the same variable value | Fresh-IDB collector tests for branches, short-circuit expressions, mutation, loops, and casts | All 35 combined-plugin cases pass; original collector fails six selected differential cases |
 | Observe assignment and call operands before their effects; reject bounds invalidated by sibling effects | Eleven native ctree and five constructed SDK ctree cases, plus the unchanged guard suite | All 16 sequencing cases and 35 guard cases pass; matched baseline fails 11 sequencing cases |
+| Preserve separate reaching aliases across branches, joins, loop backedges, and structured exits | 51 constructed SDK ctree cases with exact access expectations and carrier restoration | All 51 pass; the original collector fails four of six initial differential cases |
 | Distinguish the type of a pointer base from the type of its loaded field | Production access inference helper tests and real `TypeFixer::analyze_variable` calls | Twenty-two focused helper cases and 13 live type-fixer cases pass |
 | Preserve full function/variable identity in inference caches | Production composite-key and semantics tests, forced collisions, distinct high addresses/SSA versions, and live ctree extraction | Caller cache and experimental variable identities verified; live extraction emits 19 constraints from 16 expressions |
 | Preserve complete type values in lattice caches | Real function/structure hash collisions, mutable child aliases, and returned-result mutation | Directed production lattice tests pass; cache entries own detached snapshots |
@@ -22,8 +23,8 @@ or completion of this project-wide objective.
 | Reject inference results belonging to another function before applying types | Real local/prototype snapshots, foreign/unknown/high-address rejection, and positive application controls | All nine live checks pass within the active IDB |
 | Map signature arguments to actual locals and distinguish target ABI defaults from recovered function evidence | Fifteen portable tests, five live argument-map cases, and six target-family cases | All pass; two foreign-ABI fixtures explicitly falsify the assumption that every function follows its target default |
 | Preserve pointer forwarding as address evidence rather than inventing a field load | Alias-only call/comparison negatives and loaded-field positive controls | Live controls pass; original-collector isolation confirms removal of a fictitious linked-list pointer observation |
-| Maintain public API, deterministic layouts, transactional persistence, global recovery, vtables, and type fixing | Full licensed integrity suite and external CMake consumer | The 16-suite sequencing/ABI baseline at `b0491a0` passes (352.2 s); the additional lattice suite passes separately |
-| Maintain reproducible, usable builds and diagnostics | CMake build, CTest, compile-gated hook checks, explicit `idump` runtime diagnostics | 196 standalone CTest entries pass; the release build excludes all 12 hook markers and its installed copy passes codesign verification |
+| Maintain public API, deterministic layouts, transactional persistence, global recovery, vtables, and type fixing | Full licensed integrity suite and external CMake consumer | All 18 combined suites pass (356.4 s), including the 51 branch and 12 lattice cases; no contract changes were needed |
+| Maintain reproducible, usable builds and diagnostics | CMake build, CTest, compile-gated hook checks, explicit `idump` runtime diagnostics | 196 standalone CTest entries pass; the release build excludes all 13 hook markers and its installed copy passes codesign verification |
 | Extend adaptive and interprocedural inference beyond existing supported paths | Production implementation, adversarial fixtures, convergence/resource tests | Incomplete; see remaining work |
 
 ## Assumption register
@@ -45,6 +46,7 @@ Dependent findings reference these identifiers.
 | A11 | Assignment state changes follow operand observations; call-body effects follow argument observations. Ctree sibling order does not prove argument evaluation order. | Actual `q = *q`, indexed assignments, pre/post increments, loads around escaped-index calls, and constructed sibling reference/write combinations. | Expression sequencing |
 | A12 | Signature parameters follow the recovered `argidx`; target defaults do not prove a particular function's ABI. Location models require a complete lowered fixed prototype. | Nonidentity/invalid maps, six cross-target binaries, foreign ABI overrides, hidden return pointers, mixed register banks, and stack exhaustion. | Signature/ABI facts; details in [SIGNATURE_ABI_INFERENCE.md](SIGNATURE_ABI_INFERENCE.md) |
 | A13 | The lattice is the finite abstract order specified in [TYPE_LATTICE_CONTRACT.md](TYPE_LATTICE_CONTRACT.md), and materialized sums preserve complete object alternatives. | Exhaustive checks over the recorded finite sample; actual IDA packed/nested/function-pointer unions, invalid alternatives, and extent boundaries. | CPU lattice algebra and union conversion; this is not a C conversion or source-type recovery claim |
+| A14 | Reaching aliases and simple path predicates are tracked within a bounded state domain; widening and unknown goto/exception entry lose precision. | Divergent/sibling branches, loop backedges, complementary/stale predicates, 18-way overflow, switch fallthrough, irreducible goto entry, finally, and wind cleanup. | Branch analysis; limits and further assumptions in [BRANCH_ALIAS_ANALYSIS.md](BRANCH_ALIAS_ANALYSIS.md) |
 
 ## Changes and reproducibility
 
@@ -91,6 +93,15 @@ increment controls. Call-body effects follow argument traversal, while sibling
 expressions that can modify an index prevent expansion under an obsolete guard.
 Eleven native and five constructed SDK ctree cases pass; the latter verify
 restoration of the original function body. [A1, A11]
+
+Branch traversal now retains separate reaching environments and observes each
+retained feasible alternative. Loop exploration stabilizes these environments
+before publishing observations; capped exploration does not convert the first
+N offsets into an array extent. Supported predicates retain value epochs and
+ctree comparison signedness. Structured exits, switch fallthrough/default,
+finally, and wind cleanup have directed controls. All 51 constructed SDK cases
+pass in the combined artifact. Goto/exception entry and budget widening remain
+explicit precision boundaries. [A1, A14]
 
 Signature constraints validate `argidx` and map each recovered parameter to its
 actual local. The detector selects supported target families without host-OS
@@ -223,6 +234,9 @@ platforms.
 - Sibling-effect scans: O(V²) worst-case time across a pathological call tree
   containing V expression nodes; each scan uses O(H) stack for tree height H.
   Indexed expansion remains capped at 32 candidate values. [A11]
+- Branch state normalization compares retained environments pairwise. Detailed
+  exploration widens after 16 alternatives or 65536 stateful steps; these are
+  not wall-clock or whole-CFG bounds. See the branch-analysis contract. [A14]
 
 ## Bounded scope expansion and remaining work
 
@@ -239,11 +253,11 @@ platforms.
   address rejection is implemented and live-tested.
 - **High impact — provenance:** preserve load versus address-flow evidence and
   independent observation sites across deduplication. Access count alone is not
-  a confidence calibration. Local alias maps also need branch-sensitive
-  reaching-definition checks; lexical visitation of a sibling branch does not
-  establish which pointer value reaches a load.
-  The linked-list assignment-order defect is repaired, but branch-state joins
-  and loop-carried aliases still require distinct reaching-definition evidence.
+  a confidence calibration. Branch-state joins and loop-carried aliases now
+  have reaching-definition checks within a bounded domain. Analysis precision
+  diagnostics and configurable state limits remain separate work. The
+  experimental engine also needs to distinguish uniquely constrained types
+  from arbitrary values selected by one satisfiable model.
 - **High impact — interprocedural inference:** the experimental fixed-point API
   remains explicitly unimplemented. Completing it requires convergence,
   recursion/SCC, widening, and resource-bound contracts; a successful local
@@ -251,7 +265,8 @@ platforms.
 - **Medium impact — control flow:** lexical guard proofs do not cover general
   dominance, arbitrary goto entry, loop induction, or exact disjoint index sets.
   Finite intervals may overapproximate reachable values; supporting exact path
-  predicates requires retaining them through collection and synthesis.
+  predicates requires retaining them through synthesis. The collector now
+  retains a bounded subset of simple predicate relations through collection.
 - **Medium impact — validation breadth:** extend live coverage across compiler
   optimization levels, calling conventions, target bitness, and platforms. The
   current local fixture matrix alone cannot establish that breadth.

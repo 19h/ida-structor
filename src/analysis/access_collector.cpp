@@ -208,12 +208,12 @@ std::optional<sval_t> evaluate_integer_binary(const cexpr_t* expr, sval_t lhs, s
     const auto unsigned_rhs = static_cast<std::uint64_t>(rhs);
     std::uint64_t value;
     switch (expr->op) {
-        case cot_add: value = unsigned_lhs + unsigned_rhs; break;
-        case cot_sub: value = unsigned_lhs - unsigned_rhs; break;
-        case cot_mul: value = unsigned_lhs * unsigned_rhs; break;
-        case cot_band: value = unsigned_lhs & unsigned_rhs; break;
-        case cot_bor: value = unsigned_lhs | unsigned_rhs; break;
-        case cot_xor: value = unsigned_lhs ^ unsigned_rhs; break;
+        case cot_add: case cot_asgadd: value = unsigned_lhs + unsigned_rhs; break;
+        case cot_sub: case cot_asgsub: value = unsigned_lhs - unsigned_rhs; break;
+        case cot_mul: case cot_asgmul: value = unsigned_lhs * unsigned_rhs; break;
+        case cot_band: case cot_asgband: value = unsigned_lhs & unsigned_rhs; break;
+        case cot_bor: case cot_asgbor: value = unsigned_lhs | unsigned_rhs; break;
+        case cot_xor: case cot_asgxor: value = unsigned_lhs ^ unsigned_rhs; break;
         case cot_shl: case cot_sshr: case cot_ushr: {
             const auto lhs_size = expr->x->type.get_size();
             if (lhs_size == 0 || lhs_size == BADSIZE || lhs_size > sizeof(sval_t) ||
@@ -344,41 +344,583 @@ std::optional<std::uint32_t> regular_offset_stride(const qvector<sval_t>& offset
 // ============================================================================
 
 AccessPatternVisitor::AccessPatternVisitor(cfunc_t* cfunc, int target_var_idx)
-    : ctree_visitor_t(CV_PARENTS | CV_POST)
+    : ctree_visitor_t(CV_PARENTS)
     , cfunc_(cfunc)
     , target_var_idx_(target_var_idx)
     , has_unstructured_control_flow_(cfunc && cfunc->body.contains_insn(cit_goto)) {}
 
-int AccessPatternVisitor::visit_insn(cinsn_t* insn) {
-    if (!insn) return 0;
-    // The SDK's default ctree walk visits branch/loop bodies before their
-    // conditions, and a for-loop step before its body. Bounds and local value
-    // versions require execution order, so enumerate these children explicitly
-    // while retaining the SDK-maintained parent stack.
-    auto visit_children = [&](std::initializer_list<citem_t*> children) {
-        for (citem_t* child : children) {
-            if (child) {
-                const int code = apply_to(child, insn);
-                if (code != 0) return code;
+AccessPatternVisitor::FlowState AccessPatternVisitor::take_flow_state() {
+    FlowState state;
+    state.aliases = std::move(local_aliases_);
+    state.address_aliases = std::move(address_aliases_);
+    state.pending_constants = std::move(pending_constants_);
+    state.comparisons = std::move(index_comparisons_);
+    state.versions = std::move(local_var_versions_);
+    state.escaped = std::move(escaped_local_vars_);
+    state.predicates = std::move(path_predicates_);
+    state.variable_uses = std::move(variable_uses_);
+    state.expression_values = std::move(expression_values_);
+    state.exit = flow_exit_;
+    state.aliases_widened = aliases_widened_;
+    flow_exit_ = FlowExit::Normal;
+    aliases_widened_ = false;
+    return state;
+}
+
+void AccessPatternVisitor::restore_flow_state(FlowState state) {
+    local_aliases_ = std::move(state.aliases);
+    address_aliases_ = std::move(state.address_aliases);
+    pending_constants_ = std::move(state.pending_constants);
+    index_comparisons_ = std::move(state.comparisons);
+    local_var_versions_ = std::move(state.versions);
+    escaped_local_vars_ = std::move(state.escaped);
+    path_predicates_ = std::move(state.predicates);
+    variable_uses_ = std::move(state.variable_uses);
+    expression_values_ = std::move(state.expression_values);
+    flow_exit_ = state.exit;
+    aliases_widened_ = state.aliases_widened;
+}
+
+bool AccessPatternVisitor::same_flow_state(const FlowState& lhs, const FlowState& rhs) const {
+    if (lhs.exit != rhs.exit || lhs.aliases_widened != rhs.aliases_widened ||
+        lhs.aliases.size() != rhs.aliases.size() ||
+        lhs.address_aliases != rhs.address_aliases || lhs.escaped != rhs.escaped ||
+        lhs.pending_constants != rhs.pending_constants ||
+        lhs.expression_values != rhs.expression_values ||
+        lhs.predicates.size() != rhs.predicates.size()) return false;
+    for (const auto& [var_idx, alias] : lhs.aliases) {
+        const auto found = rhs.aliases.find(var_idx);
+        if (found == rhs.aliases.end()) return false;
+        const auto& other = found->second;
+        if (alias.offset != other.offset || alias.size != other.size ||
+            alias.base_indirection != other.base_indirection ||
+            alias.semantic_type != other.semantic_type ||
+            !alias.inferred_type.equals_to(other.inferred_type) ||
+            alias.observed_constants != other.observed_constants) return false;
+    }
+    const auto same_predicate = [](const PathPredicate& a, const PathPredicate& b) {
+        return a.var_idx == b.var_idx && a.relation == b.relation &&
+            a.value == b.value && a.width == b.width && a.truth == b.truth;
+    };
+    for (const auto& predicate : lhs.predicates) {
+        if (std::none_of(rhs.predicates.begin(), rhs.predicates.end(),
+                        [&](const PathPredicate& other) { return same_predicate(predicate, other); })) return false;
+    }
+    const auto version = [](const FlowState& state, int var_idx) {
+        const auto it = state.versions.find(var_idx);
+        return it == state.versions.end() ? std::size_t{0} : it->second;
+    };
+    const auto same_range = [](const IndexRange& a, const IndexRange& b) {
+        return a.first == b.first && a.last == b.last &&
+            a.first_known == b.first_known && a.last_known == b.last_known;
+    };
+    const auto includes_comparisons = [&](const FlowState& a, const FlowState& b) {
+        for (const auto& [expr, comparison] : a.comparisons) {
+            if (comparison.version != version(a, comparison.var_idx)) continue;
+            const auto it = b.comparisons.find(expr);
+            if (it == b.comparisons.end() ||
+                it->second.version != version(b, it->second.var_idx) ||
+                comparison.var_idx != it->second.var_idx ||
+                !same_range(comparison.when_true, it->second.when_true) ||
+                !same_range(comparison.when_false, it->second.when_false)) return false;
+        }
+        return true;
+    };
+    return includes_comparisons(lhs, rhs) && includes_comparisons(rhs, lhs);
+}
+
+AccessPatternVisitor::FlowState AccessPatternVisitor::widen_flow_states(const FlowStates& states) {
+    FlowState result;
+    result.aliases_widened = true;
+    if (!states.empty()) result.exit = states.front().exit;
+    // Overflow must not retain a prefix of possible pointer offsets as an
+    // apparently complete alias set. Forget reaching aliases and predicates.
+    for (const auto& state : states) {
+        result.escaped.insert(state.escaped.begin(), state.escaped.end());
+        for (const auto& [var_idx, unused] : state.versions) {
+            result.versions[var_idx] = next_value_epoch_++;
+        }
+    }
+    return result;
+}
+
+void AccessPatternVisitor::normalize_flow_states(FlowStates& states) {
+    FlowStates unique;
+    for (auto& state : states) {
+        if (std::none_of(unique.begin(), unique.end(),
+                         [&](const FlowState& other) { return same_flow_state(state, other); })) {
+            unique.push_back(std::move(state));
+        }
+    }
+    states = std::move(unique);
+    const bool contains_unknown_aliases = std::any_of(states.begin(), states.end(), [&](const FlowState& state) {
+        return state.aliases_widened && std::count_if(states.begin(), states.end(),
+            [&](const FlowState& other) { return other.exit == state.exit; }) > 1;
+    });
+    if (states.size() <= max_flow_states && !flow_budget_exhausted_ && !contains_unknown_aliases) return;
+    const bool overflow = states.size() > max_flow_states || flow_budget_exhausted_;
+    FlowStates widened;
+    for (FlowExit exit : {FlowExit::Normal, FlowExit::Return, FlowExit::Break, FlowExit::Continue}) {
+        FlowStates group;
+        for (auto& state : states) {
+            if (state.exit == exit) group.push_back(std::move(state));
+        }
+        if (group.empty()) continue;
+        const bool unknown_join = group.size() > 1 && std::any_of(group.begin(), group.end(),
+            [](const FlowState& state) { return state.aliases_widened; });
+        if (overflow || unknown_join) {
+            widened.push_back(widen_flow_states(group));
+        } else {
+            for (auto& state : group) widened.push_back(std::move(state));
+        }
+    }
+    states = std::move(widened);
+}
+
+void AccessPatternVisitor::publish_flow_states(FlowStates states) {
+    if (states.size() > 1) normalize_flow_states(states);
+    node_results_ = std::move(states);
+    prune_now();
+}
+
+AccessPatternVisitor::FlowStates AccessPatternVisitor::walk_item(
+        citem_t* item, citem_t* parent, FlowStates states) {
+    if (!item) return states;
+    if (has_unstructured_control_flow_ && item->label_num != -1) {
+        // A goto may enter here without executing the preceding lexical
+        // definitions. Without a CFG, labels are independent unknown entries.
+        auto entry = widen_flow_states(states);
+        entry.exit = FlowExit::Normal;
+        states = {std::move(entry)};
+    }
+    FlowStates result;
+    auto outer_results = std::move(node_results_);
+    for (auto& state : states) {
+        if (state.exit != FlowExit::Normal) {
+            result.push_back(std::move(state));
+            continue;
+        }
+        if (++flow_steps_ > max_flow_steps) flow_budget_exhausted_ = true;
+        restore_flow_state(std::move(state));
+        node_results_.reset();
+        apply_to(item, parent);
+        if (node_results_) {
+            for (auto& outgoing : *node_results_) result.push_back(std::move(outgoing));
+        } else {
+            result.push_back(take_flow_state());
+        }
+    }
+    node_results_ = std::move(outer_results);
+    if (result.size() > 1 || flow_budget_exhausted_) normalize_flow_states(result);
+    return result;
+}
+
+AccessPatternVisitor::FlowStates AccessPatternVisitor::walk_block(
+        cblock_t* block, citem_t* parent, FlowStates states) {
+    if (block) {
+        for (auto& child : *block) states = walk_item(&child, parent, std::move(states));
+    }
+    return states;
+}
+
+std::optional<AccessPatternVisitor::PathPredicate> AccessPatternVisitor::condition_predicate(
+        const cexpr_t* condition, bool truth, const FlowState& state) const {
+    if (!condition) return std::nullopt;
+    if (condition->op == cot_var &&
+        (condition->type.is_integral() || condition->type.is_ptr())) {
+        const auto use = state.variable_uses.find(condition);
+        if (use == state.variable_uses.end()) return std::nullopt;
+        const auto version = state.versions.find(condition->v.idx);
+        if (use->second.second != (version == state.versions.end() ? 0 : version->second)) return std::nullopt;
+        const auto width = condition->type.get_size();
+        if (width == 0 || width > 8) return std::nullopt;
+        return PathPredicate{condition->v.idx, use->second.second,
+            PredicateRelation::Equal, 0, static_cast<unsigned>(width), !truth};
+    }
+    if (!is_relational(condition->op)) return std::nullopt;
+    const cexpr_t* variable = condition->x;
+    const cexpr_t* number = condition->y;
+    ctype_t operation = condition->op;
+    if (variable && variable->op == cot_num) {
+        std::swap(variable, number);
+        operation = swapped_relation(operation);
+    }
+    if (!variable || !number || number->op != cot_num) return std::nullopt;
+    const auto width = variable->type.get_size();
+    if (width == 0 || width > 8) return std::nullopt;
+    if (number->type.get_size() != width) return std::nullopt;
+    // Predicate identity follows the ctree relation's signedness. Array-bound
+    // inference has stricter storage-sign rules and cannot supply this fact.
+    while (variable->op == cot_cast) {
+        if (!variable->x || variable->x->type.get_size() != width) return std::nullopt;
+        variable = variable->x;
+    }
+    if (variable->op != cot_var || !variable->type.is_integral()) return std::nullopt;
+    const auto use = state.variable_uses.find(variable);
+    if (use == state.variable_uses.end()) return std::nullopt;
+    const auto version = state.versions.find(variable->v.idx);
+    if (use->second.second != (version == state.versions.end() ? 0 : version->second)) return std::nullopt;
+    PathPredicate predicate;
+    predicate.var_idx = variable->v.idx;
+    predicate.version = use->second.second;
+    predicate.width = static_cast<unsigned>(width);
+    predicate.value = number->numval();
+    if (width < 8) predicate.value &= (UINT64_C(1) << (width * 8)) - 1;
+    predicate.truth = truth;
+    switch (operation) {
+        case cot_eq: predicate.relation = PredicateRelation::Equal; break;
+        case cot_ne: predicate.relation = PredicateRelation::Equal; predicate.truth = !truth; break;
+        case cot_slt: predicate.relation = PredicateRelation::SignedLess; break;
+        case cot_sge: predicate.relation = PredicateRelation::SignedLess; predicate.truth = !truth; break;
+        case cot_sle: predicate.relation = PredicateRelation::SignedLessEqual; break;
+        case cot_sgt: predicate.relation = PredicateRelation::SignedLessEqual; predicate.truth = !truth; break;
+        case cot_ult: predicate.relation = PredicateRelation::UnsignedLess; break;
+        case cot_uge: predicate.relation = PredicateRelation::UnsignedLess; predicate.truth = !truth; break;
+        case cot_ule: predicate.relation = PredicateRelation::UnsignedLessEqual; break;
+        case cot_ugt: predicate.relation = PredicateRelation::UnsignedLessEqual; predicate.truth = !truth; break;
+        default: return std::nullopt;
+    }
+    return predicate;
+}
+
+bool AccessPatternVisitor::add_path_predicate(FlowState& state, const PathPredicate& predicate) const {
+    const auto evaluate = [](const PathPredicate& condition, std::uint64_t value) {
+        const auto signed_value = [&](std::uint64_t raw) {
+            if (condition.width < 8 && (raw & (UINT64_C(1) << (condition.width * 8 - 1)))) {
+                raw |= ~((UINT64_C(1) << (condition.width * 8)) - 1);
+            }
+            return static_cast<std::int64_t>(raw);
+        };
+        switch (condition.relation) {
+            case PredicateRelation::Equal: return value == condition.value;
+            case PredicateRelation::SignedLess: return signed_value(value) < signed_value(condition.value);
+            case PredicateRelation::SignedLessEqual: return signed_value(value) <= signed_value(condition.value);
+            case PredicateRelation::UnsignedLess: return value < condition.value;
+            case PredicateRelation::UnsignedLessEqual: return value <= condition.value;
+        }
+        return false;
+    };
+    for (const auto& previous : state.predicates) {
+        if (previous.var_idx != predicate.var_idx || previous.version != predicate.version ||
+            previous.width != predicate.width) continue;
+        if (previous.relation == predicate.relation && previous.value == predicate.value) {
+            return previous.truth == predicate.truth;
+        }
+        if (previous.relation == PredicateRelation::Equal && previous.truth &&
+            evaluate(predicate, previous.value) != predicate.truth) return false;
+        if (predicate.relation == PredicateRelation::Equal && predicate.truth &&
+            evaluate(previous, predicate.value) != previous.truth) return false;
+    }
+    state.predicates.push_back(predicate);
+    return true;
+}
+
+AccessPatternVisitor::FlowStates AccessPatternVisitor::assume_condition(
+        const cexpr_t* condition, bool truth, FlowStates states, int depth) {
+    if (!condition || depth > 64) return states;
+    if (condition->op == cot_empty) {
+        if (!truth) states.clear();
+        return states;
+    }
+    if (condition->op == cot_num) {
+        if ((condition->numval() != 0) != truth) states.clear();
+        return states;
+    }
+    if (condition->op == cot_lnot) return assume_condition(condition->x, !truth, std::move(states), depth + 1);
+    if (condition->op == cot_land || condition->op == cot_lor) {
+        const bool conjunction = condition->op == cot_land;
+        if (truth == conjunction) {
+            states = assume_condition(condition->x, truth, std::move(states), depth + 1);
+            return assume_condition(condition->y, truth, std::move(states), depth + 1);
+        }
+        auto short_circuit = assume_condition(condition->x, truth, states, depth + 1);
+        auto rhs = assume_condition(condition->x, !truth, std::move(states), depth + 1);
+        rhs = assume_condition(condition->y, truth, std::move(rhs), depth + 1);
+        for (auto& state : rhs) short_circuit.push_back(std::move(state));
+        normalize_flow_states(short_circuit);
+        return short_circuit;
+    }
+    FlowStates result;
+    for (auto& state : states) {
+        const auto predicate = condition_predicate(condition, truth, state);
+        if (!predicate || add_path_predicate(state, *predicate)) result.push_back(std::move(state));
+    }
+    return result;
+}
+
+AccessPatternVisitor::FlowStates AccessPatternVisitor::walk_loop(
+        cinsn_t* loop, FlowStates states) {
+    cloop_t* details = loop->op == cit_for ? static_cast<cloop_t*>(loop->cfor)
+        : loop->op == cit_do ? static_cast<cloop_t*>(loop->cdo)
+        : static_cast<cloop_t*>(loop->cwhile);
+    const auto original_entries = states;
+    const auto access_count = accesses_.size();
+    const auto continue_states = [](FlowStates outputs) {
+        FlowStates result;
+        for (auto& state : outputs) {
+            if (state.exit == FlowExit::Continue) state.exit = FlowExit::Normal;
+            if (state.exit == FlowExit::Normal) result.push_back(std::move(state));
+        }
+        return result;
+    };
+    if (loop->op == cit_do) {
+        states = continue_states(walk_item(details->body, loop, std::move(states)));
+    }
+    const auto entry_heads = states;
+    FlowStates heads = states;
+    bool overflow = false;
+    for (size_t next = 0; next < heads.size(); ++next) {
+        if (flow_budget_exhausted_) { overflow = true; break; }
+        FlowStates incoming;
+        incoming.push_back(heads[next]);
+        incoming = walk_item(&details->expr, loop, std::move(incoming));
+        incoming = assume_condition(&details->expr, true, std::move(incoming));
+        auto back_edges = continue_states(walk_item(details->body, loop, std::move(incoming)));
+        if (loop->op == cit_for) back_edges = walk_item(&loop->cfor->step, loop, std::move(back_edges));
+        for (auto& state : back_edges) {
+            if (std::any_of(heads.begin(), heads.end(),
+                            [&](const FlowState& previous) { return same_flow_state(state, previous); })) continue;
+            heads.push_back(std::move(state));
+            if (heads.size() > max_flow_states) { overflow = true; break; }
+        }
+        if (overflow) break;
+    }
+    // Reachability exploration is provisional. Observe the stabilized heads
+    // afterward so a cap cannot turn the first N offsets into an array bound.
+    accesses_.resize(access_count);
+    if (overflow) {
+        auto unknown = widen_flow_states(heads);
+        heads = entry_heads;
+        heads.push_back(std::move(unknown));
+    }
+    FlowStates exits;
+    const auto collect_exits = [&](FlowStates outputs) {
+        for (auto& state : outputs) {
+            if (state.exit == FlowExit::Break) {
+                state.exit = FlowExit::Normal;
+                exits.push_back(std::move(state));
+            } else if (state.exit == FlowExit::Return) {
+                exits.push_back(std::move(state));
             }
         }
-        prune_now();
-        return 0;
     };
-    switch (insn->op) {
-        case cit_if:
-            return visit_children({&insn->cif->expr, insn->cif->ithen, insn->cif->ielse});
-        case cit_while:
-            return visit_children({&insn->cwhile->expr, insn->cwhile->body});
-        case cit_for:
-            return visit_children({&insn->cfor->init, &insn->cfor->expr,
-                                   insn->cfor->body, &insn->cfor->step});
-        default:
-            return 0;
+    if (loop->op == cit_do) {
+        collect_exits(walk_item(details->body, loop, original_entries));
     }
+    for (auto& head : heads) {
+        FlowStates incoming;
+        incoming.push_back(std::move(head));
+        incoming = walk_item(&details->expr, loop, std::move(incoming));
+        auto done = assume_condition(&details->expr, false, incoming);
+        for (auto& state : done) exits.push_back(std::move(state));
+        auto body = assume_condition(&details->expr, true, std::move(incoming));
+        auto outputs = walk_item(details->body, loop, std::move(body));
+        collect_exits(outputs);
+        if (loop->op == cit_for) {
+            auto advancing = continue_states(std::move(outputs));
+            // A for step can contain observations of its own.
+            (void)walk_item(&loop->cfor->step, loop, std::move(advancing));
+        }
+    }
+    normalize_flow_states(exits);
+    return exits;
+}
+
+int AccessPatternVisitor::visit_insn(cinsn_t* insn) {
+    if (!insn) return 0;
+    FlowStates states;
+    states.push_back(take_flow_state());
+    switch (insn->op) {
+        case cit_block:
+            states = walk_block(insn->cblock, insn, std::move(states));
+            break;
+        case cit_expr:
+            states = walk_item(insn->cexpr, insn, std::move(states));
+            for (auto& state : states) {
+                state.variable_uses.clear();
+                state.expression_values.clear();
+            }
+            break;
+        case cit_if: {
+            states = walk_item(&insn->cif->expr, insn, std::move(states));
+            auto yes = assume_condition(&insn->cif->expr, true, states);
+            auto no = assume_condition(&insn->cif->expr, false, std::move(states));
+            yes = walk_item(insn->cif->ithen, insn, std::move(yes));
+            no = walk_item(insn->cif->ielse, insn, std::move(no));
+            states = std::move(yes);
+            for (auto& state : no) states.push_back(std::move(state));
+            break;
+        }
+        case cit_for:
+            states = walk_item(&insn->cfor->init, insn, std::move(states));
+            [[fallthrough]];
+        case cit_while:
+        case cit_do:
+            states = walk_loop(insn, std::move(states));
+            break;
+        case cit_switch: {
+            states = walk_item(&insn->cswitch->expr, insn, std::move(states));
+            const auto* selector = &insn->cswitch->expr;
+            const auto width = selector->type.get_size();
+            const bool supported_width = width > 0 && width <= 8;
+            const auto mask = supported_width && width < 8
+                ? (UINT64_C(1) << (width * 8)) - 1 : UINT64_MAX;
+            while (selector->op == cot_cast && selector->x &&
+                   selector->x->type.get_size() == width) selector = selector->x;
+            const auto assume_value = [&](std::uint64_t value, bool truth, FlowStates incoming) {
+                if (!supported_width) return incoming;
+                if (selector->op == cot_num) {
+                    if (((selector->numval() & mask) == (value & mask)) != truth) incoming.clear();
+                    return incoming;
+                }
+                if (selector->op != cot_var || !selector->type.is_integral()) return incoming;
+                FlowStates result;
+                for (auto& state : incoming) {
+                    const auto use = state.variable_uses.find(selector);
+                    const auto version = state.versions.find(selector->v.idx);
+                    if (use == state.variable_uses.end() ||
+                        use->second.second != (version == state.versions.end() ? 0 : version->second) ||
+                        add_path_predicate(state, {selector->v.idx, use->second.second,
+                            PredicateRelation::Equal, value & mask, static_cast<unsigned>(width), truth})) {
+                        result.push_back(std::move(state));
+                    }
+                }
+                return result;
+            };
+            auto unmatched = states;
+            for (const auto& branch : insn->cswitch->cases) {
+                for (const auto value : branch.values) unmatched = assume_value(value, false, std::move(unmatched));
+            }
+            FlowStates exits;
+            bool has_default = false;
+            // Every case starts from the incoming environment. Fallthrough
+            // carries state forward; a break exits only this switch.
+            for (size_t start = 0; start < insn->cswitch->cases.size(); ++start) {
+                const auto& values = insn->cswitch->cases[start].values;
+                FlowStates path;
+                if (values.empty()) {
+                    path = unmatched;
+                    has_default = true;
+                } else {
+                    for (const auto value : values) {
+                        auto matching = assume_value(value, true, states);
+                        for (auto& state : matching) path.push_back(std::move(state));
+                    }
+                    normalize_flow_states(path);
+                }
+                for (size_t index = start; index < insn->cswitch->cases.size(); ++index) {
+                    path = walk_item(&insn->cswitch->cases[index], insn, std::move(path));
+                }
+                for (auto& state : path) {
+                    if (state.exit == FlowExit::Break) state.exit = FlowExit::Normal;
+                    exits.push_back(std::move(state));
+                }
+            }
+            if (!has_default) for (auto& state : unmatched) exits.push_back(std::move(state));
+            states = std::move(exits);
+            break;
+        }
+        case cit_return:
+            states = walk_item(&insn->creturn->expr, insn, std::move(states));
+            for (auto& state : states) state.exit = FlowExit::Return;
+            break;
+        case cit_break:
+            for (auto& state : states) state.exit = FlowExit::Break;
+            break;
+        case cit_continue:
+            for (auto& state : states) state.exit = FlowExit::Continue;
+            break;
+        case cit_throw:
+            states = walk_item(&insn->cthrow->expr, insn, std::move(states));
+            for (auto& state : states) state.exit = FlowExit::Return;
+            break;
+        case cit_try: {
+            auto incoming = states;
+            states = walk_block(insn->ctry, insn, std::move(states));
+            for (auto& handler : insn->ctry->catchs) {
+                if (handler.is_finally() && !insn->ctry->is_wind()) {
+                    FlowStates finalized;
+                    for (auto& state : states) {
+                        const auto previous_exit = state.exit;
+                        state.exit = FlowExit::Normal;
+                        auto outputs = walk_block(&handler, insn, {std::move(state)});
+                        for (auto& output : outputs) {
+                            if (output.exit == FlowExit::Normal) output.exit = previous_exit;
+                            finalized.push_back(std::move(output));
+                        }
+                    }
+                    states = std::move(finalized);
+                }
+                FlowStates unknown;
+                unknown.push_back(widen_flow_states(incoming));
+                auto caught = walk_block(&handler, insn, std::move(unknown));
+                if (handler.is_finally()) {
+                    // Exceptions may originate at any point in the try body.
+                    // The cleanup can observe direct accesses, but its unknown
+                    // exception environment cannot reach normal continuation.
+                    for (auto& state : caught) if (state.exit == FlowExit::Normal) state.exit = FlowExit::Return;
+                }
+                for (auto& state : caught) states.push_back(std::move(state));
+            }
+            break;
+        }
+        case cit_goto:
+            states = {widen_flow_states(states)};
+            states.front().exit = FlowExit::Return;
+            break;
+        case cit_asm:
+            states = {widen_flow_states(states)};
+            break;
+        default:
+            break;
+    }
+    publish_flow_states(std::move(states));
+    return 0;
 }
 
 int AccessPatternVisitor::visit_expr(cexpr_t* expr) {
+    if (!expr) return 0;
+    observe_expr(expr);
+    if (expr->op == cot_var) {
+        variable_uses_[expr] = {expr->v.idx, local_var_versions_[expr->v.idx]};
+    }
+    FlowStates states;
+    states.push_back(take_flow_state());
+    if (expr->op == cot_tern || expr->op == cot_land || expr->op == cot_lor) {
+        states = walk_item(expr->x, expr, std::move(states));
+        const bool execute_rhs_when = expr->op != cot_lor;
+        auto yes = assume_condition(expr->x, execute_rhs_when, states);
+        auto no = assume_condition(expr->x, !execute_rhs_when, std::move(states));
+        yes = walk_item(expr->y, expr, std::move(yes));
+        if (expr->op == cot_tern) {
+            no = walk_item(expr->z, expr, std::move(no));
+            for (auto& state : yes) state.expression_values[expr] = expr->y;
+            for (auto& state : no) state.expression_values[expr] = expr->z;
+        }
+        states = std::move(yes);
+        for (auto& state : no) states.push_back(std::move(state));
+    } else if (expr->op == cot_call) {
+        states = walk_item(expr->x, expr, std::move(states));
+        if (expr->a) {
+            for (auto& argument : *expr->a) states = walk_item(&argument, expr, std::move(states));
+        }
+    } else if (expr->op == cot_insn) {
+        states = walk_item(expr->insn, expr, std::move(states));
+    } else if (expr->op != cot_sizeof) {
+        if (op_uses_x(expr->op)) states = walk_item(expr->x, expr, std::move(states));
+        if (op_uses_y(expr->op)) states = walk_item(expr->y, expr, std::move(states));
+        if (op_uses_z(expr->op)) states = walk_item(expr->z, expr, std::move(states));
+    }
+    for (auto& state : states) {
+        restore_flow_state(std::move(state));
+        if (flow_exit_ == FlowExit::Normal) leave_expr(expr);
+        state = take_flow_state();
+    }
+    publish_flow_states(std::move(states));
+    return 0;
+}
+
+int AccessPatternVisitor::observe_expr(cexpr_t* expr) {
     if (!expr) return 0;
 
     // An argument is observed when its expression is entered. Observing every
@@ -505,7 +1047,13 @@ int AccessPatternVisitor::visit_expr(cexpr_t* expr) {
         case cot_postinc:
         case cot_postdec:
             if (expr->x && expr->x->op == cot_var) {
+                const auto value = known_scalar_value(expr->x);
                 invalidate_local_var_state(expr->x->v.idx, true);
+                if (value) {
+                    const bool increment = expr->op == cot_preinc || expr->op == cot_postinc;
+                    remember_scalar_value(expr->x->v.idx, expr->x->type,
+                                          increment ? *value + 1 : *value - 1);
+                }
             }
             break;
 
@@ -571,13 +1119,19 @@ void AccessPatternVisitor::process_assignment(cexpr_t* expr) {
     }
 
     if (expr->op != cot_asg) {
+        const auto lhs_value = known_scalar_value(lhs);
+        const auto rhs_value = known_scalar_value(expr->y);
+        const auto value = lhs_value && rhs_value
+            ? evaluate_integer_binary(expr, static_cast<sval_t>(*lhs_value), static_cast<sval_t>(*rhs_value))
+            : std::nullopt;
         invalidate_local_var_state(lhs->v.idx, true);
-        pending_constants_.erase(lhs->v.idx);
+        if (value) remember_scalar_value(lhs->v.idx, lhs->type, static_cast<std::uint64_t>(*value));
         return;
     }
 
-    cexpr_t* rhs = expr->y;
-    if (inspect_base_conversions(rhs, target_var_idx_, address_aliases_).lossy) {
+    const cexpr_t* rhs = evaluated_expression(expr->y);
+    const auto scalar_value = known_scalar_value(expr->y);
+    if (inspect_base_conversions(expr->y, target_var_idx_, address_aliases_).lossy) {
         invalidate_local_var_state(lhs->v.idx, true);
         return;
     }
@@ -627,6 +1181,21 @@ void AccessPatternVisitor::process_assignment(cexpr_t* expr) {
             address_only = true;
             resolved = true;
         }
+    } else {
+        const auto address = resolve_ptr_arith(rhs);
+        if (address.valid && address.var_idx == target_var_idx_ &&
+            !address.through_pointer_alias && address.base_indirection == 0) {
+            alias.insn_ea = expr->ea;
+            alias.source_func_ea = cfunc_->entry_ea;
+            alias.offset = address.offset;
+            alias.size = get_ptr_size();
+            alias.access_type = AccessType::Read;
+            alias.semantic_type = SemanticType::Pointer;
+            alias.context_expr = utils::expr_to_string(rhs, cfunc_);
+            alias.inferred_type = rhs->type;
+            address_only = true;
+            resolved = true;
+        }
     }
 
     invalidate_local_var_state(lhs->v.idx, false);
@@ -652,16 +1221,83 @@ void AccessPatternVisitor::process_assignment(cexpr_t* expr) {
 
     invalidate_local_var_state(lhs->v.idx, true);
     pending_constants_.erase(lhs->v.idx);
+    if (scalar_value) remember_scalar_value(lhs->v.idx, lhs->type, *scalar_value);
 }
 
 void AccessPatternVisitor::invalidate_local_var_state(int var_idx,
                                                       bool clear_pending_constants) {
     local_aliases_.erase(var_idx);
     address_aliases_.erase(var_idx);
-    ++local_var_versions_[var_idx];
+    local_var_versions_[var_idx] = next_value_epoch_++;
+    std::erase_if(path_predicates_,
+                 [var_idx](const PathPredicate& predicate) { return predicate.var_idx == var_idx; });
     if (clear_pending_constants) {
         pending_constants_.erase(var_idx);
     }
+}
+
+const cexpr_t* AccessPatternVisitor::evaluated_expression(const cexpr_t* expr) const {
+    for (int depth = 0; expr && depth < 64; ++depth) {
+        const auto found = expression_values_.find(expr);
+        if (found != expression_values_.end()) {
+            expr = found->second;
+        } else if (expr->op == cot_cast) {
+            expr = expr->x;
+        } else if (expr->op == cot_comma) {
+            expr = expr->y;
+        } else {
+            break;
+        }
+    }
+    return expr;
+}
+
+std::optional<std::uint64_t> AccessPatternVisitor::known_scalar_value(const cexpr_t* expr, int depth) const {
+    if (!expr || depth > 64 || !expr->type.is_integral()) return std::nullopt;
+    const auto chosen = expression_values_.find(expr);
+    if (chosen != expression_values_.end()) return known_scalar_value(chosen->second, depth + 1);
+    if (expr->op == cot_comma) return known_scalar_value(expr->y, depth + 1);
+    if (expr->op == cot_num) {
+        const auto value = normalize_integer_value(expr->numval(), expr->type);
+        if (value) return static_cast<std::uint64_t>(*value);
+    } else if (expr->op == cot_var) {
+        const auto version = local_var_versions_.find(expr->v.idx);
+        const auto epoch = version == local_var_versions_.end() ? 0 : version->second;
+        for (const auto& predicate : path_predicates_) {
+            if (predicate.var_idx == expr->v.idx && predicate.version == epoch &&
+                predicate.relation == PredicateRelation::Equal && predicate.truth) {
+                const auto value = normalize_integer_value(predicate.value, expr->type);
+                if (value) return static_cast<std::uint64_t>(*value);
+            }
+        }
+    } else if (expr->op == cot_cast || expr->op == cot_neg || expr->op == cot_bnot) {
+        const auto operand = known_scalar_value(expr->x, depth + 1);
+        const auto value = operand
+            ? evaluate_integer_unary(expr, static_cast<sval_t>(*operand)) : std::nullopt;
+        if (value) return static_cast<std::uint64_t>(*value);
+    } else if (expr->op == cot_add || expr->op == cot_sub || expr->op == cot_mul ||
+               expr->op == cot_band || expr->op == cot_bor || expr->op == cot_xor ||
+               expr->op == cot_shl || expr->op == cot_sshr || expr->op == cot_ushr) {
+        const auto lhs = known_scalar_value(expr->x, depth + 1);
+        const auto rhs = known_scalar_value(expr->y, depth + 1);
+        const auto value = lhs && rhs
+            ? evaluate_integer_binary(expr, static_cast<sval_t>(*lhs), static_cast<sval_t>(*rhs))
+            : std::nullopt;
+        if (value) return static_cast<std::uint64_t>(*value);
+    }
+    return std::nullopt;
+}
+
+void AccessPatternVisitor::remember_scalar_value(int var_idx, const tinfo_t& type,
+                                                std::uint64_t value) {
+    if (!type.is_integral() || type.get_size() == 0 || type.get_size() > 8) return;
+    const auto normalized = normalize_integer_value(value, type);
+    if (!normalized) return;
+    const auto width = static_cast<unsigned>(type.get_size());
+    auto bits = static_cast<std::uint64_t>(*normalized);
+    if (width < 8) bits &= (UINT64_C(1) << (width * 8)) - 1;
+    path_predicates_.push_back({var_idx, local_var_versions_[var_idx],
+        PredicateRelation::Equal, bits, width, true});
 }
 
 utils::PtrArithInfo AccessPatternVisitor::resolve_ptr_arith(const cexpr_t* expr) const {
