@@ -136,6 +136,9 @@ struct UnifiedAccessPattern {
     qvector<FieldAccess> all_accesses;  // Merged, deduplicated, delta-normalized
     qvector<ea_t> contributing_functions;
     qvector<PointerFlowEdge> flow_edges;
+    // Local collection attempts, including scans with no retained accesses.
+    // Site identities are local to (func_ea, var_idx), independent of view delta.
+    qvector<FlowAnalysisDiagnostic> flow_diagnostics;
 
     // Per-function deltas (how much was subtracted from each function's offsets)
     std::unordered_map<ea_t, sval_t> function_deltas;
@@ -283,6 +286,7 @@ private:
 
     // Collected patterns before normalization
     qvector<AccessPattern> collected_patterns_;
+    qvector<FlowAnalysisDiagnostic> collection_diagnostics_;
 
     // Current synthesis options (for pattern collection)
     const SynthOptions* current_opts_ = nullptr;

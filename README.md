@@ -376,6 +376,10 @@ alignment=8
 vtable_detection=true
 emit_substructs=true
 
+[FlowAnalysis]
+flow_max_states=16
+flow_max_steps=65536
+
 [Propagation]
 auto_propagate=true
 propagate_to_callers=true
@@ -412,6 +416,17 @@ z3_max_relax_iterations=5
 z3_weight_minimize_padding=1
 z3_weight_prefer_non_union=2
 ```
+
+Flow analysis records precision loss from configured state/step budgets,
+unknown jump entries, exception entries, and opaque assembly. The state limit
+must be at least four. The step threshold starts widening; it is not a
+wall-clock timeout or a collection-abort limit. `AccessPattern::flow_analysis`
+and synthesis `flow_diagnostics` preserve causes and ctree sites, including
+empty local scans in cross-function analysis. Array aggregation is suppressed
+when a scan exhausts a flow budget, so a partial set of observed offsets does
+not establish a finite array extent. See
+[integration_tests/FLOW_PRECISION.md](integration_tests/FLOW_PRECISION.md) for
+API usage and reproducible controls.
 
 `z3_min_confidence` uses the explicit candidate scale low/medium/high/absolute
 = 25/50/75/100 and filters only optional candidates; direct observations are
@@ -561,7 +576,7 @@ Representative fixture coverage includes:
 
 ## How It Works
 
-Structor is not doing one monolithic "infer everything" pass. It uses a staged pipeline with different algorithms for synthesis, propagation, and intra-function type repair.
+Structor uses a staged pipeline with separate algorithms for synthesis, propagation, and intra-function type repair.
 
 ### Access collection
 
@@ -570,7 +585,9 @@ The first stage is a Hex-Rays ctree visitor.
 - `AccessPatternVisitor` walks decompiler expressions and looks for `cot_ptr`, `cot_memptr`, `cot_idx`, assignments, comparisons, masked bitfield-style loads, and indirect calls.
 - For each relevant expression it tries to reduce the expression to a base variable plus a constant offset.
 - It records more than just offset and size: semantic intent, inferred decompiler type, access direction, array stride hints, base-indirection depth, and observed constants from comparisons.
-- Local aliases are forwarded through assignments when the right-hand side can be reduced to an access on the target variable.
+- Local address aliases retain separate reaching definitions across supported branches, joins, and loop backedges. Constant pointer updates use the target element size and preserve prefix/postfix evaluation order.
+- Supported guard bounds can expand a computed index into at most 32 candidate values. Width-aware evaluation rejects stale guards, unsupported values, and lossy base conversions.
+- [Flow diagnostics](integration_tests/FLOW_PRECISION.md) report configured limits and recorded precision losses; budget-truncated observations cannot establish an inferred array extent.
 
 That means Structor is not limited to raw `*(base + off)` loads. It also learns from patterns like:
 
@@ -618,7 +635,7 @@ At a practical level, the Z3 path is optimizing for things like:
 
 If the solve succeeds, Structor extracts a `SynthStruct` directly from the Z3 model and records solver statistics such as arrays detected, unions created, relaxed constraints, and solve time.
 
-If the constraints are unsatisfiable or the solve times out, Structor does not simply fail. It records the failure reason and drops into the fallback path unless Z3 was configured as required.
+Eligible solver failures can enter the configured relaxation or heuristic fallback path. Terminal resource limits, including a configured solver timeout, return structured failure data without heuristic fallback. Required-Z3 mode does not permit a heuristic result.
 
 ### Heuristic fallback synthesis
 
@@ -632,7 +649,7 @@ The fallback path is deliberately simpler and faster.
 - Infer types heuristically from semantic usage and access width.
 - Generate names and compute final structure size.
 
-This is less globally optimal than the Z3 path, but it keeps Structor productive on awkward decompilations and solver-failure cases.
+The heuristic path uses those grouping rules without solving the weighted layout objective.
 
 ### Array, union, and sub-structure handling
 
@@ -698,13 +715,13 @@ Structor does not apply every inferred type blindly.
 ## Known Limitations
 
 - Structure synthesis still requires at least `min_accesses` observed accesses for a variable.
-- Purely computed array indices such as `ptr[i * 4]` do not provide a constant field offset.
-- Some aliasing patterns are still opaque to the synthesis path, especially when the interesting accesses happen only through a different local.
+- Unbounded computed indices such as `ptr[i * 4]` do not identify a finite field set. Supported guarded ranges are limited to 32 candidate values and the documented flow domain.
+- General CFG reasoning, arbitrary jump entry, and some nested loaded-pointer paths remain outside the supported alias domain. Absence of a precision event is not a completeness proof.
 - Missing register-backed argument recovery is currently report-only; it does not rewrite function signatures.
 
 ## Design Notes
 
-The files under `docs/` go deeper on Z3, cross-function analysis, and related experiments. Treat them as design and research material. Use this README for the current supported workflow and API surface.
+[Engineering status](docs/ENGINEERING_STATUS.md) links the implemented behavioral contracts, assumptions, and verification evidence. Other design documents can contain proposed or experimental capabilities; their presence does not establish implementation.
 
 ## Relationship to Suture
 

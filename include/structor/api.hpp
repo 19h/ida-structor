@@ -464,6 +464,8 @@ private:
 }
 
 inline void populate_z3_info_from_synthesis(SynthResult& dst, const SynthesisResult& src) {
+    dst.flow_diagnostics = src.flow_diagnostics;
+    dst.arrays_suppressed_by_flow_budget = src.arrays_suppressed_by_flow_budget;
     dst.z3_info.solve_time_ms = static_cast<std::uint32_t>(src.z3_solve_time.count());
     dst.z3_info.candidates_selected = static_cast<std::uint32_t>(src.structure.fields.size());
     dst.z3_info.constraints_hard = src.z3_stats.hard_constraints;
@@ -1637,6 +1639,8 @@ inline VariableStructureAnalysisResult StructorAPI::do_analyze_structure(
         if (!cfunc) {
             result.error = SynthError::InternalError;
             result.error_message = "Failed to decompile function";
+            result.synthesis.error = result.error;
+            result.synthesis.error_message = result.error_message;
             return result;
         }
 
@@ -1644,15 +1648,21 @@ inline VariableStructureAnalysisResult StructorAPI::do_analyze_structure(
         if (!result.variable.valid()) {
             result.error = SynthError::InvalidVariable;
             result.error_message = "Invalid variable index";
+            result.synthesis.error = result.error;
+            result.synthesis.error_message = result.error_message;
             return result;
         }
 
         AccessCollector collector(opts);
         result.local_pattern = collector.collect(cfunc, var_idx);
+        result.synthesis.flow_diagnostics.push_back({result.local_pattern.func_ea,
+            result.local_pattern.var_idx, result.local_pattern.flow_analysis});
 
         if (result.local_pattern.accesses.empty()) {
             result.error = SynthError::NoAccessesFound;
             result.error_message = "No dereferences found for variable";
+            result.synthesis.error = result.error;
+            result.synthesis.error_message = result.error_message;
             return result;
         }
 
@@ -1731,10 +1741,13 @@ inline GlobalStructureAnalysisResult StructorAPI::do_analyze_global_structure(
         GlobalObjectAnalyzer analyzer(opts);
         result.analysis = analyzer.analyze(global_ea);
         result.global_name = result.analysis.root_name;
+        result.synthesis.flow_diagnostics = result.analysis.pattern.flow_diagnostics;
 
         if (result.analysis.pattern.all_accesses.empty()) {
             result.error = SynthError::NoAccessesFound;
             result.error_message = "No global/static structure accesses found";
+            result.synthesis.error = result.error;
+            result.synthesis.error_message = result.error_message;
             return result;
         }
 
@@ -1743,6 +1756,8 @@ inline GlobalStructureAnalysisResult StructorAPI::do_analyze_global_structure(
             result.error_message.sprnt("Only %zu accesses found (minimum: %d)",
                                        result.analysis.pattern.unique_access_locations(),
                                        opts.min_accesses);
+            result.synthesis.error = result.error;
+            result.synthesis.error_message = result.error_message;
             return result;
         }
 
@@ -1816,7 +1831,9 @@ inline SynthResult StructorAPI::do_global_synthesis(
     if (mode == MaterializationMode::Preview) {
         GlobalStructureAnalysisResult analysis = do_analyze_global_structure(global_ea, opts);
         if (!analysis.success()) {
-            return SynthResult::make_error(analysis.error, analysis.error_message);
+            auto failure = SynthResult::make_error(analysis.error, analysis.error_message);
+            populate_z3_info_from_synthesis(failure, analysis.synthesis);
+            return failure;
         }
         return make_result_from_synthesis(analysis.synthesis);
     }
@@ -1826,8 +1843,10 @@ inline SynthResult StructorAPI::do_global_synthesis(
         GlobalObjectAnalysis analysis = analyzer.analyze(global_ea);
 
         if (analysis.pattern.all_accesses.empty()) {
-            return SynthResult::make_error(SynthError::NoAccessesFound,
+            auto failure = SynthResult::make_error(SynthError::NoAccessesFound,
                 "No global/static structure accesses found");
+            failure.flow_diagnostics = analysis.pattern.flow_diagnostics;
+            return failure;
         }
 
         if (static_cast<int>(analysis.pattern.unique_access_locations()) < opts.min_accesses) {
@@ -1835,7 +1854,9 @@ inline SynthResult StructorAPI::do_global_synthesis(
             msg.sprnt("Only %zu accesses found (minimum: %d)",
                       analysis.pattern.unique_access_locations(),
                       opts.min_accesses);
-            return SynthResult::make_error(SynthError::InsufficientAccesses, msg);
+            auto failure = SynthResult::make_error(SynthError::InsufficientAccesses, msg);
+            failure.flow_diagnostics = analysis.pattern.flow_diagnostics;
+            return failure;
         }
 
         // Global tinfo materialization can invalidate every contributing
@@ -2115,7 +2136,9 @@ inline SynthResult StructorAPI::do_synthesis(
     if (mode == MaterializationMode::Preview) {
         VariableStructureAnalysisResult analysis = do_analyze_structure(func_ea, var_idx, opts);
         if (!analysis.success()) {
-            return SynthResult::make_error(analysis.error, analysis.error_message);
+            auto failure = SynthResult::make_error(analysis.error, analysis.error_message);
+            populate_z3_info_from_synthesis(failure, analysis.synthesis);
+            return failure;
         }
         return make_result_from_synthesis(analysis.synthesis);
     }
@@ -2139,8 +2162,10 @@ inline SynthResult StructorAPI::do_synthesis(
     AccessPattern pattern = collector.collect(cfunc, var_idx);
 
     if (pattern.accesses.empty()) {
-        return SynthResult::make_error(SynthError::NoAccessesFound,
+        auto failure = SynthResult::make_error(SynthError::NoAccessesFound,
             "No dereferences found for variable");
+        failure.flow_diagnostics.push_back({pattern.func_ea, pattern.var_idx, pattern.flow_analysis});
+        return failure;
     }
 
     LayoutSynthesizer synthesizer(opts);
@@ -2153,7 +2178,9 @@ inline SynthResult StructorAPI::do_synthesis(
     if (static_cast<int>(evidence_count) < opts.min_accesses) {
         qstring msg_str;
         msg_str.sprnt("Only %zu accesses found (minimum: %d)", evidence_count, opts.min_accesses);
-        return SynthResult::make_error(SynthError::InsufficientAccesses, msg_str);
+        auto failure = SynthResult::make_error(SynthError::InsufficientAccesses, msg_str);
+        populate_z3_info_from_synthesis(failure, synth_result);
+        return failure;
     }
 
     // Preserve stable identities for the later post-propagation readback.

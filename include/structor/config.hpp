@@ -147,6 +147,15 @@ struct Z3Options {
         , weight_prefer_non_union(2) {}
 };
 
+/// Limits for branch-sensitive access collection. Four states are required
+/// because normalization keeps Normal/Return/Break/Continue exits separate.
+struct FlowAnalysisOptions {
+    std::uint32_t max_states = 16;
+    std::uint64_t max_steps = 65536; // Widening threshold, not a wall-clock timeout.
+
+    [[nodiscard]] bool valid() const noexcept { return max_states >= 4 && max_steps != 0; }
+};
+
 /// Configuration options for structure synthesis
 struct SynthOptions {
     qstring         hotkey;             // Activation hotkey
@@ -169,6 +178,8 @@ struct SynthOptions {
     // Automatic type fixing options
     bool            auto_fix_types;     // Automatically fix types when decompiling
     bool            auto_fix_verbose;   // Print messages about auto-fixed types
+
+    FlowAnalysisOptions flow;           // Reaching-definition precision budgets
 
     // Z3-specific options
     Z3Options       z3;                 // Z3 synthesis configuration
@@ -206,6 +217,7 @@ enum class SynthOptionsValidationError : std::uint8_t {
     InvalidArrayBounds,
     InvalidConfidence,
     InvalidWeight,
+    InvalidFlowLimit,
 };
 
 [[nodiscard]] inline SynthOptionsValidationError validate_synth_options(
@@ -219,6 +231,9 @@ enum class SynthOptionsValidationError : std::uint8_t {
     }
     if (options.max_propagation_depth < 0) {
         return SynthOptionsValidationError::InvalidPropagationDepth;
+    }
+    if (!options.flow.valid()) {
+        return SynthOptionsValidationError::InvalidFlowLimit;
     }
     switch (options.z3.mode) {
         case Z3SynthesisMode::Disabled:
@@ -270,6 +285,8 @@ enum class SynthOptionsValidationError : std::uint8_t {
             return "array bounds require min elements in [1, max_array_elements] and a non-zero maximum stride";
         case SynthOptionsValidationError::InvalidConfidence:
             return "minimum confidence must be in [0,100]";
+        case SynthOptionsValidationError::InvalidFlowLimit:
+            return "flow analysis requires at least four states and a non-zero step threshold";
         case SynthOptionsValidationError::InvalidWeight:
             return "synthesis objective weights must be non-negative";
         default:
@@ -513,6 +530,12 @@ inline bool Config::load() {
         } else if (key == "auto_fix_verbose") {
             options_.auto_fix_verbose = parse_bool(value);
         }
+        // Flow-analysis options
+        else if (key == "flow_max_states") {
+            options_.flow.max_states = parse_u32(value, false);
+        } else if (key == "flow_max_steps") {
+            options_.flow.max_steps = parse_u64(value);
+        }
         // Z3 options
         else if (key == "z3_mode") {
             if (value == "disabled") options_.z3.mode = Z3SynthesisMode::Disabled;
@@ -662,6 +685,11 @@ inline bool Config::save() noexcept {
     file << "alignment=" << options_.alignment << "\n";
     file << "vtable_detection=" << (options_.vtable_detection ? "true" : "false") << "\n";
     file << "emit_substructs=" << (options_.emit_substructs ? "true" : "false") << "\n";
+    file << "\n";
+
+    file << "[FlowAnalysis]\n";
+    file << "flow_max_states=" << options_.flow.max_states << "\n";
+    file << "flow_max_steps=" << options_.flow.max_steps << "\n";
     file << "\n";
 
     file << "[Propagation]\n";

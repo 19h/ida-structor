@@ -3,6 +3,7 @@
 #include "synth_types.hpp"
 #include "config.hpp"
 #include "utils.hpp"
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -13,7 +14,8 @@ struct BitfieldInfo;
 /// Visitor that collects all access patterns for a specific variable
 class AccessPatternVisitor : public ctree_visitor_t {
 public:
-    AccessPatternVisitor(cfunc_t* cfunc, int target_var_idx);
+    AccessPatternVisitor(cfunc_t* cfunc, int target_var_idx,
+                         const FlowAnalysisOptions& flow = {});
 
     int idaapi visit_expr(cexpr_t* expr) override;
     int idaapi leave_expr(cexpr_t* expr) override;
@@ -25,6 +27,10 @@ public:
 
     [[nodiscard]] qvector<FieldAccess>& mutable_accesses() noexcept {
         return accesses_;
+    }
+
+    [[nodiscard]] const FlowAnalysisInfo& flow_analysis() const noexcept {
+        return flow_analysis_;
     }
 
 private:
@@ -80,12 +86,12 @@ private:
         std::vector<PathPredicate> predicates;
         std::unordered_map<const cexpr_t*, std::pair<int, std::size_t>> variable_uses;
         std::unordered_map<const cexpr_t*, const cexpr_t*> expression_values;
+        std::unordered_map<const cexpr_t*, sval_t> pointer_expression_values;
         FlowExit exit = FlowExit::Normal;
         bool aliases_widened = false;
     };
     using FlowStates = std::vector<FlowState>;
-    static constexpr std::size_t max_flow_states = 16;
-    static constexpr std::size_t max_flow_steps = 65536;
+    void record_precision_loss(FlowPrecisionLoss reason, std::size_t states_before);
 
     [[nodiscard]] FlowState take_flow_state();
     void restore_flow_state(FlowState state);
@@ -105,6 +111,8 @@ private:
     [[nodiscard]] const cexpr_t* evaluated_expression(const cexpr_t* expr) const;
     [[nodiscard]] std::optional<std::uint64_t> known_scalar_value(const cexpr_t* expr, int depth = 0) const;
     void remember_scalar_value(int var_idx, const tinfo_t& type, std::uint64_t value);
+    [[nodiscard]] std::optional<FieldAccess> adjusted_address_alias(
+        const cexpr_t* variable, sval_t element_delta) const;
 
     void process_dereference(cexpr_t* expr, const cexpr_t* ptr_expr);
     void process_memptr_access(cexpr_t* expr);
@@ -128,7 +136,7 @@ private:
                                 const std::optional<std::uint8_t>& base_indirection);
     [[nodiscard]] bool extract_access(const cexpr_t* expr, sval_t& offset, uint32_t& size,
                                       std::optional<std::uint8_t>* base_indirection) const;
-    [[nodiscard]] utils::PtrArithInfo resolve_ptr_arith(const cexpr_t* expr) const;
+    [[nodiscard]] utils::PtrArithInfo resolve_ptr_arith(const cexpr_t* expr, int depth = 0) const;
     void extract_and_add_rhs_constant(FieldAccess& access, const cexpr_t* rhs) const;
     [[nodiscard]] bool compute_bitfield(std::uint64_t mask, int shift,
                                         std::uint16_t& bit_offset,
@@ -159,12 +167,16 @@ private:
     std::vector<PathPredicate> path_predicates_;
     std::unordered_map<const cexpr_t*, std::pair<int, std::size_t>> variable_uses_;
     std::unordered_map<const cexpr_t*, const cexpr_t*> expression_values_;
+    std::unordered_map<const cexpr_t*, sval_t> pointer_expression_values_;
     FlowExit flow_exit_ = FlowExit::Normal;
     bool aliases_widened_ = false;
     std::optional<FlowStates> node_results_;
     // Epoch allocation is deliberately not rolled back with branch snapshots.
     std::size_t next_value_epoch_ = 1;
-    std::size_t flow_steps_ = 0;
+    FlowAnalysisInfo flow_analysis_;
+    const citem_t* flow_site_ = nullptr;
+    std::unordered_map<const citem_t*, std::uint64_t> node_ordinals_;
+    std::map<std::pair<FlowPrecisionLoss, std::uint64_t>, std::size_t> precision_event_indexes_;
     bool flow_budget_exhausted_ = false;
 };
 

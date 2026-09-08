@@ -49,6 +49,8 @@ struct SynthesisResult {
     SynthError error = SynthError::Success;
     qstring error_message;
     std::optional<ResourceLimitViolation> resource_limit;
+    qvector<FlowAnalysisDiagnostic> flow_diagnostics;
+    bool arrays_suppressed_by_flow_budget = false;
 
 
     // Synthesis metadata
@@ -93,6 +95,16 @@ struct SynthesisResult {
         result.cat_sprnt("  Fields: %zu\n", structure.fields.size());
         result.cat_sprnt("  Size: %u bytes\n", structure.size);
         result.cat_sprnt("  Used Z3: %s\n", used_z3 ? "yes" : "no");
+        for (const auto& diagnostic : flow_diagnostics) {
+            if (diagnostic.analysis.precision_lost()) {
+                result.cat_sprnt("  Collection precision reduced: function 0x%llX variable %d (%zu sites)\n",
+                    static_cast<unsigned long long>(diagnostic.func_ea), diagnostic.var_idx,
+                    diagnostic.analysis.precision_events.size());
+            }
+        }
+        if (arrays_suppressed_by_flow_budget) {
+            result.cat_sprnt("  Array aggregation suppressed: flow-analysis budget exhausted\n");
+        }
         if (fell_back_to_heuristic) {
             result.cat_sprnt("  Fallback: %s\n", fallback_reason.c_str());
         }

@@ -18,6 +18,7 @@
 #include "type_lattice_live_checks.hpp"
 #include "../../integration_tests/assignment_order_ctree_probe.hpp"
 #include "../../integration_tests/alias_flow_ctree_probe.hpp"
+#include "../../integration_tests/flow_precision_ctree_probe.hpp"
 #endif
 #include <expr.hpp>
 #include <auto.hpp>
@@ -179,6 +180,50 @@ static void append_access_json(std::string& out, const FieldAccess& access) {
     out += '}';
 }
 
+static void append_flow_analysis_json(std::string& out, const FlowAnalysisInfo& analysis) {
+    out += "{\"started\":";
+    append_json_bool(out, analysis.started);
+    out += ",\"invalid_limits\":";
+    append_json_bool(out, analysis.invalid_limits);
+    out += ",\"max_states\":" + std::to_string(analysis.max_states);
+    out += ",\"max_steps\":" + std::to_string(analysis.max_steps);
+    out += ",\"executed_steps\":" + std::to_string(analysis.executed_steps);
+    out += ",\"peak_candidate_states\":" + std::to_string(analysis.peak_candidate_states);
+    out += ",\"widening_operations\":" + std::to_string(analysis.widening_operations);
+    out += ",\"budget_exhausted\":";
+    append_json_bool(out, analysis.budget_exhausted());
+    out += ",\"precision_lost\":";
+    append_json_bool(out, analysis.precision_lost());
+    out += ",\"precision_events\":[";
+    for (size_t index = 0; index < analysis.precision_events.size(); ++index) {
+        if (index != 0) out += ',';
+        const auto& event = analysis.precision_events[index];
+        out += "{\"reason\":";
+        append_json_string(out, flow_precision_loss_str(event.reason));
+        out += ",\"node_ordinal\":" + std::to_string(event.node_ordinal);
+        out += ",\"ea\":" + std::to_string(event.ea);
+        out += ",\"label\":" + std::to_string(event.label);
+        out += ",\"occurrences\":" + std::to_string(event.occurrences);
+        out += ",\"max_states_before\":" + std::to_string(event.max_states_before) + '}';
+    }
+    out += "]}";
+}
+
+static void append_flow_diagnostics_json(std::string& out,
+                                        const qvector<FlowAnalysisDiagnostic>& diagnostics) {
+    out += '[';
+    for (size_t index = 0; index < diagnostics.size(); ++index) {
+        if (index != 0) out += ',';
+        const auto& diagnostic = diagnostics[index];
+        out += "{\"func_ea\":" + std::to_string(diagnostic.func_ea);
+        out += ",\"var_idx\":" + std::to_string(diagnostic.var_idx);
+        out += ",\"analysis\":";
+        append_flow_analysis_json(out, diagnostic.analysis);
+        out += '}';
+    }
+    out += ']';
+}
+
 static void append_access_pattern_json(std::string& out, const AccessPattern& pattern) {
     out += '{';
     out += "\"func_ea\":" + std::to_string(static_cast<unsigned long long>(pattern.func_ea));
@@ -193,6 +238,8 @@ static void append_access_pattern_json(std::string& out, const AccessPattern& pa
     out += ",\"has_vtable\":";
     append_json_bool(out, pattern.has_vtable);
     out += ",\"vtable_offset\":" + std::to_string(static_cast<long long>(pattern.vtable_offset));
+    out += ",\"flow_analysis\":";
+    append_flow_analysis_json(out, pattern.flow_analysis);
     out += ",\"accesses\":[";
     for (size_t i = 0; i < pattern.accesses.size(); ++i) {
         if (i != 0) {
@@ -206,6 +253,9 @@ static void append_access_pattern_json(std::string& out, const AccessPattern& pa
 
 static void append_unified_pattern_json(std::string& out, const UnifiedAccessPattern& pattern) {
     out += '{';
+    out += "\"flow_diagnostics\":";
+    append_flow_diagnostics_json(out, pattern.flow_diagnostics);
+    out += ',';
     out += "\"access_count\":" + std::to_string(pattern.all_accesses.size());
     out += ",\"unique_access_locations\":" + std::to_string(pattern.unique_access_locations());
     out += ",\"estimated_size\":" + std::to_string(static_cast<long long>(pattern.estimated_size()));
@@ -396,6 +446,10 @@ static void append_synth_result_json(std::string& out, const SynthResult& result
     append_z3_json(out, result.z3_info);
     out += ",\"resource_limit\":";
     append_resource_limit_json(out, result.resource_limit);
+    out += ",\"flow_diagnostics\":";
+    append_flow_diagnostics_json(out, result.flow_diagnostics);
+    out += ",\"arrays_suppressed_by_flow_budget\":";
+    append_json_bool(out, result.arrays_suppressed_by_flow_budget);
     out += ",\"propagated_to\":";
     append_ea_list_json(out, result.propagated_to);
     out += ",\"failed_sites\":";
@@ -2031,6 +2085,68 @@ static bool run_pending_api_command_impl(const qstring& command_text) {
         return true;
     }
 
+    if (command == "check_flow_precision_ctree") {
+        if (parts.size() != 2) {
+            export_api_error(command.c_str(), "Expected carrier function");
+            return false;
+        }
+        ea_t func_ea = BADADDR;
+        if (!resolve_function_spec(qstring(parts[1].c_str()), func_ea)) {
+            export_api_error(command.c_str(), "Carrier function not found");
+            return false;
+        }
+        cfuncptr_t cfunc = utils::get_cfunc(func_ea);
+        const auto observations = testing::probe_flow_precision_ctree(cfunc);
+        bool success = true;
+        std::string payload = "\"evidence\":\"constructed SDK ctree\",\"cases\":[";
+        for (size_t index = 0; index < observations.size(); ++index) {
+            const auto& observation = observations[index];
+            success &= observation.error.empty() && observation.original_body_restored &&
+                observation.repeat_metadata_equal;
+            if (index != 0) payload += ',';
+            payload += "{\"name\":";
+            append_json_string(payload, observation.name.c_str());
+            payload += ",\"original_body_restored\":";
+            append_json_bool(payload, observation.original_body_restored);
+            payload += ",\"repeat_metadata_equal\":";
+            append_json_bool(payload, observation.repeat_metadata_equal);
+            payload += ",\"error\":";
+            append_json_string(payload, observation.error.c_str());
+            payload += ",\"pattern\":";
+            append_access_pattern_json(payload, observation.pattern);
+            payload += ",\"synthesis\":";
+            append_synth_result_json(payload, make_result_from_synthesis(observation.synthesis));
+            payload += ",\"reusable_control\":";
+            append_synth_result_json(payload, make_result_from_synthesis(observation.reusable_control));
+            payload += '}';
+        }
+        payload += "],\"empty_scan_cases\":[";
+        const auto empty_observations = testing::probe_empty_flow_diagnostics(cfunc);
+        for (size_t index = 0; index < empty_observations.size(); ++index) {
+            const auto& observation = empty_observations[index];
+            success &= observation.error.empty() && observation.original_bodies_restored &&
+                observation.reset_removed_old_diagnostic;
+            if (index != 0) payload += ',';
+            payload += "{\"name\":";
+            append_json_string(payload, observation.name.c_str());
+            payload += ",\"original_bodies_restored\":";
+            append_json_bool(payload, observation.original_bodies_restored);
+            payload += ",\"reset_removed_old_diagnostic\":";
+            append_json_bool(payload, observation.reset_removed_old_diagnostic);
+            payload += ",\"error\":";
+            append_json_string(payload, observation.error.c_str());
+            payload += ",\"pattern\":";
+            append_unified_pattern_json(payload, observation.pattern);
+            payload += ",\"synthesis\":";
+            append_synth_result_json(payload, make_result_from_synthesis(observation.synthesis));
+            payload += '}';
+        }
+        payload += "],\"success\":";
+        append_json_bool(payload, success);
+        export_api_json(command.c_str(), payload);
+        return success;
+    }
+
     if (command == "check_alias_flow_ctree") {
         if (parts.size() != 2) {
             export_api_error(command.c_str(), "Expected carrier function");
@@ -2044,7 +2160,10 @@ static bool run_pending_api_command_impl(const qstring& command_text) {
         cfuncptr_t cfunc = utils::get_cfunc(func_ea);
         const auto observations = testing::probe_alias_flow_ctree(cfunc);
         bool success = true;
-        std::string payload = "\"evidence\":\"constructed SDK ctree\",\"cases\":[";
+        const auto& alias_type = cfunc->get_lvars()->at(cfunc->argidx[2]).type();
+        const auto element_size = alias_type.is_ptr() ? alias_type.get_pointed_object().get_size() : 1;
+        std::string payload = "\"evidence\":\"constructed SDK ctree\",\"alias_element_size\":" +
+            std::to_string(element_size) + ",\"cases\":[";
         for (size_t i = 0; i < observations.size(); ++i) {
             const auto& observation = observations[i];
             const bool passed = observation.matches_expected &&
@@ -2146,10 +2265,15 @@ static bool run_pending_api_command_impl(const qstring& command_text) {
                     ids.emplace(item, id);
                     if (!nodes.empty()) nodes += ',';
                     nodes += "{\"id\":" + std::to_string(id);
+                    nodes += ",\"node_ordinal\":" + std::to_string(id + 1);
                     nodes += ",\"parent\":";
                     const auto parent = ids.find(parent_item());
                     nodes += parent == ids.end() ? "null" : std::to_string(parent->second);
                     nodes += ",\"opcode\":" + std::to_string(item->op);
+                    nodes += ",\"label\":" + std::to_string(item->label_num);
+                    if (!expression && item->op == cit_goto) {
+                        nodes += ",\"goto_label\":" + std::to_string(static_cast<cinsn_t*>(item)->cgoto->label_num);
+                    }
                     nodes += ",\"expression\":";
                     append_json_bool(nodes, expression != nullptr);
                     if (expression != nullptr) {

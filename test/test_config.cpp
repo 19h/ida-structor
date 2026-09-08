@@ -523,5 +523,76 @@ TEST_F(ConfigTest, SingletonModificationPersists) {
     EXPECT_EQ(value, 99);
 }
 
+TEST_F(ConfigTest, FlowAnalysisDefaultsAndValidation) {
+    SynthOptions options;
+    EXPECT_EQ(options.flow.max_states, 16U);
+    EXPECT_EQ(options.flow.max_steps, UINT64_C(65536));
+    for (std::uint32_t cap : {0U, 1U, 2U, 3U}) {
+        options.flow.max_states = cap;
+        EXPECT_EQ(validate_synth_options(options), SynthOptionsValidationError::InvalidFlowLimit);
+        EXPECT_FALSE(Config::instance().set_options(options));
+        EXPECT_EQ(Config::instance().options().flow.max_states, 16U);
+    }
+    options.flow.max_states = 4;
+    options.flow.max_steps = 0;
+    EXPECT_EQ(validate_synth_options(options), SynthOptionsValidationError::InvalidFlowLimit);
+    EXPECT_FALSE(Config::instance().set_options(options));
+    for (std::uint32_t cap : {4U, 16U, 64U, UINT32_MAX}) {
+        options.flow.max_states = cap;
+        options.flow.max_steps = UINT64_MAX;
+        EXPECT_EQ(validate_synth_options(options), SynthOptionsValidationError::None);
+    }
+}
+
+TEST_F(ConfigTest, FlowAnalysisLimitsRoundTripAndRejectMalformedValuesAtomically) {
+    const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto directory = std::filesystem::temp_directory_path() /
+        ("structor-flow-config-" + std::to_string(nonce));
+    {
+        ScopedHomeDirectory scoped_home(directory);
+        auto options = Config::instance().options();
+        options.flow.max_states = 64;
+        options.flow.max_steps = UINT64_C(131072);
+        ASSERT_TRUE(Config::instance().set_options(options));
+        ASSERT_TRUE(Config::instance().save());
+        Config::instance().reset();
+        ASSERT_TRUE(Config::instance().load());
+        EXPECT_EQ(Config::instance().options().flow.max_states, 64U);
+        EXPECT_EQ(Config::instance().options().flow.max_steps, UINT64_C(131072));
+        const auto path = Config::config_path();
+        for (const char* entry : {
+                "flow_max_states=3", "flow_max_states=0", "flow_max_states=-1",
+                "flow_max_states=4294967296", "flow_max_steps=0", "flow_max_steps=-1",
+                "flow_max_steps=18446744073709551616", "flow_max_steps=42junk"}) {
+            std::ofstream file(path);
+            ASSERT_TRUE(file.is_open());
+            file << "hotkey=MustNotApply\n" << entry << '\n';
+            file.close();
+            EXPECT_FALSE(Config::instance().load()) << entry;
+            EXPECT_STREQ(Config::instance().hotkey(), "Shift+S");
+            EXPECT_EQ(Config::instance().options().flow.max_states, 64U);
+            EXPECT_EQ(Config::instance().options().flow.max_steps, UINT64_C(131072));
+        }
+    }
+    std::filesystem::remove_all(directory);
+}
+
+TEST_F(ConfigTest, FlowPrecisionMetadataSeparatesUnknownEntriesFromBudgets) {
+    AccessPattern pattern;
+    EXPECT_FALSE(pattern.flow_analysis.started);
+    EXPECT_FALSE(pattern.flow_analysis.precision_lost());
+    pattern.flow_analysis.started = true;
+    pattern.flow_analysis.precision_events.push_back(
+        {FlowPrecisionLoss::UnknownJumpEntry, 9, BADADDR, 2, 1, 2});
+    EXPECT_TRUE(pattern.flow_analysis.precision_lost());
+    EXPECT_FALSE(pattern.flow_analysis.budget_exhausted());
+    auto copy = pattern;
+    copy.flow_analysis.precision_events.push_back(
+        {FlowPrecisionLoss::StepBudget, 10, BADADDR, -1, 1, 1});
+    EXPECT_TRUE(copy.flow_analysis.budget_exhausted());
+    EXPECT_FALSE(pattern.flow_analysis.budget_exhausted());
+    EXPECT_EQ(pattern.flow_analysis.precision_events.size(), 1U);
+}
+
 } // namespace test
 } // namespace structor

@@ -59,6 +59,26 @@ EXPECTED_CASES = {
     'finally_observes_returning_alias',
     'finally_return_skips_continuation',
     'wind_cleanup_does_not_replace_normal_alias',
+    'shared_label_preserves_lexical_alias',
+    'shared_label_excludes_jumped_definition',
+    'shared_label_budget_widens_before_observation',
+    'compound_alias_add_uses_element_scale',
+    'compound_alias_sub_uses_element_scale',
+    'compound_alias_signed_negative_delta',
+    'compound_alias_delta_cast_is_preserved',
+    'compound_alias_rhs_read_precedes_kill',
+    'compound_alias_overflow_discards_offset',
+    'compound_alias_minimum_subtraction_rejected',
+    'postincrement_load_observes_old_address',
+    'preincrement_load_observes_new_address',
+    'postdecrement_load_observes_old_address',
+    'predecrement_load_observes_new_address',
+    'postincrement_assignment_preserves_old_result',
+    'preincrement_assignment_preserves_new_result',
+    'compound_assignment_result_preserves_new_address',
+    'postincrement_loop_recomputes_expression_value',
+    'narrowed_postincrement_result_discards_alias',
+    'narrowed_conditional_update_discards_alias',
 }
 
 
@@ -68,27 +88,39 @@ def main():
     parser.add_argument("--plugin", required=True)
     parser.add_argument("--idump", default="idump")
     parser.add_argument("--record-file")
+    parser.add_argument("--carrier", choices=["alias_ctree_carrier", "alias_pointer_ctree_carrier"])
     args = parser.parse_args()
     root = Path(args.repo_root).resolve()
     build_fixtures(root, "test_alias_ctree_probe")
-    data = run_api_command(root, Path(args.plugin).resolve(), args.idump,
-        binary="test_alias_ctree_probe", functions=["alias_ctree_carrier"],
-        command="check_alias_flow_ctree|alias_ctree_carrier")
-    if args.record_file:
-        Path(args.record_file).write_text(json.dumps(data, indent=2) + "\n")
-    cases = data.get("cases", [])
     failures = []
-    if (data.get("evidence") != "constructed SDK ctree" or
-        len(cases) != len(EXPECTED_CASES) or {case.get("name") for case in cases} != EXPECTED_CASES):
-        failures.append("missing, duplicated, or unexpected constructed ctree cases")
-    for case in cases:
-        passed = case.get("passed") and case.get("original_body_restored") and not case.get("error")
-        print(f"[{'PASS' if passed else 'FAIL'}] {case.get('name')}", flush=True)
-        if not passed:
-            failures.append(json.dumps(case, sort_keys=True))
-    if failures or not data.get("success"):
-        raise RuntimeError("\n".join(failures) or "probe did not succeed")
-    print(f"Alias-flow regressions: PASS ({len(cases)} SDK ctree cases)", flush=True)
+    total = 0
+    for carrier in ([args.carrier] if args.carrier else ["alias_ctree_carrier", "alias_pointer_ctree_carrier"]):
+        data = run_api_command(root, Path(args.plugin).resolve(), args.idump,
+            binary="test_alias_ctree_probe", functions=[carrier],
+            command=f"check_alias_flow_ctree|{carrier}")
+        if args.record_file:
+            path = Path(args.record_file)
+            if not args.carrier:
+                path = path.with_name(path.stem + "." + carrier + path.suffix)
+            path.write_text(json.dumps(data, indent=2) + "\n")
+        cases = data.get("cases", [])
+        expected_scale = 2 if carrier == "alias_pointer_ctree_carrier" else 1
+        if (data.get("evidence") != "constructed SDK ctree" or
+            data.get("alias_element_size") != expected_scale or
+            len(cases) != len(EXPECTED_CASES) or {case.get("name") for case in cases} != EXPECTED_CASES):
+            failures.append(carrier + ": missing, duplicated, unexpected, or wrongly scaled SDK ctree cases")
+        for case in cases:
+            passed = case.get("passed") and case.get("original_body_restored") and not case.get("error")
+            print(f"[{'PASS' if passed else 'FAIL'}] {carrier}: {case.get('name')}", flush=True)
+            if not passed:
+                failures.append(carrier + ": " + json.dumps(case, sort_keys=True))
+        if not data.get("success"):
+            failures.append(carrier + ": probe did not succeed")
+        total += len(cases)
+    if failures:
+        raise RuntimeError("\n".join(failures))
+    print(f"Alias-flow regressions: PASS ({total} SDK ctree cases)", flush=True)
+
 
 
 if __name__ == "__main__":

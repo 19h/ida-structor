@@ -695,6 +695,8 @@ void prune_intermediate_positive_delta_patterns(
 
     UnifiedAccessPattern pruned = UnifiedAccessPattern::merge(
             std::move(kept_patterns), unified_pattern.function_deltas);
+    // Pruning evidence must not erase a failed or imprecise local scan.
+    pruned.flow_diagnostics = unified_pattern.flow_diagnostics;
 
     // merge() cannot rediscover a boundary whose frame-scratch observation was
     // already rejected from per_function_patterns.  Preserve it only while its
@@ -1092,6 +1094,9 @@ SynthesisResult LayoutSynthesizer::synthesize(const AccessPattern &pattern,
             GeneratedNameKind::RootStruct, NameConfidence::Medium);
     result.structure.add_provenance(pattern.func_ea);
 
+    if (pattern.flow_analysis.started || pattern.flow_analysis.invalid_limits) {
+        result.flow_diagnostics.push_back({pattern.func_ea, pattern.var_idx, pattern.flow_analysis});
+    }
     if (pattern.accesses.empty()) {
         result.error = SynthError::NoAccessesFound;
         result.error_message = "No access evidence was supplied for synthesis";
@@ -1127,6 +1132,15 @@ SynthesisResult LayoutSynthesizer::synthesize(const AccessPattern &pattern,
     // Synthesize from unified pattern
     SynthesisResult synth_result =
             synthesize(unified_pattern, opts, pattern.func_ea);
+
+    // Preserve seed diagnostics even when cross-function pruning omitted it.
+    if (!result.flow_diagnostics.empty() &&
+        std::none_of(synth_result.flow_diagnostics.begin(), synth_result.flow_diagnostics.end(),
+            [&](const FlowAnalysisDiagnostic& diagnostic) {
+                return diagnostic.func_ea == pattern.func_ea && diagnostic.var_idx == pattern.var_idx;
+            })) {
+        synth_result.flow_diagnostics.push_back(result.flow_diagnostics.front());
+    }
 
     // Copy metadata
     synth_result.structure.source_func = pattern.func_ea;
@@ -1164,7 +1178,38 @@ SynthesisResult LayoutSynthesizer::synthesize(const AccessPattern &pattern) {
 
 SynthesisResult
 LayoutSynthesizer::synthesize(const UnifiedAccessPattern &unified_pattern,
-                                                            const SynthOptions &opts, ea_t source_func_hint) {
+                                                            const SynthOptions &requested_opts, ea_t source_func_hint) {
+    auto diagnostics = unified_pattern.flow_diagnostics;
+    // Callers can also supply patterns directly without the merge helpers.
+    if (diagnostics.empty()) {
+        for (const auto& pattern : unified_pattern.per_function_patterns) {
+            if (pattern.flow_analysis.started || pattern.flow_analysis.invalid_limits) {
+                diagnostics.push_back({pattern.func_ea, pattern.var_idx, pattern.flow_analysis});
+            }
+        }
+    }
+    const bool exhausted = std::any_of(diagnostics.begin(), diagnostics.end(),
+        [](const FlowAnalysisDiagnostic& diagnostic) { return diagnostic.analysis.budget_exhausted(); });
+    // A budget can leave individually valid offsets observed before widening.
+    // They do not establish a finite array extent for the unexplored paths.
+    // Restrict aggregate inference for this call and restore reusable config.
+    struct RestoreArrayOptions {
+        LayoutSynthConfig& config;
+        bool arrays;
+        bool symbolic;
+        ~RestoreArrayOptions() {
+            config.detect_arrays = arrays;
+            config.detect_symbolic_arrays = symbolic;
+        }
+    } restore_arrays{config_, config_.detect_arrays, config_.detect_symbolic_arrays};
+    SynthOptions opts = requested_opts;
+    if (exhausted) {
+        config_.detect_arrays = false;
+        config_.detect_symbolic_arrays = false;
+        opts.z3.detect_arrays = false;
+        opts.z3.detect_symbolic_arrays = false;
+    }
+    SynthesisResult output = [&]() -> SynthesisResult {
     auto start_time = std::chrono::steady_clock::now();
 
     SynthesisResult result;
@@ -1375,6 +1420,10 @@ LayoutSynthesizer::synthesize(const UnifiedAccessPattern &unified_pattern,
             end_time - start_time);
 
     return result;
+    }();
+    output.arrays_suppressed_by_flow_budget = exhausted;
+    output.flow_diagnostics = std::move(diagnostics);
+    return output;
 }
 
 SynthesisResult

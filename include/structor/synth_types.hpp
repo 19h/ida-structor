@@ -411,6 +411,67 @@ void merge_field_access_evidence(FieldAccess& dst, const FieldAccess& src);
 [[nodiscard]] bool canonical_field_access_less(
     const FieldAccess& lhs, const FieldAccess& rhs);
 
+/// Causes that can remove reaching-definition information during collection.
+/// These describe observed analysis limitations, not proof of completeness.
+enum class FlowPrecisionLoss : std::uint8_t {
+    StateBudget,
+    StepBudget,
+    UnknownJumpEntry,
+    UnknownExceptionEntry,
+    OpaqueAssembly,
+};
+
+[[nodiscard]] inline const char* flow_precision_loss_str(FlowPrecisionLoss reason) noexcept {
+    switch (reason) {
+        case FlowPrecisionLoss::StateBudget: return "state_budget";
+        case FlowPrecisionLoss::StepBudget: return "step_budget";
+        case FlowPrecisionLoss::UnknownJumpEntry: return "unknown_jump_entry";
+        case FlowPrecisionLoss::UnknownExceptionEntry: return "unknown_exception_entry";
+        case FlowPrecisionLoss::OpaqueAssembly: return "opaque_assembly";
+    }
+    return "unknown";
+}
+
+struct FlowPrecisionEvent {
+    FlowPrecisionLoss reason = FlowPrecisionLoss::StateBudget;
+    // Preorder ordinal in the collected ctree. It is independent of pointer
+    // addresses, print_func(), and repeated loop exploration. Zero means absent.
+    std::uint64_t node_ordinal = 0;
+    ea_t ea = BADADDR;
+    int label = -1;
+    std::uint64_t occurrences = 0;
+    std::uint64_t max_states_before = 0;
+};
+
+struct FlowAnalysisInfo {
+    bool started = false;
+    bool invalid_limits = false;
+    std::uint32_t max_states = 16;
+    std::uint64_t max_steps = 65536;
+    // Counts include provisional loop exploration. The step budget triggers
+    // widening; collection continues and executed_steps can exceed max_steps.
+    std::uint64_t executed_steps = 0;
+    std::uint64_t peak_candidate_states = 0;
+    std::uint64_t widening_operations = 0;
+    qvector<FlowPrecisionEvent> precision_events;
+
+    [[nodiscard]] bool has_loss(FlowPrecisionLoss reason) const noexcept {
+        return std::any_of(precision_events.begin(), precision_events.end(),
+            [reason](const FlowPrecisionEvent& event) { return event.reason == reason; });
+    }
+    [[nodiscard]] bool budget_exhausted() const noexcept {
+        return has_loss(FlowPrecisionLoss::StateBudget) || has_loss(FlowPrecisionLoss::StepBudget);
+    }
+    [[nodiscard]] bool precision_lost() const noexcept { return !precision_events.empty(); }
+};
+
+/// Context-independent collection diagnostics retained by synthesis results.
+struct FlowAnalysisDiagnostic {
+    ea_t func_ea = BADADDR;
+    int var_idx = -1;
+    FlowAnalysisInfo analysis;
+};
+
 /// Collection of accesses for analysis
 struct AccessPattern {
     ea_t                    func_ea;        // Function being analyzed
@@ -418,6 +479,7 @@ struct AccessPattern {
     int                     var_idx;        // Variable index in lvar array
     tinfo_t                 original_type;  // Original type before synthesis
     qvector<FieldAccess>    accesses;       // All observed accesses
+    FlowAnalysisInfo        flow_analysis;  // Collection precision and configured budgets
     sval_t                  min_offset;     // Minimum observed offset
     sval_t                  max_offset;     // Maximum observed offset (exclusive)
     bool                    has_vtable;     // VTable pattern detected
@@ -859,6 +921,9 @@ struct SynthResult {
     qvector<AccessConflict> conflicts;          // Conflicts for user review
     std::unique_ptr<SynthStruct> synthesized_struct;
     std::optional<ResourceLimitViolation> resource_limit;
+
+    qvector<FlowAnalysisDiagnostic> flow_diagnostics;
+    bool arrays_suppressed_by_flow_budget = false;
 
     // Z3-specific result information
     Z3SynthesisInfo         z3_info;            // Z3 synthesis details

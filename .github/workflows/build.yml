@@ -213,7 +213,7 @@ jobs:
             STRUCTOR_TEST_PERSISTENCE_FAULT \
             check_assignment_order_ctree \
             check_type_lattice_materialization \
-            check_alias_flow_ctree \
+            check_alias_flow_ctree check_flow_precision_ctree \
             inspect_instruction_semantics_identity \
             fault_global_tinfo_rollback \
             inspect_base_inference \
@@ -307,6 +307,7 @@ jobs:
               "check_assignment_order_ctree",
               "check_type_lattice_materialization",
               "check_alias_flow_ctree",
+              "check_flow_precision_ctree",
               "inspect_instruction_semantics_identity",
               "fault_global_tinfo_rollback",
               "inspect_base_inference",

@@ -1053,6 +1053,10 @@ private:
 
         CrossFunctionAnalyzer analyzer(cf_config);
         UnifiedAccessPattern unified = analyzer.analyze(func_ea, var_idx, options_);
+        // Preserve every attempted local scan, including an empty result.
+        // These sites belong to the local ctree, independently of seed deltas.
+        for (const auto& diagnostic : unified.flow_diagnostics)
+            flow_diagnostics_.push_back(diagnostic);
 
         bool progress = false;
         for (const auto& [seed_func_ea, delta] : unified.function_deltas) {
@@ -1144,6 +1148,7 @@ private:
 
     [[nodiscard]] UnifiedAccessPattern build_pattern() {
         UnifiedAccessPattern pattern;
+        pattern.flow_diagnostics = flow_diagnostics_;
         qvector<FieldAccess> bounded_accesses;
         bounded_accesses.reserve(merged_accesses_.size());
         for (auto& access : merged_accesses_) {
@@ -1222,6 +1227,7 @@ private:
     std::unordered_map<ea_t, sval_t> source_returners_;
     std::unordered_map<ea_t, sval_t> pointer_alias_globals_;
     std::unordered_set<SeedKey, SeedKeyHash> seed_keys_;
+    qvector<FlowAnalysisDiagnostic> flow_diagnostics_;
     std::unordered_set<VarKey, VarKeyHash> zero_delta_variables_;
     std::unordered_set<VarKey, VarKeyHash> var_usage_scanned_;
     std::unordered_map<ea_t, sval_t> function_deltas_;

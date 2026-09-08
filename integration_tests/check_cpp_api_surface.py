@@ -149,9 +149,21 @@ def run_api_command(
     binary: str,
     functions: list[str],
     command: str,
+    config_overrides: dict[str, str | int | bool] | None = None,
 ) -> dict:
+    settings = []
+    for key, value in (config_overrides or {}).items():
+        encoded = str(value).lower() if isinstance(value, bool) else str(value)
+        if not key or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_" for character in key):
+            raise ValueError(f"invalid configuration key: {key!r}")
+        if any(character in encoded for character in "\r\n"):
+            raise ValueError(f"configuration value contains a newline: {key!r}")
+        settings.append(f"{key}={encoded}\n")
     real_home = Path.home()
     sandbox_home = prepare_plugin_home(plugin_path, real_home)
+    if settings:
+        with (sandbox_home / ".idapro" / "structor.cfg").open("a", encoding="utf-8") as config:
+            config.writelines(settings)
     result_path = Path(tempfile.mkdtemp(prefix="structor-api-result.")) / "result.json"
     binary_path = repo_root / "integration_tests" / binary
     if not binary_path.exists():

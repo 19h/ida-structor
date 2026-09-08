@@ -127,13 +127,50 @@ BaseConversionInfo inspect_base_conversions(const cexpr_t* expr, int target_var,
             const auto inner = inspect_base_conversions(expr->x, target_var, address_aliases, depth + 1);
             return {false, inner.lossy}; // A loaded value is not the object's base address.
         }
-        case cot_add: case cot_sub: case cot_mul: case cot_idx: {
+        case cot_preinc: case cot_postinc: case cot_predec: case cot_postdec:
+            return inspect_base_conversions(expr->x, target_var, address_aliases, depth + 1);
+        case cot_comma:
+            return inspect_base_conversions(expr->y, target_var, address_aliases, depth + 1);
+        case cot_tern: {
+            const auto yes = inspect_base_conversions(expr->y, target_var, address_aliases, depth + 1);
+            const auto no = inspect_base_conversions(expr->z, target_var, address_aliases, depth + 1);
+            return {yes.has_base || no.has_base, yes.lossy || no.lossy};
+        }
+        case cot_add: case cot_sub: case cot_mul: case cot_idx:
+        case cot_asgadd: case cot_asgsub: {
             const auto lhs = inspect_base_conversions(expr->x, target_var, address_aliases, depth + 1);
             const auto rhs = inspect_base_conversions(expr->y, target_var, address_aliases, depth + 1);
             return {expr->op != cot_idx && (lhs.has_base || rhs.has_base), lhs.lossy || rhs.lossy};
         }
         default: return {};
     }
+}
+
+bool pure_scalar_expression(const cexpr_t* expression, int depth = 0) {
+    if (!expression || depth > 64 || !expression->type.is_integral()) return false;
+    switch (expression->op) {
+        case cot_num: case cot_var: return true;
+        case cot_cast: case cot_neg: case cot_bnot:
+            return pure_scalar_expression(expression->x, depth + 1);
+        case cot_add: case cot_sub: case cot_mul: case cot_shl: case cot_sshr:
+        case cot_ushr: case cot_band: case cot_bor: case cot_xor:
+            return pure_scalar_expression(expression->x, depth + 1) &&
+                pure_scalar_expression(expression->y, depth + 1);
+        default: return false;
+    }
+}
+
+std::optional<sval_t> scaled_pointer_delta(const tinfo_t& type, sval_t element_delta) {
+    if ((!type.is_integral() && !type.is_ptr()) || type.get_size() != get_ptr_size()) return std::nullopt;
+    sval_t scale = 1;
+    if (type.is_ptr()) {
+        const auto size = type.get_pointed_object().get_size();
+        if (size == 0 || size == BADSIZE || size > static_cast<size_t>(std::numeric_limits<sval_t>::max())) {
+            return std::nullopt;
+        }
+        scale = static_cast<sval_t>(size);
+    }
+    return checked_sval_mul(element_delta, scale);
 }
 
 // Evaluate bounded integer expressions in their declared bit width. Discarding
@@ -343,11 +380,51 @@ std::optional<std::uint32_t> regular_offset_stride(const qvector<sval_t>& offset
 // AccessPatternVisitor Implementation
 // ============================================================================
 
-AccessPatternVisitor::AccessPatternVisitor(cfunc_t* cfunc, int target_var_idx)
+AccessPatternVisitor::AccessPatternVisitor(cfunc_t* cfunc, int target_var_idx,
+                                           const FlowAnalysisOptions& flow)
     : ctree_visitor_t(CV_PARENTS)
     , cfunc_(cfunc)
     , target_var_idx_(target_var_idx)
-    , has_unstructured_control_flow_(cfunc && cfunc->body.contains_insn(cit_goto)) {}
+    , has_unstructured_control_flow_(cfunc && cfunc->body.contains_insn(cit_goto)) {
+    if (!flow.valid()) throw std::invalid_argument("Invalid flow analysis limits");
+    flow_analysis_.started = true;
+    flow_analysis_.max_states = flow.max_states;
+    flow_analysis_.max_steps = flow.max_steps;
+    flow_analysis_.peak_candidate_states = 1;
+    if (cfunc) {
+        struct OrdinalVisitor : ctree_visitor_t {
+            std::unordered_map<const citem_t*, std::uint64_t>& ordinals;
+            explicit OrdinalVisitor(decltype(ordinals) output)
+                : ctree_visitor_t(CV_FAST), ordinals(output) {}
+            int idaapi visit_expr(cexpr_t* item) override { return record(item); }
+            int idaapi visit_insn(cinsn_t* item) override { return record(item); }
+            int record(const citem_t* item) {
+                ordinals.emplace(item, ordinals.size() + 1);
+                return 0;
+            }
+        } ordinal_visitor(node_ordinals_);
+        ordinal_visitor.apply_to(&cfunc->body, nullptr);
+        flow_site_ = &cfunc->body;
+    }
+}
+
+void AccessPatternVisitor::record_precision_loss(
+        FlowPrecisionLoss reason, std::size_t states_before) {
+    const auto found = node_ordinals_.find(flow_site_);
+    const auto ordinal = found == node_ordinals_.end() ? 0 : found->second;
+    auto& events = flow_analysis_.precision_events;
+    const auto key = std::make_pair(reason, ordinal);
+    const auto previous = precision_event_indexes_.find(key);
+    if (previous != precision_event_indexes_.end()) {
+        auto& event = events[previous->second];
+        if (event.occurrences != UINT64_MAX) ++event.occurrences;
+        event.max_states_before = std::max<std::uint64_t>(event.max_states_before, states_before);
+        return;
+    }
+    precision_event_indexes_.emplace(key, events.size());
+    events.push_back({reason, ordinal, flow_site_ ? flow_site_->ea : BADADDR,
+        flow_site_ ? flow_site_->label_num : -1, 1, states_before});
+}
 
 AccessPatternVisitor::FlowState AccessPatternVisitor::take_flow_state() {
     FlowState state;
@@ -360,6 +437,7 @@ AccessPatternVisitor::FlowState AccessPatternVisitor::take_flow_state() {
     state.predicates = std::move(path_predicates_);
     state.variable_uses = std::move(variable_uses_);
     state.expression_values = std::move(expression_values_);
+    state.pointer_expression_values = std::move(pointer_expression_values_);
     state.exit = flow_exit_;
     state.aliases_widened = aliases_widened_;
     flow_exit_ = FlowExit::Normal;
@@ -377,6 +455,7 @@ void AccessPatternVisitor::restore_flow_state(FlowState state) {
     path_predicates_ = std::move(state.predicates);
     variable_uses_ = std::move(state.variable_uses);
     expression_values_ = std::move(state.expression_values);
+    pointer_expression_values_ = std::move(state.pointer_expression_values);
     flow_exit_ = state.exit;
     aliases_widened_ = state.aliases_widened;
 }
@@ -387,6 +466,7 @@ bool AccessPatternVisitor::same_flow_state(const FlowState& lhs, const FlowState
         lhs.address_aliases != rhs.address_aliases || lhs.escaped != rhs.escaped ||
         lhs.pending_constants != rhs.pending_constants ||
         lhs.expression_values != rhs.expression_values ||
+        lhs.pointer_expression_values != rhs.pointer_expression_values ||
         lhs.predicates.size() != rhs.predicates.size()) return false;
     for (const auto& [var_idx, alias] : lhs.aliases) {
         const auto found = rhs.aliases.find(var_idx);
@@ -431,6 +511,7 @@ bool AccessPatternVisitor::same_flow_state(const FlowState& lhs, const FlowState
 
 AccessPatternVisitor::FlowState AccessPatternVisitor::widen_flow_states(const FlowStates& states) {
     FlowState result;
+    if (flow_analysis_.widening_operations != UINT64_MAX) ++flow_analysis_.widening_operations;
     result.aliases_widened = true;
     if (!states.empty()) result.exit = states.front().exit;
     // Overflow must not retain a prefix of possible pointer offsets as an
@@ -453,12 +534,17 @@ void AccessPatternVisitor::normalize_flow_states(FlowStates& states) {
         }
     }
     states = std::move(unique);
+    flow_analysis_.peak_candidate_states = std::max<std::uint64_t>(
+        flow_analysis_.peak_candidate_states, states.size());
+    if (states.size() > flow_analysis_.max_states) {
+        record_precision_loss(FlowPrecisionLoss::StateBudget, states.size());
+    }
     const bool contains_unknown_aliases = std::any_of(states.begin(), states.end(), [&](const FlowState& state) {
         return state.aliases_widened && std::count_if(states.begin(), states.end(),
             [&](const FlowState& other) { return other.exit == state.exit; }) > 1;
     });
-    if (states.size() <= max_flow_states && !flow_budget_exhausted_ && !contains_unknown_aliases) return;
-    const bool overflow = states.size() > max_flow_states || flow_budget_exhausted_;
+    if (states.size() <= flow_analysis_.max_states && !flow_budget_exhausted_ && !contains_unknown_aliases) return;
+    const bool overflow = states.size() > flow_analysis_.max_states || flow_budget_exhausted_;
     FlowStates widened;
     for (FlowExit exit : {FlowExit::Normal, FlowExit::Return, FlowExit::Break, FlowExit::Continue}) {
         FlowStates group;
@@ -486,12 +572,23 @@ void AccessPatternVisitor::publish_flow_states(FlowStates states) {
 AccessPatternVisitor::FlowStates AccessPatternVisitor::walk_item(
         citem_t* item, citem_t* parent, FlowStates states) {
     if (!item) return states;
+    const citem_t* previous_site = flow_site_;
+    flow_site_ = item;
     if (has_unstructured_control_flow_ && item->label_num != -1) {
         // A goto may enter here without executing the preceding lexical
         // definitions. Without a CFG, labels are independent unknown entries.
+        record_precision_loss(FlowPrecisionLoss::UnknownJumpEntry, states.size());
         auto entry = widen_flow_states(states);
         entry.exit = FlowExit::Normal;
-        states = {std::move(entry)};
+        // An unresolved jump contributes an unknown alternative. It does not
+        // erase aliases established by normal lexical predecessors. Budget
+        // widening remains sticky on those predecessors, independently.
+        entry.aliases_widened = false;
+        std::erase_if(states, [](const FlowState& state) { return state.exit != FlowExit::Normal; });
+        states.push_back(std::move(entry));
+        // Adding an unknown entry can itself exceed the budget. Widen before
+        // observing this item, rather than recording a truncated offset set.
+        normalize_flow_states(states);
     }
     FlowStates result;
     auto outer_results = std::move(node_results_);
@@ -500,7 +597,20 @@ AccessPatternVisitor::FlowStates AccessPatternVisitor::walk_item(
             result.push_back(std::move(state));
             continue;
         }
-        if (++flow_steps_ > max_flow_steps) flow_budget_exhausted_ = true;
+        if (item->is_expr() && parent && !parent->is_expr()) {
+            // Expression values are tied to one evaluation, including the old
+            // result of q++ after q itself has advanced. Loop re-entry starts
+            // a new evaluation rather than reusing the previous result.
+            state.pointer_expression_values.clear();
+            state.expression_values.clear();
+            state.variable_uses.clear();
+        }
+        if (flow_analysis_.executed_steps != UINT64_MAX) ++flow_analysis_.executed_steps;
+        if (!flow_budget_exhausted_ &&
+            flow_analysis_.executed_steps > flow_analysis_.max_steps) {
+            flow_budget_exhausted_ = true;
+            record_precision_loss(FlowPrecisionLoss::StepBudget, states.size());
+        }
         restore_flow_state(std::move(state));
         node_results_.reset();
         apply_to(item, parent);
@@ -512,6 +622,7 @@ AccessPatternVisitor::FlowStates AccessPatternVisitor::walk_item(
     }
     node_results_ = std::move(outer_results);
     if (result.size() > 1 || flow_budget_exhausted_) normalize_flow_states(result);
+    flow_site_ = previous_site;
     return result;
 }
 
@@ -681,7 +792,13 @@ AccessPatternVisitor::FlowStates AccessPatternVisitor::walk_loop(
             if (std::any_of(heads.begin(), heads.end(),
                             [&](const FlowState& previous) { return same_flow_state(state, previous); })) continue;
             heads.push_back(std::move(state));
-            if (heads.size() > max_flow_states) { overflow = true; break; }
+            flow_analysis_.peak_candidate_states = std::max<std::uint64_t>(
+                flow_analysis_.peak_candidate_states, heads.size());
+            if (heads.size() > flow_analysis_.max_states) {
+                record_precision_loss(FlowPrecisionLoss::StateBudget, heads.size());
+                overflow = true;
+                break;
+            }
         }
         if (overflow) break;
     }
@@ -739,6 +856,7 @@ int AccessPatternVisitor::visit_insn(cinsn_t* insn) {
             for (auto& state : states) {
                 state.variable_uses.clear();
                 state.expression_values.clear();
+                state.pointer_expression_values.clear();
             }
             break;
         case cit_if: {
@@ -852,6 +970,7 @@ int AccessPatternVisitor::visit_insn(cinsn_t* insn) {
                     states = std::move(finalized);
                 }
                 FlowStates unknown;
+                record_precision_loss(FlowPrecisionLoss::UnknownExceptionEntry, incoming.size());
                 unknown.push_back(widen_flow_states(incoming));
                 auto caught = walk_block(&handler, insn, std::move(unknown));
                 if (handler.is_finally()) {
@@ -869,6 +988,7 @@ int AccessPatternVisitor::visit_insn(cinsn_t* insn) {
             states.front().exit = FlowExit::Return;
             break;
         case cit_asm:
+            record_precision_loss(FlowPrecisionLoss::OpaqueAssembly, states.size());
             states = {widen_flow_states(states)};
             break;
         default:
@@ -1048,9 +1168,19 @@ int AccessPatternVisitor::observe_expr(cexpr_t* expr) {
         case cot_postdec:
             if (expr->x && expr->x->op == cot_var) {
                 const auto value = known_scalar_value(expr->x);
+                const bool increment = expr->op == cot_preinc || expr->op == cot_postinc;
+                const auto pointer_result = resolve_ptr_arith(expr);
+                const auto pointer_value = adjusted_address_alias(expr->x, increment ? 1 : -1);
                 invalidate_local_var_state(expr->x->v.idx, true);
+                if (pointer_value) {
+                    local_aliases_[expr->x->v.idx] = *pointer_value;
+                    address_aliases_.insert(expr->x->v.idx);
+                }
+                if (pointer_result.valid && pointer_result.var_idx == target_var_idx_ &&
+                    !pointer_result.through_pointer_alias && pointer_result.base_indirection == 0) {
+                    pointer_expression_values_[expr] = pointer_result.offset;
+                }
                 if (value) {
-                    const bool increment = expr->op == cot_preinc || expr->op == cot_postinc;
                     remember_scalar_value(expr->x->v.idx, expr->x->type,
                                           increment ? *value + 1 : *value - 1);
                 }
@@ -1124,7 +1254,19 @@ void AccessPatternVisitor::process_assignment(cexpr_t* expr) {
         const auto value = lhs_value && rhs_value
             ? evaluate_integer_binary(expr, static_cast<sval_t>(*lhs_value), static_cast<sval_t>(*rhs_value))
             : std::nullopt;
+        std::optional<FieldAccess> pointer_value;
+        if ((expr->op == cot_asgadd || expr->op == cot_asgsub) && rhs_value &&
+            pure_scalar_expression(expr->y)) {
+            auto delta = std::optional<sval_t>(static_cast<sval_t>(*rhs_value));
+            if (expr->op == cot_asgsub) delta = checked_sval_mul(*delta, -1);
+            if (delta) pointer_value = adjusted_address_alias(lhs, *delta);
+        }
         invalidate_local_var_state(lhs->v.idx, true);
+        if (pointer_value) {
+            local_aliases_[lhs->v.idx] = *pointer_value;
+            address_aliases_.insert(lhs->v.idx);
+            pointer_expression_values_[expr] = pointer_value->offset;
+        }
         if (value) remember_scalar_value(lhs->v.idx, lhs->type, static_cast<std::uint64_t>(*value));
         return;
     }
@@ -1300,12 +1442,78 @@ void AccessPatternVisitor::remember_scalar_value(int var_idx, const tinfo_t& typ
         PredicateRelation::Equal, bits, width, true});
 }
 
-utils::PtrArithInfo AccessPatternVisitor::resolve_ptr_arith(const cexpr_t* expr) const {
+std::optional<FieldAccess> AccessPatternVisitor::adjusted_address_alias(
+        const cexpr_t* variable, sval_t element_delta) const {
+    if (!variable || variable->op != cot_var || !address_aliases_.contains(variable->v.idx)) return std::nullopt;
+    const auto alias = local_aliases_.find(variable->v.idx);
+    if (alias == local_aliases_.end()) return std::nullopt;
+    const auto delta = scaled_pointer_delta(variable->type, element_delta);
+    const auto offset = delta ? checked_sval_add(alias->second.offset, *delta) : std::nullopt;
+    if (!offset) return std::nullopt;
+    auto result = alias->second;
+    result.offset = *offset;
+    result.inferred_type = variable->type;
+    return result;
+}
+
+utils::PtrArithInfo AccessPatternVisitor::resolve_ptr_arith(const cexpr_t* expr, int depth) const {
+    if (!expr || depth > 64) return {};
     if (inspect_base_conversions(expr, target_var_idx_, address_aliases_).lossy) {
         return {};
     }
+    if (const auto value = pointer_expression_values_.find(expr); value != pointer_expression_values_.end()) {
+        utils::PtrArithInfo info;
+        info.valid = true;
+        info.var_idx = target_var_idx_;
+        info.offset = value->second;
+        return info;
+    }
     utils::PtrArithInfo info = utils::extract_ptr_arith(expr);
     if (!info.valid) {
+        if (expr->op == cot_cast || expr->op == cot_ptr) {
+            info = resolve_ptr_arith(expr->x, depth + 1);
+            if (info.valid && expr->op == cot_ptr && info.base_indirection < 0xFF) ++info.base_indirection;
+            return info;
+        }
+        if (expr->op == cot_preinc || expr->op == cot_postinc ||
+            expr->op == cot_predec || expr->op == cot_postdec ||
+            expr->op == cot_asgadd || expr->op == cot_asgsub) {
+            std::optional<sval_t> delta;
+            if (expr->op == cot_asgadd || expr->op == cot_asgsub) {
+                if (pure_scalar_expression(expr->y)) {
+                    const auto scalar = known_scalar_value(expr->y);
+                    if (scalar) delta = static_cast<sval_t>(*scalar);
+                    if (delta && expr->op == cot_asgsub) delta = checked_sval_mul(*delta, -1);
+                }
+            } else {
+                delta = expr->op == cot_preinc || expr->op == cot_postinc ? 1 : -1;
+            }
+            const auto updated = delta ? adjusted_address_alias(expr->x, *delta) : std::nullopt;
+            if (!updated) return {};
+            info.valid = true;
+            info.var_idx = target_var_idx_;
+            info.offset = (expr->op == cot_postinc || expr->op == cot_postdec)
+                ? local_aliases_.at(expr->x->v.idx).offset : updated->offset;
+            return info;
+        }
+        if (expr->op == cot_add || expr->op == cot_sub) {
+            const cexpr_t* pointer = expr->x;
+            const cexpr_t* scalar = expr->y;
+            info = resolve_ptr_arith(pointer, depth + 1);
+            if ((!info.valid || info.var_idx != target_var_idx_) && expr->op == cot_add) {
+                std::swap(pointer, scalar);
+                info = resolve_ptr_arith(pointer, depth + 1);
+            }
+            if (!info.valid || info.var_idx != target_var_idx_ ||
+                !pure_scalar_expression(scalar)) return {};
+            const auto value = known_scalar_value(scalar);
+            auto delta = value ? scaled_pointer_delta(pointer->type, static_cast<sval_t>(*value)) : std::nullopt;
+            if (delta && expr->op == cot_sub) delta = checked_sval_mul(*delta, -1);
+            const auto offset = delta ? checked_sval_add(info.offset, *delta) : std::nullopt;
+            if (!offset) return {};
+            info.offset = *offset;
+            return info;
+        }
         return info;
     }
 
@@ -2646,7 +2854,12 @@ AccessPattern AccessCollector::collect(ea_t func_ea, int var_idx) {
 
 AccessPattern AccessCollector::collect(cfunc_t* cfunc, int var_idx) {
     AccessPattern pattern;
-    if (!cfunc) return pattern;
+    pattern.flow_analysis.max_states = options_.flow.max_states;
+    pattern.flow_analysis.max_steps = options_.flow.max_steps;
+    pattern.flow_analysis.invalid_limits = !options_.flow.valid();
+    pattern.var_idx = var_idx;
+    pattern.func_ea = cfunc ? cfunc->entry_ea : BADADDR;
+    if (!cfunc || pattern.flow_analysis.invalid_limits) return pattern;
 
     func_t* func = cfunc->entry_ea != BADADDR ? get_func(cfunc->entry_ea) : nullptr;
     pattern.func_ea = func ? func->start_ea : BADADDR;
@@ -2661,10 +2874,11 @@ AccessPattern AccessCollector::collect(cfunc_t* cfunc, int var_idx) {
     }
 
     // Collect accesses
-    AccessPatternVisitor visitor(cfunc, var_idx);
+    AccessPatternVisitor visitor(cfunc, var_idx, options_.flow);
     visitor.apply_to(&cfunc->body, nullptr);
 
     pattern.accesses = std::move(visitor.mutable_accesses());
+    pattern.flow_analysis = visitor.flow_analysis();
 
     // Post-process
     analyze_accesses(pattern);

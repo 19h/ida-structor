@@ -13,7 +13,8 @@ or completion of this project-wide objective.
 | Preserve selected array element types when extracting nested subobjects | Residual-fragment helper tests and exact recursive-constructor contracts | Nine helper cases and both live constructor contracts pass; known residual types survive byte-array fallback |
 | Use index bounds only where the comparison holds for the same variable value | Fresh-IDB collector tests for branches, short-circuit expressions, mutation, loops, and casts | All 35 combined-plugin cases pass; original collector fails six selected differential cases |
 | Observe assignment and call operands before their effects; reject bounds invalidated by sibling effects | Eleven native ctree and five constructed SDK ctree cases, plus the unchanged guard suite | All 16 sequencing cases and 35 guard cases pass; matched baseline fails 11 sequencing cases |
-| Preserve separate reaching aliases across branches, joins, loop backedges, and structured exits | 51 constructed SDK ctree cases with exact access expectations and carrier restoration | All 51 pass; the original collector fails four of six initial differential cases |
+| Preserve separate reaching aliases across branches, joins, loop backedges, structured exits, and pointer updates | 142 constructed SDK cases and 72 native cases across AArch64/x86-64 at O0/O1/O2 | All 72 native and 142 constructed byte contracts pass; constructed controls cover integer addresses and two-byte pointer scaling |
+| Expose bounded-flow precision loss through local, cross-function, and global synthesis | 54 constructed SDK cases, 12 native public global calls, and configuration validation | All 54 local and 12 global cases pass; empty scans and pre-layout failure diagnostics are retained, and budget-truncated observations cannot establish optional arrays |
 | Distinguish the type of a pointer base from the type of its loaded field | Production access inference helper tests and real `TypeFixer::analyze_variable` calls | Twenty-two focused helper cases and 13 live type-fixer cases pass |
 | Preserve full function/variable identity in inference caches | Production composite-key and semantics tests, forced collisions, distinct high addresses/SSA versions, and live ctree extraction | Caller cache and experimental variable identities verified; live extraction emits 22 constraints from 16 expressions |
 | Preserve complete type values in lattice caches | Real function/structure hash collisions, mutable child aliases, and returned-result mutation | Directed production lattice tests pass; cache entries own detached snapshots |
@@ -27,8 +28,8 @@ or completion of this project-wide objective.
 | Reject inference results belonging to another function before applying types | Real local/prototype snapshots, foreign/unknown/high-address rejection, and positive application controls | All nine live checks pass within the active IDB |
 | Map signature arguments to actual locals and distinguish target ABI defaults from recovered function evidence | Fifteen portable tests, five live argument-map cases, and six target-family cases | All pass; two foreign-ABI fixtures explicitly falsify the assumption that every function follows its target default |
 | Preserve pointer forwarding as address evidence rather than inventing a field load | Alias-only call/comparison negatives and loaded-field positive controls | Live controls pass; original-collector isolation confirms removal of a fictitious linked-list pointer observation |
-| Maintain public API, deterministic layouts, transactional persistence, global recovery, vtables, and type fixing | Full licensed integrity suite and external CMake consumer | All 22 suites pass against the combined model/source/memory artifact (387.7 s); no layout contracts changed |
-| Maintain reproducible, usable builds and diagnostics | CMake build, CTest, compile-gated hook checks, explicit `idump` runtime diagnostics | 202 standalone CTest entries pass; the release build excludes all 17 hook markers and its installed copy passes codesign verification |
+| Maintain public API, deterministic layouts, transactional persistence, global recovery, vtables, and type fixing | Full licensed integrity suite and external CMake consumer | All 24 suites pass against the combined flow/model/source/memory artifact (403.1 s); no existing layout contracts changed |
+| Maintain reproducible, usable builds and diagnostics | CMake build, CTest, compile-gated hook checks, explicit `idump` runtime diagnostics | 205 standalone CTest entries pass; the release build excludes all 18 hook markers and its installed copy passes codesign verification |
 | Extend adaptive and interprocedural inference beyond existing supported paths | Production implementation, adversarial fixtures, convergence/resource tests | Incomplete; see remaining work |
 
 ## Assumption register
@@ -55,6 +56,7 @@ Dependent findings reference these identifiers.
 | A16 | Absolute-memory origins must be established from address expressions; a concrete view requires actual constraint evidence and matching width/model. | High/colliding addresses, overlapping widths, negative offsets, wraparound, partial storage, conflicting views, local unknown pointees, and address-only controls. | [MEMORY_TYPE_INFERENCE.md](MEMORY_TYPE_INFERENCE.md); no pointer-relative/global alias inference is implied |
 | A17 | A selected model value can be applied by default only when it is forced by the actual hard formulas without generic symbolic bounds. | Hard/soft scalar and compound values, alternative witnesses, bounded-only uniqueness, query/time exhaustion, context destruction, and actual IDA writes/rejections. | [MODEL_VALUE_EVIDENCE.md](MODEL_VALUE_EVIDENCE.md); extraction correctness remains a separate requirement |
 | A18 | Source records identify consulted origins, including violated soft hints; nonpositive preferences are inactive. | Explicit versus misleading textual annotations, high/distinct identities, inactive relation bridges, repeated sites, and negative-weight objective/candidate controls. | [CONSTRAINT_SOURCE_EVIDENCE.md](CONSTRAINT_SOURCE_EVIDENCE.md); no causal attribution or independent-sample count is implied |
+| A19 | Flow limits bound retained state precision, not complete traversal time; lost alias precision cannot establish an aggregate extent from a finite observed prefix. | Low/high state and step limits, repeated site ordinals, empty scans, global reconstruction, early failures, and reusable synthesizer controls. | [Flow precision](../integration_tests/FLOW_PRECISION.md); absence of recorded loss is not a completeness proof |
 
 ## Changes and reproducibility
 
@@ -107,9 +109,26 @@ retained feasible alternative. Loop exploration stabilizes these environments
 before publishing observations; capped exploration does not convert the first
 N offsets into an array extent. Supported predicates retain value epochs and
 ctree comparison signedness. Structured exits, switch fallthrough/default,
-finally, and wind cleanup have directed controls. All 51 constructed SDK cases
-pass in the combined artifact. Goto/exception entry and budget widening remain
-explicit precision boundaries. [A1, A14]
+finally, and wind cleanup have directed controls. Native compilation exposed
+four failures among 72 fixed byte contracts: two scaled compound-pointer
+updates and two shared-label fallthroughs. The collector now retains lexical
+predecessors beside unknown jump entries and scales address updates by the
+ctree pointee size. All 72 native cases pass; the 142 constructed controls also
+exercise pre/post update results, overflow, casts, and loop re-evaluation.
+Goto/exception entry and budget widening remain explicit precision boundaries.
+See the [native matrix](../integration_tests/NATIVE_ALIAS_MATRIX.md). [A1, A14]
+
+Flow options expose the state and step thresholds. Diagnostic events carry
+source function/local identity and a stable preorder ctree site ordinal.
+Attempted scans survive empty evidence, cross-function pruning, and global
+pattern reconstruction. A native global counterexample previously converted
+four 4-byte fields into a three-element array after a one-step budget erased
+the final alias-dependent observation; the lost diagnostic ledger hid that
+incompleteness. Global synthesis now retains the ledger and the three scalar
+observations while suppressing the optional array. Early failures retain
+consistent error status and diagnostics. Detailed evidence, assumptions, and
+instrumentation bounds are in [flow precision](../integration_tests/FLOW_PRECISION.md).
+[A1, A19]
 
 Signature constraints validate `argidx` and map each recovered parameter to its
 actual local. The detector selects supported target families without host-OS
@@ -155,7 +174,7 @@ function addresses, SSA versions, memory widths, and expression-node identity;
 independent public factory calls remain distinct even when their diagnostic IDs
 and labels match. Copies retain identity. Rebuild embedding C++ consumers because
 the public object layouts changed, although factory signatures are unchanged.
-The integrated live check observes 19 constraints from 16 expressions, and an
+The integrated live check observes 22 constraints from 16 expressions, and an
 external CMake consumer builds successfully. [A1, A9]
 
 Lattice join/meet and encoding caches compare complete types. Directed tests
@@ -301,7 +320,8 @@ verify the inactive contract and unchanged positive/hard behavior. [A18]
   independent observation sites across deduplication. Access count alone is not
   a confidence calibration. Branch-state joins and loop-carried aliases now
   have reaching-definition checks within a bounded domain. Analysis precision
-  diagnostics and configurable state limits remain separate work. The
+  diagnostics and configurable state limits are implemented, including global
+  analysis and failure paths. The
   experimental engine now separates hard-formula determination, arbitrary
   selected values, and consulted source records. Formula extraction accuracy,
   dependency-specific bound qualification, and calibrated confidence remain
@@ -315,9 +335,10 @@ verify the inactive contract and unchanged positive/hard behavior. [A18]
   Finite intervals may overapproximate reachable values; supporting exact path
   predicates requires retaining them through synthesis. The collector now
   retains a bounded subset of simple predicate relations through collection.
-- **Medium impact — validation breadth:** extend live coverage across compiler
-  optimization levels, calling conventions, target bitness, and platforms. The
-  current local fixture matrix alone cannot establish that breadth.
+- **Medium impact — validation breadth:** the native alias matrix covers AArch64
+  and x86-64 at O0/O1/O2 on macOS. Calling conventions, 32-bit targets, and other
+  operating systems need additional live coverage; this matrix does not
+  establish those capabilities.
 - **Medium impact — matching completeness:** sparse byte-field matching does not
   yet establish semantic equivalence of whole aggregates or import arbitrary
   bitfield layouts. Preserve those observations until a representable merge is
@@ -327,9 +348,9 @@ verify the inactive contract and unchanged positive/hard behavior. [A18]
   depth cannot be inferred from source declarations absent from the analyzed
   ctree. Pair unknown-prototype preservation controls with known-prototype
   positives; bounded callee-body inference remains a separate capability.
-- **Low impact — artifact hygiene:** fixture compilation rewrites tracked binary
-  artifacts. Generated local changes should not obscure source review; migrate
-  runners to isolated fixture outputs in subsequent build-system work.
+- **Low impact — artifact hygiene:** the new native matrix keeps generated
+  binaries and evidence in the ignored build directory. Legacy fixture runners
+  still rewrite tracked binary artifacts and require isolated output paths.
 
 ## Quality gates
 

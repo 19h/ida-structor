@@ -72,6 +72,13 @@ public:
         return expression;
     }
 
+    Expression number64(uint64 value, type_sign_t sign = type_unsigned) const {
+        auto expression = std::make_unique<cexpr_t>();
+        expression->put_number(&owner_, value, 8, sign);
+        expression->ea = owner_.entry_ea;
+        return expression;
+    }
+
     Expression binary(ctype_t opcode, Expression lhs, Expression rhs,
                       const tinfo_t& type) const {
         auto expression = std::make_unique<cexpr_t>(opcode, nullptr);
@@ -114,7 +121,20 @@ public:
         auto lhs = variable(2);
         const tinfo_t type = lhs->type;
         return expression(binary(cot_asg, std::move(lhs),
-                                 variable(source_argument), type));
+                                 unary(cot_cast, variable(source_argument), type), type));
+    }
+
+    Statement assign_value(size_t argument, Expression value) const {
+        auto lhs = variable(argument);
+        const tinfo_t type = lhs->type;
+        return expression(binary(cot_asg, std::move(lhs), unary(cot_cast, std::move(value), type), type));
+    }
+
+    Expression alias_update(ctype_t opcode, Expression value = {}) const {
+        auto alias = variable(2);
+        const tinfo_t type = alias->type;
+        return value ? binary(opcode, std::move(alias), std::move(value), type)
+                     : unary(opcode, std::move(alias), type);
     }
 
     Statement assign_alias_offset(size_t source_argument, uint64 offset) const {
@@ -138,12 +158,12 @@ public:
         return expression(binary(opcode, std::move(lhs), std::move(value), type));
     }
 
-    Statement load_alias() const {
+    Statement load_alias(Expression pointer_value = {}) const {
         tinfo_t byte;
         byte.create_simple_type(BTF_UINT8);
         tinfo_t byte_pointer;
         byte_pointer.create_ptr(byte);
-        auto byte_address = unary(cot_cast, variable(2), byte_pointer);
+        auto byte_address = unary(cot_cast, pointer_value ? std::move(pointer_value) : variable(2), byte_pointer);
         auto address = binary(cot_add, std::move(byte_address), number(4), byte_pointer);
         tinfo_t word;
         word.create_simple_type(BTF_UINT32);
@@ -239,15 +259,16 @@ public:
         conditional->type = type;
         conditional->ea = owner_.entry_ea;
         if (expression_only) {
-            conditional->y = binary(cot_asg, std::move(temporary), variable(assignment_source), type).release();
+            conditional->y = binary(cot_asg, std::move(temporary),
+                unary(cot_cast, variable(assignment_source), type), type).release();
             auto load = load_alias();
             conditional->z = unary(cot_cast, Expression(load->cexpr), type).release();
             load->cexpr = nullptr;
             load->op = cit_empty;
             return expression(std::move(conditional));
         }
-        conditional->y = variable(0).release();
-        conditional->z = variable(1).release();
+        conditional->y = unary(cot_cast, variable(0), type).release();
+        conditional->z = unary(cot_cast, variable(1), type).release();
         return expression(binary(cot_asg, std::move(temporary), std::move(conditional), type));
     }
 
@@ -257,7 +278,7 @@ public:
         tinfo_t boolean;
         boolean.create_simple_type(BTF_BOOL);
         return expression(binary(cot_land, flag_condition(),
-            binary(cot_asg, std::move(temporary), variable(0), type), boolean));
+            binary(cot_asg, std::move(temporary), unary(cot_cast, variable(0), type), type), boolean));
     }
 
     Statement decrement_flag() const {
@@ -283,11 +304,13 @@ private:
 } // namespace alias_flow_detail
 
 // Carrier contract: four distinct, actual argument locals. Arguments 0, 1,
-// and 2 hold pointer-width values (base, other, temporary); argument 3 is a
+// and 2 hold pointer-width values (base, other, temporary); temporary may be
+// either an integer address or a pointer to 2-byte elements. Argument 3 is a
 // 32-bit integer flag. The original carrier body must be a block statement.
 // Evidence is collected from real SDK ctree objects by the production visitor.
 // A mismatch is an observation, not a probe infrastructure failure.
-inline std::vector<AliasFlowObservation> probe_alias_flow_ctree(cfunc_t* cfunc) {
+inline std::vector<AliasFlowObservation> probe_alias_flow_ctree(
+        cfunc_t* cfunc, const FlowAnalysisOptions& flow = {}, const char* selected_case = nullptr) {
     using namespace alias_flow_detail;
     if (!cfunc || !cfunc->mba || !cfunc->get_lvars() ||
         cfunc->body.op != cit_block || cfunc->argidx.size() != 4) {
@@ -302,10 +325,11 @@ inline std::vector<AliasFlowObservation> probe_alias_flow_ctree(cfunc_t* cfunc) 
         }
         const size_t expected_width = i == 3 ? 4 : get_ptr_size();
         const tinfo_t& type = cfunc->get_lvars()->at(arguments[i]).type();
-        if (!type.is_integral() || type.get_size() != expected_width) {
+        if ((!type.is_integral() && !(i == 2 && type.is_ptr() &&
+             type.get_pointed_object().get_size() == 2)) || type.get_size() != expected_width) {
             throw std::invalid_argument("alias carrier argument has an unexpected width");
         }
-        if (i > 0 && i < 3 &&
+        if (i == 1 &&
             !type.equals_to(cfunc->get_lvars()->at(arguments[0]).type())) {
             throw std::invalid_argument("alias carrier pointer-width argument types differ");
         }
@@ -317,6 +341,8 @@ inline std::vector<AliasFlowObservation> probe_alias_flow_ctree(cfunc_t* cfunc) 
     }
 
     Builder builder(*cfunc, arguments);
+    const tinfo_t& alias_type = cfunc->get_lvars()->at(arguments[2]).type();
+    const sval_t update_scale = alias_type.is_ptr() ? 2 : 1;
     struct Case {
         const char* name;
         bool expects_access;
@@ -802,12 +828,202 @@ inline std::vector<AliasFlowObservation> probe_alias_flow_ctree(cfunc_t* cfunc) 
             builder.append(*body, builder.load_alias());
             return body;
         }},
+        {"shared_label_preserves_lexical_alias", true, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias(1));
+            builder.append(*body, builder.branch(builder.jump(1), {}, cot_eq));
+            auto path = builder.block();
+            builder.append(*path, builder.assign_alias(0));
+            auto load = builder.load_alias();
+            load->label_num = 1;
+            builder.append(*path, std::move(load));
+            builder.append(*body, builder.branch(std::move(path), {}, cot_eq, 1));
+            return body;
+        }},
+        {"shared_label_excludes_jumped_definition", false, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias(1));
+            builder.append(*body, builder.branch(builder.jump(1), {}, cot_eq));
+            auto path = builder.block();
+            builder.append(*path, builder.assign_alias(0));
+            builder.append(*path, builder.jump(2));
+            auto load = builder.load_alias();
+            load->label_num = 1;
+            builder.append(*path, std::move(load));
+            builder.append(*body, builder.branch(std::move(path), {}, cot_eq, 1));
+            auto finish = builder.return_zero();
+            finish->label_num = 2;
+            builder.append(*body, std::move(finish));
+            return body;
+        }},
+        {"shared_label_budget_widens_before_observation", false, [&] {
+            auto body = builder.block();
+            auto chain = builder.assign_alias(1);
+            for (unsigned index = 0; index < 15; ++index) {
+                chain = builder.branch(builder.assign_alias_offset(0, index * 4),
+                    std::move(chain), cot_eq, index);
+            }
+            builder.append(*body, std::move(chain));
+            auto load = builder.load_alias();
+            load->label_num = 1;
+            builder.append(*body, std::move(load));
+            builder.append(*body, builder.return_zero());
+            builder.append(*body, builder.jump(1));
+            return body;
+        }},
+        {"compound_alias_add_uses_element_scale", true, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias(0));
+            builder.append(*body, builder.expression(builder.alias_update(cot_asgadd, builder.number(3))));
+            builder.append(*body, builder.load_alias());
+            return body;
+        }, {4 + 3 * update_scale}},
+        {"compound_alias_sub_uses_element_scale", true, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias_offset(0, 16));
+            builder.append(*body, builder.expression(builder.alias_update(cot_asgsub, builder.number(3))));
+            builder.append(*body, builder.load_alias());
+            return body;
+        }, {20 - 3 * update_scale}},
+        {"compound_alias_signed_negative_delta", true, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias_offset(0, 16));
+            builder.append(*body, builder.expression(builder.alias_update(cot_asgadd,
+                builder.number64(static_cast<uint64>(-2), type_signed))));
+            builder.append(*body, builder.load_alias());
+            return body;
+        }, {20 - 2 * update_scale}},
+        {"compound_alias_delta_cast_is_preserved", true, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias(0));
+            tinfo_t byte;
+            byte.create_simple_type(BTF_UINT8);
+            builder.append(*body, builder.expression(builder.alias_update(cot_asgadd,
+                builder.unary(cot_cast, builder.number(256), byte))));
+            builder.append(*body, builder.load_alias());
+            return body;
+        }},
+        {"compound_alias_rhs_read_precedes_kill", true, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias(0));
+            auto load = builder.load_alias();
+            auto value = Expression(load->cexpr);
+            load->cexpr = nullptr;
+            load->op = cit_empty;
+            builder.append(*body, builder.expression(builder.alias_update(cot_asgadd, std::move(value))));
+            builder.append(*body, builder.load_alias());
+            return body;
+        }},
+        {"compound_alias_overflow_discards_offset", false, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias_offset(0, 8));
+            builder.append(*body, builder.expression(builder.alias_update(cot_asgadd,
+                builder.number64(UINT64_C(0x7ffffffffffffff8), type_signed))));
+            builder.append(*body, builder.load_alias());
+            return body;
+        }},
+        {"compound_alias_minimum_subtraction_rejected", false, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias(0));
+            builder.append(*body, builder.expression(builder.alias_update(cot_asgsub,
+                builder.number64(UINT64_C(0x8000000000000000), type_signed))));
+            builder.append(*body, builder.load_alias());
+            return body;
+        }},
+        {"postincrement_load_observes_old_address", true, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias(0));
+            builder.append(*body, builder.load_alias(builder.alias_update(cot_postinc)));
+            builder.append(*body, builder.load_alias());
+            return body;
+        }, {4, 4 + update_scale}},
+        {"preincrement_load_observes_new_address", true, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias(0));
+            builder.append(*body, builder.load_alias(builder.alias_update(cot_preinc)));
+            builder.append(*body, builder.load_alias());
+            return body;
+        }, {4 + update_scale}},
+        {"postdecrement_load_observes_old_address", true, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias_offset(0, 8));
+            builder.append(*body, builder.load_alias(builder.alias_update(cot_postdec)));
+            builder.append(*body, builder.load_alias());
+            return body;
+        }, {12, 12 - update_scale}},
+        {"predecrement_load_observes_new_address", true, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias_offset(0, 8));
+            builder.append(*body, builder.load_alias(builder.alias_update(cot_predec)));
+            builder.append(*body, builder.load_alias());
+            return body;
+        }, {12 - update_scale}},
+        {"postincrement_assignment_preserves_old_result", true, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias(0));
+            builder.append(*body, builder.assign_value(1, builder.alias_update(cot_postinc)));
+            builder.append(*body, builder.load_alias(builder.variable(1)));
+            builder.append(*body, builder.load_alias());
+            return body;
+        }, {4, 4 + update_scale}},
+        {"preincrement_assignment_preserves_new_result", true, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias(0));
+            builder.append(*body, builder.assign_value(1, builder.alias_update(cot_preinc)));
+            builder.append(*body, builder.load_alias(builder.variable(1)));
+            builder.append(*body, builder.load_alias());
+            return body;
+        }, {4 + update_scale}},
+        {"compound_assignment_result_preserves_new_address", true, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias(0));
+            builder.append(*body, builder.assign_value(1, builder.alias_update(cot_asgadd, builder.number(2))));
+            builder.append(*body, builder.load_alias(builder.variable(1)));
+            builder.append(*body, builder.load_alias());
+            return body;
+        }, {4 + 2 * update_scale}},
+        {"postincrement_loop_recomputes_expression_value", true, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias(0));
+            builder.append(*body, builder.assign_flag(2));
+            auto repeated = builder.block();
+            builder.append(*repeated, builder.load_alias(builder.alias_update(cot_postinc)));
+            builder.append(*repeated, builder.decrement_flag());
+            builder.append(*body, builder.while_loop(std::move(repeated)));
+            return body;
+        }, {4, 4 + update_scale}},
+        {"narrowed_postincrement_result_discards_alias", false, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias(0));
+            tinfo_t narrow;
+            narrow.create_simple_type(BTF_UINT32);
+            builder.append(*body, builder.assign_value(1,
+                builder.unary(cot_cast, builder.alias_update(cot_postinc), narrow)));
+            builder.append(*body, builder.load_alias(builder.variable(1)));
+            return body;
+        }},
+        {"narrowed_conditional_update_discards_alias", false, [&] {
+            auto body = builder.block();
+            builder.append(*body, builder.assign_alias(0));
+            auto conditional = std::make_unique<cexpr_t>(cot_tern, nullptr);
+            conditional->x = builder.flag_condition().release();
+            conditional->y = builder.alias_update(cot_postinc).release();
+            conditional->z = builder.alias_update(cot_preinc).release();
+            conditional->type = builder.variable(2)->type;
+            tinfo_t narrow;
+            narrow.create_simple_type(BTF_UINT32);
+            builder.append(*body, builder.assign_value(1,
+                builder.unary(cot_cast, std::move(conditional), narrow)));
+            builder.append(*body, builder.load_alias(builder.variable(1)));
+            return body;
+        }},
     };
 
     std::vector<AliasFlowObservation> observations;
     observations.reserve(cases.size());
     const cblock_t* original_body = cfunc->body.cblock;
     for (const auto& test : cases) {
+        if (selected_case && std::string(test.name) != selected_case) continue;
         AliasFlowObservation observation;
         observation.name = test.name;
         observation.expects_base_access = test.expects_access;
@@ -819,6 +1035,7 @@ inline std::vector<AliasFlowObservation> probe_alias_flow_ctree(cfunc_t* cfunc) 
                 SynthOptions options;
                 options.min_accesses = 1;
                 options.vtable_detection = false;
+                options.flow = flow;
                 AccessCollector collector(options);
                 observation.pattern = collector.collect(cfunc, arguments[0]);
             }

@@ -256,6 +256,9 @@ UnifiedAccessPattern UnifiedAccessPattern::from_single(AccessPattern&& pattern) 
     // Copy accesses
     result.all_accesses = std::move(pattern.accesses);
 
+    if (pattern.flow_analysis.started || pattern.flow_analysis.invalid_limits) {
+        result.flow_diagnostics.push_back({pattern.func_ea, pattern.var_idx, pattern.flow_analysis});
+    }
     // Store original pattern
     result.per_function_patterns.push_back(std::move(pattern));
 
@@ -279,6 +282,9 @@ UnifiedAccessPattern UnifiedAccessPattern::merge(
     bool first = true;
 
     for (auto& pattern : patterns) {
+        if (pattern.flow_analysis.started || pattern.flow_analysis.invalid_limits) {
+            result.flow_diagnostics.push_back({pattern.func_ea, pattern.var_idx, pattern.flow_analysis});
+        }
         ea_t func_ea = pattern.func_ea;
         result.contributing_functions.push_back(func_ea);
 
@@ -1121,6 +1127,7 @@ void CrossFunctionAnalyzer::reset() {
     base_indirection_adjusted_.clear();
     deltas_.clear();
     collected_patterns_.clear();
+    collection_diagnostics_.clear();
     cfunc_cache_.clear();
     current_opts_ = nullptr;
 }
@@ -1554,21 +1561,23 @@ AccessPattern CrossFunctionAnalyzer::collect_pattern(
     const SynthOptions& synth_opts)
 {
     AccessCollector collector(synth_opts);
-    return collector.collect(func_ea, var_idx);
+    auto pattern = collector.collect(func_ea, var_idx);
+    if (pattern.flow_analysis.started || pattern.flow_analysis.invalid_limits) {
+        collection_diagnostics_.push_back({func_ea, var_idx, pattern.flow_analysis});
+    }
+    return pattern;
 }
 
 UnifiedAccessPattern CrossFunctionAnalyzer::normalize_and_merge() {
-    if (collected_patterns_.empty()) {
-        return UnifiedAccessPattern();
-    }
-
     // Build delta map from function EA
     std::unordered_map<ea_t, sval_t> delta_map;
     for (const auto& [fv, delta] : deltas_) {
         delta_map[fv.func_ea] = delta;
     }
 
-    return UnifiedAccessPattern::merge(std::move(collected_patterns_), delta_map);
+    auto result = UnifiedAccessPattern::merge(std::move(collected_patterns_), delta_map);
+    result.flow_diagnostics = std::move(collection_diagnostics_);
+    return result;
 }
 
 void CrossFunctionAnalyzer::add_variable(ea_t func_ea, int var_idx, sval_t delta) {
